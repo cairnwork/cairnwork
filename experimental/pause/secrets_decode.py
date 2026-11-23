@@ -6,14 +6,15 @@ when one is hit it returns ``None`` and the caller refuses; it never skips. Limi
 needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
 ``MAX_VIEW_CHARS`` characters, ``MAX_CHARS`` characters in all, or an encoded run (base64 or
 base32 characters; pieces joined by whitespace count as one run) longer than ``MAX_CHARS``, is
-refused. Decoded bytes are cleaned by the scanner's own ``drop_invisible`` plus NFKC before
-stretches are cut, so invisible, combining, control and look-alike characters inside an encoded
-(also nested) secret do not hide it; whitespace that NFKC does not fold still splits it, as in
-plain text. Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to
-tell from noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76
-columns are); any whitespace rejoins pieces. Known false refusals (fail closed, by design, rate
-not measured): an encoded run of 32K+ characters (a long list of hashes or UUIDs, a hex dump, a
-large data URI) and a decoded readable stretch of 4096+ characters.
+refused. A decoded stretch (ASCII, whitespace, invisible characters, letters NFKC folds to
+ASCII; at least 16 visible characters once cleaned) is scanned as written, so an encoded
+(also nested) secret gets the same result as the same plain text (a stretch over
+``MAX_VIEW_CHARS`` is scanned in its cleaned form only). Encoded text of fewer than
+``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise). Base64 cut into
+pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are); any whitespace
+rejoins pieces. Known false refusals (fail closed, by design, rate not measured): an encoded
+run of 32K+ characters (a long list of hashes or UUIDs, a hex dump, a large data URI) and a
+decoded readable stretch of 4096+ characters.
 """
 
 from __future__ import annotations
@@ -59,14 +60,44 @@ class _Refuse(Exception):
     """A bound was hit."""
 
 
+_RUN_KEEP = 4  # invisible characters kept from one unbroken run (a run of zeros stays short)
+
+
+def _pieces(text: str) -> list[str]:
+    """The stretches of ``text`` made of characters the scan can see through: ASCII, whitespace,
+    invisible characters and letters NFKC folds to ASCII. Anything else (replacement characters
+    for binary bytes, other scripts) ends a stretch. The stretch is kept as written, so the scan
+    treats it exactly like the same text in plain form."""
+    out: list[str] = []
+    piece: list[str] = []
+    run = 0
+    for ch in text:
+        if ch.isascii() or ch.isspace() or not drop_invisible(ch):
+            seen = not ch.isprintable() or ch.isspace()
+            run = run + 1 if seen else 0
+            if run <= _RUN_KEEP:
+                piece.append(ch)
+        elif unicodedata.normalize("NFKC", ch).isascii():
+            run = 0
+            piece.append(ch)
+        else:
+            out.append("".join(piece))
+            piece, run = [], 0
+    out.append("".join(piece))
+    return out
+
+
 def _segments(raw: bytes) -> list[str]:
-    """The readable stretches of ``raw``, cut from the text as the scan sees it: decoded as UTF-8,
-    cleaned of invisible characters and folded (NFKC) by the scanner's own function, so a secret
-    split by any invisible character, or written in look-alike letters, is whole again. The plain
-    ASCII stretches of the bytes are kept too (the union)."""
+    """The readable stretches of ``raw`` (16 or more visible characters once cleaned and folded
+    as the scanner does): each stretch as written, so the scan finds in it what it finds in the
+    same plain text, and its cleaned form."""
     text = raw.decode("utf-8", errors="replace")
-    cleaned = drop_invisible(unicodedata.normalize("NFKC", drop_invisible(text)))
-    found = [*_PRINTABLE.findall(cleaned), *_PRINTABLE.findall(raw.decode("latin-1"))]
+    found: list[str] = []
+    for piece in _pieces(text):
+        cleaned = drop_invisible(unicodedata.normalize("NFKC", drop_invisible(piece)))
+        stretches = _PRINTABLE.findall(cleaned)
+        if stretches:
+            found += [piece, *stretches] if len(piece) <= MAX_VIEW_CHARS else stretches
     return list(dict.fromkeys(found))
 
 

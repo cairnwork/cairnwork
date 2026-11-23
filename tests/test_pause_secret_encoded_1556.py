@@ -176,9 +176,9 @@ def test_huge_encoded_run_is_refused_fast(size):
 
     blob = base64.b64encode(bytes(range(256)) * (size // 340 + 1)).decode()[:size]
     start = time.monotonic()
-    hits = Scanner(NAMES).scan(blob)
-    assert "encoded_overflow" in hits
+    assert decoded_views((blob,)) is None  # refused before any decoding (the bound itself)
     assert time.monotonic() - start < 3
+    assert "encoded_overflow" in Scanner(NAMES).scan(blob)
 
 
 def _fullwidth(text):
@@ -249,3 +249,26 @@ def test_nested_layers_each_with_a_hider():
 )
 def test_binary_and_wide_text_are_not_refused(text):
     assert Scanner(NAMES).scan(text) == []
+
+
+_PLAIN = [
+    KEY[:9] + "\x85" + KEY[9:],
+    KEY[:9] + "\u2028" + KEY[9:],
+    KEY[:9] + "\u2029" + KEY[9:],
+    "curl --api-key\u200bsk-live-" + MARK + "aaaabbbbcccc",
+    "curl --api-key\u00adsk-live-" + MARK + "aaaabbbbcccc",
+    "curl --api-key sk-live-" + MARK + "aaaabbbbcccc",
+    "API_TOKEN=" + MARK + "aaaabbbbccccdddd",
+    KEY[:9] + "\u00a0" + KEY[9:],
+    "login " + NAMES[0] + " now",
+]
+
+
+@pytest.mark.parametrize("plain", _PLAIN, ids=range(len(_PLAIN)))
+@pytest.mark.parametrize(
+    "wrap", [lambda s: base64.b64encode(s.encode()).decode(), lambda s: s.encode().hex()]
+)
+def test_encoded_gets_the_same_hits_as_plain(plain, wrap):
+    want = set(Scanner(NAMES).scan(plain))
+    assert want
+    assert set(Scanner(NAMES).scan(f"data {wrap(plain)}")) == want
