@@ -368,7 +368,7 @@ def test_priority_mark_is_absent_when_the_cap_hits_before_deferred_trees(monkeyp
 
 @pytest.fixture
 def short_tmp():
-    """A short directory: AF_UNIX paths are limited to ~104 bytes and pytest's tmp_path is longer."""
+    """A short directory: AF_UNIX paths are limited to ~104 bytes; pytest's tmp_path is longer."""
     import shutil
 
     path = Path(tempfile.mkdtemp(prefix="w", dir="/tmp"))
