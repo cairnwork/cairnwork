@@ -58,8 +58,9 @@ def _bound(tree: ast.Module) -> set[str]:
     """Every name the module binds at module level (also inside ``if``, ``try``, ``with`` and
     ``for``): def, class, assignment, import, loop, ``with`` or walrus target. A builtin name in
     it may be anything (``list = lambda x: ...``). A parameter or a name bound inside a def,
-    class or lambda is local and does not count."""
-    out: set[str] = set()
+    class or lambda is local and does not count,
+    unless a ``global`` statement at any depth names it."""
+    out: set[str] = {x for n in ast.walk(tree) if isinstance(n, ast.Global) for x in n.names}
     todo: list[ast.AST] = [tree]
     while todo:
         n = todo.pop()

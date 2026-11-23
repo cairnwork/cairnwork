@@ -42,6 +42,16 @@ def _reach(text):
         ),
         pytest.param("pytest_plugins.append(f())\n", id="method_call_arg"),
         pytest.param(
+            "def f():\n    global list\n    list = lambda x: ['evil']\nf()\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_global_in_def",
+        ),
+        pytest.param(
+            "class K:\n    def m(self):\n        global list\n        list = 1\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_global_in_method",
+        ),
+        pytest.param(
             "list = lambda x: ['evil']\npytest_plugins = list(['safe'])\n", id="builtin_assigned"
         ),
         pytest.param(
