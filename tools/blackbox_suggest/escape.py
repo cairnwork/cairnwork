@@ -236,7 +236,8 @@ def _library_names(tree: ast.Module) -> tuple[set[str], set[str]]:
         if isinstance(n, ast.Import):
             for a in n.names:
                 root = a.name.split(".")[0]
-                (std if root in sys.stdlib_module_names else other).add(a.asname or root)
+                ok = root in sys.stdlib_module_names and a.asname in (None, root)
+                (std if ok else other).add(a.asname or root)
         elif isinstance(n, ast.ImportFrom):
             ok = not n.level and (n.module or "").split(".")[0] in sys.stdlib_module_names
             for a in n.names:

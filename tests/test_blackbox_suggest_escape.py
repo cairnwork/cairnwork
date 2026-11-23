@@ -33,6 +33,15 @@ REFUSED = {
     "escape_element_of_new_container": held(IMP + "x = [core.REG['k']]\nx[0].reset()\n"),
     "escape_renamed_library_name": held(IMP + "from heapq import heapify as len\nlen(core.REG)\n"),
     "escape_rebound_library_name": held(IMP + "len = heapq.heapify\nlen(core.REG)\n"),
+    "escape_library_module_renamed_to_builtin": held(IMP + "import heapq as len\nlen(core.REG)\n"),
+    "escape_library_module_renamed_to_library": held(
+        IMP + "import heapq as shlex\nshlex.quote(core.REG)\n"
+    ),
+    "escape_library_module_rebound": held(
+        IMP
+        + "import json\njson = types.SimpleNamespace(dumps=heapq.heapify)\njson.dumps(core.REG)\n"
+    ),
+    "escape_element_of_new_container_by_method": held(IMP + "b = [core.REG]\nb.pop().reset()\n"),
     "escape_parameter_named_like_library": held(IMP + "def f(len):\n    len(core.REG)\n"),
     "escape_renamed_later_name": held(
         IMP + "from heapq import heapify as register\nregister(core.REG)\n"
