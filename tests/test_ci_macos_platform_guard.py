@@ -49,6 +49,8 @@ SRC_PLATFORM_MODULES = {
 PLATFORM_IN_SRC = re.compile(r"sys\.platform|platform\.system|os\.uname|darwin", re.IGNORECASE)
 _PR_PUSH = "github.event_name == 'pull_request' || github.event_name == 'push'"
 _MAIN_DISPATCH = "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')"
+_LINUX_TEST = f"{_PR_PUSH} || github.event_name == 'schedule' || {_MAIN_DISPATCH}"
+_FULL_SUITE = "${{ matrix.python-version == '3.11' || github.event_name != 'pull_request' }}"
 _MACOS = (
     f"github.event_name == 'pull_request' || github.event_name == 'schedule' || {_MAIN_DISPATCH}"
 )
@@ -56,7 +58,7 @@ _MACOS = (
 # job fires on 'failure' only: a run cancelled by a newer run is not a red run, a timeout is a
 # failure (accepted trade-off; a cancel with no replacement leaves no Issue).
 EXPECTED_IF = {
-    "test": _PR_PUSH,
+    "test": _LINUX_TEST,
     "test-linux-sandbox": _PR_PUSH,
     "test-linux-verifier-account": _PR_PUSH,
     "demo-linux": _PR_PUSH,
@@ -66,6 +68,14 @@ EXPECTED_IF = {
         "${{ always() && (github.event_name == 'schedule' || " + _MAIN_DISPATCH + ")"
         " && needs.test-macos-shard.result == 'failure' }}"
     ),
+    "linux-nightly-report": (
+        "${{ always() && (github.event_name == 'schedule' || " + _MAIN_DISPATCH + ")"
+        " && needs.test.result == 'failure' }}"
+    ),
+}
+REPORTS = {
+    "macos-nightly-report": ("test-macos-shard", "macOS nightly failed"),
+    "linux-nightly-report": ("test", "Linux nightly failed"),
 }
 
 
@@ -140,7 +150,7 @@ def wiring_problems(text: str) -> list[str]:
             problems.append(f"a required check name or shape changed: {needle}")
     if "\n  workflow_dispatch:\n" not in text or "\n  schedule:\n" not in text:
         problems.append("the full suite lost its nightly or manual trigger")
-    problems += report_problems(text) + trigger_problems(text)
+    problems += report_problems(text) + trigger_problems(text) + linux_leg_problems(text)
     feed = 'ci_macos_shard.py "${{ matrix.shard }}" ${mode[@]+"${mode[@]}"})'
     if feed not in text or '"${files[@]}"' not in text:
         problems.append("the selector output no longer feeds the pytest file list")
@@ -158,20 +168,44 @@ def job_if(job: str) -> str:
 
 
 def report_problems(text: str) -> list[str]:
-    job = job_block(text, "macos-nightly-report")
     problems = []
-    if not job:
-        return ["a red full macOS run no longer opens or updates an Issue"]
-    if job_if(job) != EXPECTED_IF["macos-nightly-report"]:
-        problems.append("the report job's if is not exactly: a red full run on schedule or main")
-    perms = re.search(r"\n    permissions:\n((?:      .*\n)+)", job)
-    if not perms or {ln.strip() for ln in perms.group(1).splitlines()} != {
-        "contents: read",
-        "issues: write",
-    }:
-        problems.append("the report job needs exactly contents: read and issues: write")
-    if "needs: test-macos-shard" not in job or "macOS nightly failed" not in job:
-        problems.append("the report job is not tied to the macOS shards or its Issue title")
+    for name, (needs, title) in REPORTS.items():
+        job = job_block(text, name)
+        if not job:
+            problems.append(f"a red full run no longer opens or updates an Issue: {name}")
+            continue
+        if job_if(job) != EXPECTED_IF[name]:
+            problems.append(f"{name}: the if is not exactly: a red full run on schedule or main")
+        perms = re.search(r"\n    permissions:\n((?:      .*\n)+)", job)
+        if not perms or {ln.strip() for ln in perms.group(1).splitlines()} != {
+            "contents: read",
+            "issues: write",
+        }:
+            problems.append(f"{name} needs exactly contents: read and issues: write")
+        made = re.findall(r'--title "([^"]*)"', job)
+        if f"\n    needs: {needs}\n" not in job or made != [title]:
+            problems.append(f"{name} is not tied to its jobs or its Issue title")
+    return problems
+
+
+def linux_leg_problems(text: str) -> list[str]:
+    """Issue #1696: the Linux test job runs its suite on one Python for a pull request."""
+    job = job_block(text, "test")
+    problems = []
+    if f"\n    env:\n      FULL_SUITE: {_FULL_SUITE}\n" not in job:
+        problems.append("test: FULL_SUITE is not exactly 3.11 for a pull request, all otherwise")
+    if '["3.11", "3.12", "3.13"]' not in job:
+        problems.append("test: the matrix lost a Python version, so a check name is gone")
+    steps = re.split(r"\n      - ", "\n" + job.split("\n    steps:\n", 1)[-1])[1:]
+    guarded = [
+        st
+        for st in steps
+        if "if: env.FULL_SUITE == 'true'" in [x.strip() for x in st.split("\n")[:2]]
+    ]
+    if len(steps) < 3 or len(guarded) != len(steps) - 1:
+        problems.append("test: a step runs on the legs that must be skipped on pull requests")
+    if "if: env.FULL_SUITE != 'true'" not in steps[-1]:
+        problems.append("test: the last step is not the skip notice of the skipped legs")
     return problems
 
 
@@ -179,7 +213,7 @@ def trigger_problems(text: str) -> list[str]:
     """A manual or scheduled run starts neither the Linux jobs nor a non-main macOS run."""
     problems = []
     for name, expected in EXPECTED_IF.items():
-        if name != "macos-nightly-report" and job_if(job_block(text, name)) != expected:
+        if name not in REPORTS and job_if(job_block(text, name)) != expected:
             problems.append(f"job {name}: its if is not exactly the pinned expression")
     return problems
 
@@ -319,6 +353,18 @@ def test_ci_yml_gives_the_subset_to_pull_requests_only_and_keeps_the_check_names
             "github.event_name == 'pull_request' || github.event_name == 'push'",
             "github.event_name != 'schedule'",
         ),
+        ("FULL_SUITE: ${{ matrix.python-version == '3.11' ||", "FULL_SUITE: ${{ true ||"),
+        ("github.event_name != 'pull_request' }}\n    strategy", "true }}\n    strategy"),
+        (
+            'python-version: ["3.11", "3.12", "3.13"]\n    steps',
+            'python-version: ["3.11"]\n    steps',
+        ),
+        (
+            "      - if: env.FULL_SUITE == 'true'\n        run: uv run lint-imports",
+            "      - run: uv run lint-imports",
+        ),
+        ("&& needs.test.result == 'failure' }}", "&& needs.test.result != 'success' }}"),
+        ("  linux-nightly-report:", "  linux-nightly-report-off:"),
         (
             "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}\n"
             "    strategy:",

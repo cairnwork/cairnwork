@@ -90,7 +90,7 @@ def test_dropping_a_base_passing_test_is_not_verified_with_p2p_off(project, stat
     out = _verify(project, state, base, test_commit, files)
     assert out["verified"] is False, out
     assert out["reason"].startswith("NAMED_TESTS_NOT_RUN: 2 test(s)"), out
-    assert "tests/test_existing.py::test_sub" in out["reason"]
+    assert "test_sub" not in out["reason"]  # #1186: a count, never the hidden names
 
 
 @sandbox
@@ -101,7 +101,7 @@ def test_dropping_a_base_failing_test_is_not_verified_with_p2p_on(project, state
     out = _verify(project, state, base, test_commit, files)
     assert out["verified"] is False, out
     assert out["reason"].startswith("NAMED_TESTS_NOT_RUN: 1 test(s)"), out
-    assert "tests/test_existing.py::test_old_add" in out["reason"]
+    assert "NAMED_TESTS_NOT_RUN: 1 test(s)" in out["reason"] and "test_old_add" not in out["reason"]
 
 
 @sandbox
@@ -112,7 +112,7 @@ def test_dropping_one_case_of_a_new_parametrised_test_is_not_verified(project, s
     out = _verify(project, state, base, test_commit, files)
     assert out["verified"] is False, out
     assert out["reason"].startswith("NAMED_TESTS_NOT_RUN: 2 test(s)"), out
-    assert "tests/test_new.py::test_new[2]" in out["reason"]
+    assert "test_new" not in out["reason"]  # #1186
 
 
 @sandbox

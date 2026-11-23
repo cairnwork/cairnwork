@@ -251,9 +251,22 @@ ancestors() {   # SBPL literals for every ancestor directory of $1 (metadata onl
   done
 }
 
-profile_head() {  # no network; no reads of the user, volume and temp trees (allowed back below)
-  printf '(version 1)\n(allow default)\n(deny network*)\n'
-  printf '(deny mach-lookup (global-name "com.apple.dnssd.service"))\n'
+profile_head() {  # #326: deny by default; the base allow-list matches the verifier profile
+  printf '(version 1)\n(deny default)\n'
+  printf '(allow process-fork)\n(allow process-exec)\n(allow sysctl-read)\n(allow file-read-metadata)\n'
+  printf '(allow file-read* (subpath "/usr/lib") (subpath "/usr/share") (subpath "/System/Library")'
+  printf ' (subpath "/dev") (literal "/") (literal "/private/etc/localtime")'
+  printf ' (literal "/private/etc/passwd") (literal "/usr/bin/env"))\n'
+  printf '(deny network*)\n(deny ipc*)\n'
+  # the user-record lookup (the verifier profile's #527 rule): only when this host's directory
+  # search path is exactly /Local/Default; else the lookup stays denied
+  dscl_out=$(/usr/bin/dscl /Search -read / 2>/dev/null || true)
+  if [ "$(printf '%s\n' "$dscl_out" | /usr/bin/grep -c '^SearchPath:')" = 1 ] &&
+    [ "$(printf '%s\n' "$dscl_out" | /usr/bin/grep -c '^CSPSearchPath:')" = 1 ] &&
+    printf '%s\n' "$dscl_out" | /usr/bin/grep -qx 'SearchPath: /Local/Default' &&
+    printf '%s\n' "$dscl_out" | /usr/bin/grep -qx 'CSPSearchPath: /Local/Default'; then
+    printf '(allow mach-lookup (global-name "com.apple.system.opendirectoryd.libinfo"))\n'
+  fi
   printf '(deny file-read* (subpath "/Users") (subpath "/Volumes") (subpath "/private/tmp")'
   printf ' (subpath "/private/var/tmp") (subpath "/private/var/folders"))\n'
 }
@@ -491,6 +504,9 @@ RUN_ROOT=$2
 shift 2
 require_run_root "$RUN_ROOT"
 TAG_ENTRY="$TAG_ENV=$RUN_ROOT"  # sandboxed sets it, sweep_pids looks for it (#533)
+require_profile_safe "$PYROOT" python_root
+# Seatbelt checks the resolved path, so a root given through a symlink (Homebrew) is resolved
+PYROOT=$(physical_dir "$PYROOT") || refuse "python_root cannot be resolved"
 require_profile_safe "$PYROOT" python_root
 umask 007
 SCOPE_SET=""
