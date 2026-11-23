@@ -247,7 +247,8 @@ def build_policy(
     # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
     notes = ((f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()) + mask_notes
-    return Policy("\n".join(flags) + "\n", notes)
+    inputs = (read_roots, write_roots, home, mask_home_credentials)
+    return Policy("\n".join(flags) + "\n", notes, inputs)
 
 
 def _credential_masks(
