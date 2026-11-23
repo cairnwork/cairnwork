@@ -45,6 +45,8 @@ def _fake_runs(
     monkeypatch, code, expected="alphabeta", outcomes_by_seed=None, survivors_by_seed=None
 ):
     target = "tests/test_ordered.py::test_joined"
+    # these tests fake the verifier runs, so there is no real collect-only record (#974)
+    monkeypatch.setattr(pipeline_judge.deferred_collected, "check_with_base", lambda *a: None)
     outputs = {}
     for seed in (1, 2, 3, 4):
         outputs[str(seed)] = subprocess.check_output(
