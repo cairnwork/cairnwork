@@ -6,8 +6,8 @@ when one is hit it returns ``None`` and the caller refuses; it never skips. Limi
 needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
 ``MAX_VIEW_CHARS`` characters, ``MAX_CHARS`` characters in all, or an encoded run (base64 or
 base32 characters without a break) longer than ``MAX_CHARS``, is refused.
-Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise).
-Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are).
+Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from
+noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are).
 """
 
 from __future__ import annotations
