@@ -143,3 +143,40 @@ def test_real_bools_still_load(tmp_path: Path, value: bool) -> None:
     )
     config = Intake(tmp_path).config()
     assert config["verifier_account"] is value and config["require_base_on_main"] is value
+
+
+def _non_dir_root(kind: str, tmp_path: Path) -> Path:
+    """A root that is not a real directory: lstat sees the link or file itself."""
+    root = tmp_path / "root"
+    if kind == "dangling_link":
+        root.symlink_to(tmp_path / "nowhere")
+    elif kind == "regular_file":
+        root.write_text("x")
+        root.chmod(0o600)
+    else:
+        target = tmp_path / "target"
+        target.mkdir()
+        target.chmod(0o777 if kind == "link_to_open_dir" else 0o750)
+        root.symlink_to(target)
+    return root
+
+
+@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize(
+    "kind", ["link_to_own_dir", "link_to_open_dir", "dangling_link", "regular_file"]
+)
+def test_link_or_non_directory_root_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, kind: str
+) -> None:
+    _use(monkeypatch, name, _non_dir_root(kind, tmp_path))
+    with pytest.raises(IntakeRefused) as caught:
+        verifier_select.select_account(name)
+    assert caught.value.code == "BAD_VERIFIER_ACCOUNT"
+    state = tmp_path / "state"  # the implicit default path has no select_account in front of it
+    state.mkdir(mode=0o700)
+    (state / "config.json").write_text(json.dumps({"verifier_account": True}))
+    with pytest.raises(IntakeRefused) as caught:
+        Intake(state).verifier_account()
+    assert caught.value.code == "BAD_VERIFIER_ACCOUNT" and "untrusted verifier root" in str(
+        caught.value.detail
+    )

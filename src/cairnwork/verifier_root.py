@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 from cairnwork.intake_request import IntakeRefused
@@ -23,6 +24,8 @@ def root_trust_problem(root: Path) -> str | None:
         return None  # a missing root is refused by the caller that needs it
     except OSError as exc:
         return f"cannot stat {root}: {exc.strerror}"
+    if not stat.S_ISDIR(info.st_mode):
+        return f"{root} is not a real directory (a link or file is refused)"
     if info.st_uid != os.getuid():
         return f"{root} is owned by uid {info.st_uid}, not by this user"
     if info.st_mode & 0o022:
