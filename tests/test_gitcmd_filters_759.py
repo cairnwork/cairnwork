@@ -246,7 +246,8 @@ def test_diff_flags_are_always_inserted_right_after_the_subcommand() -> None:
         "--",
         "--no-textconv",
     )
-    assert gitcmd._no_external_diff(("log", "-1")) == ("log", "-1")
+    assert gitcmd._no_external_diff(("log", "-1")) == ("log", "--no-textconv", "-1")
+    assert gitcmd._no_external_diff(("status", "-s")) == ("status", "-s")
 
 
 def test_a_file_named_like_the_flag_after_dashdash_does_not_stop_it_being_added(
@@ -285,7 +286,41 @@ def test_flags_go_after_the_real_subcommand_not_a_path_named_diff() -> None:
         "-C", "diff", "diff", *flags, "--", "x",
     )  # fmt: skip
     assert gitcmd._no_external_diff(("-c", "a=b", "diff")) == ("-c", "a=b", "diff", *flags)
-    assert gitcmd._no_external_diff(("-C", "diff", "log")) == ("-C", "diff", "log")
+    assert gitcmd._no_external_diff(("-C", "diff", "log")) == ("-C", "diff", "log", "--no-textconv")
+
+
+_UNIQUE = "TEXTCONV-OUTPUT-UNIQUE-759"
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("show", "HEAD"),
+        ("show", "HEAD:x.txt"),
+        ("log", "-p", "-1"),
+        ("format-patch", "-1", "--stdout"),
+        ("blame", "--", "x.txt"),
+    ],
+    ids=["show-commit", "show-blob", "log-p", "format-patch", "blame"],
+)
+def test_textconv_never_runs_for_show_log_format_patch_or_blame(tmp_path: Path, args) -> None:
+    repo, env = _repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.txt diff=marker\n")
+    (repo / "x.txt").write_text("plain content\n")
+    _commit(repo, env, ".gitattributes", "x.txt")
+    marker = tmp_path / "textconv-ran"
+    script = tmp_path / "textconv.sh"
+    script.write_text(f'#!/bin/sh\ntouch "{marker}"\necho {_UNIQUE}\n')
+    script.chmod(0o755)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "diff.marker.textconv", str(script)], check=True
+    )
+
+    out = run_git(repo, *args)
+
+    assert not marker.exists()
+    assert _UNIQUE not in out
+    assert "plain content" in out
 
 
 def test_src_never_asks_git_to_run_ext_diff_or_textconv() -> None:

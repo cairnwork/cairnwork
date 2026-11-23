@@ -30,6 +30,10 @@ SHAPES = [
     ("sys_modules_write", "del ", "sys.modules['sys']"),
     ("os_exit", "from os import a ", "_exit"),
     ("gc_walk", "from gc import a ", "get_objects"),
+    # #1682: a run of public-attribute chains is one chain (each class is also an attribute name),
+    # and a run of ``for`` targets each look on for an ``in``
+    ("pytest_public_patch", "pytest.Item. ", "x = 1"),
+    ("pytest_public_patch", "for pytest.Item.a ", "in y"),
 ]
 LIBRARY_SHAPES = [
     ("pytest_internals", "import a ", "_pytest"),
@@ -82,8 +86,10 @@ def _patch_seconds(path: str, line: str) -> tuple[float, list[str]]:
         ("src/lib.py", "import a " * 500),
         ("src/lib.py", "del a " * 700),
         ("tests/test_x.py", "del a " * 700),
+        ("src/lib.py", "pytest.Item. " * 300),
+        ("tests/test_x.py", "for pytest.Item.a " * 220),
     ],
-    ids=["blanks-lib", "blanks-test", "import-lib", "del-lib", "del-test"],
+    ids=["blanks-lib", "blanks-test", "import-lib", "del-lib", "del-test", "chains", "for-targets"],
 )
 def test_a_patch_of_capped_lines_of_one_shape_is_read_in_seconds(path: str, line: str) -> None:
     # Through scan_added_lines: the patch ends in the budget's refusal or in no finding, within a
@@ -99,3 +105,45 @@ def test_a_real_target_after_a_long_run_of_blanks_is_still_refused() -> None:
     ]
     line = "import a " * 400 + "_pytest"
     assert [f.rule for f in ts.scan_added_lines("src/lib.py", [(1, line)])] == ["pytest_internals"]
+
+
+def test_a_run_of_sys_modules_items_is_read_in_linear_time() -> None:
+    # The item-assignment run stops at the next ``sys.modules[`` (#1682). Without the stop each
+    # open bracket reads to the end of the line: 0.3 s at 100k characters, about 5 s at 400k.
+    pattern = _RULES["sys_modules_write"]
+    assert _read(pattern, "sys.modules[a " * (4 * LONG // 14)) < LIMIT
+    assert pattern.search(("sys.modules[a " * 4) + "x] = 1") is not None
+
+
+def test_a_class_named_as_an_attribute_and_a_for_target_are_still_refused() -> None:
+    # The two stops of #1682 must not let these through: a chain whose attribute is a listed class,
+    # and a ``for`` target found past another ``for`` with a chain.
+    for line in (
+        "pytest.Item.pytest.Item = 1",
+        "pytest.Item.pytest.Item.x = 1",
+        # the same chain mid-statement, where only the plain-assignment alternative can refuse it
+        "a = pytest.Item.pytest.Item = 1",
+        "a = b.pytest.Item.pytest.Item = 1",
+        "a = pytest.TestReport.pytest.Session = f",
+        "x = 0; y = pytest.Item.pytest.Item += 1",
+        "a = pytest . Item . pytest . Item = 1",
+        "a = pytest.Item.pytest.Item[0] = 1",
+        "a = pytest.Item.pytest.Item.runtest = f",
+        "for pytest.Item.a for x in y: pass",
+        "for pytest.Item.a for pytest.Item.b in y: pass",
+    ):
+        found = [f.rule for f in ts.scan_added_lines("src/lib.py", [(1, line)])]
+        assert found == ["pytest_public_patch"], line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "x = pytest.Item.pytest.Item",
+        "assert pytest.Item.pytest.Item == 1",
+        "print(pytest.Item.pytest.Item)",
+        "a = pytest.Item.pytest.Item <= 1",
+    ],
+)
+def test_a_read_of_a_class_named_as_an_attribute_is_not_flagged(line: str) -> None:
+    assert ts.scan_added_lines("src/lib.py", [(1, line)]) == []
