@@ -102,6 +102,9 @@ def test_the_probe_finds_no_expected_value_anywhere_it_can_reach(tmp_path):
     doc = json.loads(out.output)
     assert doc["v"]["seen"] is False
     assert doc["v"]["fds"] == []
+    # nothing was reachable, so a runner that expects the real value reports a mismatch
+    wanted = load_expected(json.dumps({"values": {"seen": True, "fds": ["fd3"]}}).encode())
+    assert (judge(out, wanted).verdict, judge(out, wanted).code) == (FAIL, MISMATCH)
     # the run is still a FAIL when the implementation is wrong
     wrong = verdict(tmp_path / "w", BUGGY)
     assert wrong.verdict == FAIL
@@ -128,3 +131,33 @@ def test_a_reused_workdir_does_not_let_an_early_exit_pass_on_a_stale_document(tm
     assert stale
     second = verdict(tmp_path, BUGGY + "import os\nos._exit(0)\n")
     assert (second.verdict, second.code) == (FAIL, NO_OUTPUT)
+
+
+PATCH_JSON = (
+    "import json, json.encoder\n"
+    "json.dumps = lambda *a, **k: 'garbage'\n"
+    "json.encoder.JSONEncoder.encode = lambda self, o: 'garbage'\n"
+    "json.encoder.encode_basestring_ascii = lambda s: '\"x\"'\n"
+)
+
+
+def test_patching_json_in_the_candidate_does_not_change_what_the_runner_writes(tmp_path):
+    assert verdict(tmp_path, FIXED + PATCH_JSON).verdict == PASS
+    (tmp_path / "again").mkdir()
+    result = verdict(tmp_path / "again", BUGGY + PATCH_JSON)
+    assert (result.verdict, result.code) == (FAIL, MISMATCH)
+
+
+MASQUERADE = (
+    "class KeyError(Exception):\n    pass\n\n\n"
+    "KeyError.__module__ = 'builtins'\nKeyError.__qualname__ = 'KeyError'\n\n\n"
+    "def boom():\n    raise KeyError('x')\n"
+)
+
+
+def test_a_custom_exception_cannot_pose_as_a_builtin_one(tmp_path):
+    """The probe expects builtins.KeyError; a class that only claims that name is not it."""
+    result = verdict(tmp_path, FIXED.split("def boom")[0] + MASQUERADE)
+    assert (result.verdict, result.code) == (FAIL, MISMATCH)
+    (tmp_path / "real").mkdir()
+    assert verdict(tmp_path / "real", FIXED).verdict == PASS
