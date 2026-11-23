@@ -10,6 +10,7 @@ from pathlib import Path
 from cairnwork.intake import Intake
 from cairnwork.intake_request import IntakeRefused
 from cairnwork.verifier_account import VerifierAccount
+from cairnwork.verifier_root import trusted_account
 
 VERIFIER_ACCOUNTS = {
     "cairnwork-verifier": VerifierAccount(),
@@ -37,6 +38,7 @@ def select_account(name: str) -> VerifierAccount:
             raise IntakeRefused("BAD_VERIFIER_ACCOUNT", f"unsafe verifier root: {root}")
     except OSError as exc:
         raise IntakeRefused("BAD_VERIFIER_ACCOUNT", f"unavailable verifier root: {root}") from exc
+    trusted_account(account)
     try:
         pwd.getpwnam(account.user)
     except KeyError as exc:
