@@ -32,22 +32,37 @@ class ResolvedPolicy:
         return tuple(p for p in self.paths if p not in waived)
 
 
-def _operator_only(path: Path) -> bool:
-    """A regular file the operator owns, not writable by group or other, in such a directory,
-    outside every git checkout."""
-    info = path.lstat()
-    parent = path.parent.lstat()
-    for item in (info, parent):
-        if item.st_uid != os.geteuid() or item.st_mode & 0o022:
-            return False
-    if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
-        return False
-    return not any((p / ".git").exists() for p in (path.parent, *path.parent.parents))
+def _read_trusted(path: Path) -> bytes | None:
+    """The file's bytes when it is a regular file the operator owns, not writable by group or other,
+    in such a real directory, outside every git checkout; else None. The directory is the resolved
+    one (a symlinked parent gets no trust of its own), the file is opened once with O_NOFOLLOW and
+    checked and read through that one handle (no lstat-then-read gap)."""
+    parent = Path(os.path.realpath(path.parent))
+    parent_info = parent.lstat()
+    if parent_info.st_uid != os.geteuid() or parent_info.st_mode & 0o022:
+        return None
+    if any((p / ".git").exists() for p in (parent, *parent.parents)):
+        return None
+    fd = os.open(parent / path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BYTES:
+            return None
+        if info.st_uid != os.geteuid() or info.st_mode & 0o022:
+            return None
+        return os.read(fd, MAX_BYTES + 1)
+    finally:
+        os.close(fd)
 
 
 def _parse(raw: bytes, waivable: frozenset[str]) -> dict[str, frozenset[str]] | None:
     doc = json.loads(raw)
-    if not isinstance(doc, dict) or set(doc) != {"version", "repos"} or doc["version"] != 1:
+    if (
+        not isinstance(doc, dict)
+        or set(doc) != {"version", "repos"}
+        or type(doc["version"]) is not int
+        or doc["version"] != 1
+    ):
         return None
     repos = doc["repos"]
     if not isinstance(repos, dict):
@@ -74,9 +89,10 @@ def resolve(
         return fallback
     try:
         path = Path(env_path)
-        if not _operator_only(path):
+        raw = _read_trusted(path)
+        if raw is None:
             return fallback
-        waived = _parse(path.read_bytes(), waivable)
+        waived = _parse(raw, waivable)
     except (OSError, ValueError, RecursionError):
         return fallback
     return fallback if waived is None else ResolvedPolicy(defaults, waived, str(path))

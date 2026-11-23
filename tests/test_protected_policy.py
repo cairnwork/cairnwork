@@ -159,3 +159,63 @@ def test_the_real_entry_reads_the_environment_once_per_process(tmp_path):
         check=True,
     ).stdout.split()
     assert out == ["default", "True", "True"]
+
+
+# --- a symlinked parent directory gets no trust of its own --------------------------------
+
+
+def _checkout_conf(tmp_path) -> Path:
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    return _write(checkout / "conf", GOOD).parent
+
+
+def _mode_dir(tmp_path, name, mode) -> Path:
+    real = _write(tmp_path / name, GOOD).parent
+    real.chmod(mode)
+    return real
+
+
+def _via_link(tmp_path, target: Path) -> Path:
+    op = tmp_path / "op"
+    op.mkdir(exist_ok=True)
+    (op / "link").symlink_to(target)
+    return op / "link" / "policy.json"
+
+
+def _symlinked_file(tmp_path) -> Path:
+    real = _write(tmp_path / "real", GOOD)
+    link = real.parent / "link.json"
+    link.symlink_to(real)
+    return link
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda t: _via_link(t, _checkout_conf(t)),  # link -> dir inside a checkout
+        lambda t: _via_link(t, _mode_dir(t, "wide", 0o777)),
+        lambda t: _via_link(t, _mode_dir(t, "group", 0o770)),
+        lambda t: _via_link(t, _checkout_conf(t).parent / "conf"),  # same dir, other spelling
+        lambda t: _symlinked_file(t),
+    ],
+    ids=["into-checkout", "0777", "0770", "checkout-conf", "symlinked-file"],
+)
+def test_a_symlinked_parent_directory_gets_no_trust(tmp_path, build):
+    assert _res(build(tmp_path)).source == "default"
+
+
+def test_a_symlinked_parent_directory_for_a_checkout_root_gets_no_trust(tmp_path):
+    checkout = tmp_path / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    _write(checkout, GOOD)
+    assert _res(_via_link(tmp_path, checkout)).source == "default"
+
+
+def test_a_real_good_directory_is_read_even_through_an_aliased_ancestor(tmp_path):
+    real = _write(tmp_path / "real" / "d", GOOD) if (tmp_path / "real").mkdir() is None else None
+    alias = tmp_path / "alias"
+    alias.symlink_to(tmp_path / "real")  # only a higher ancestor is a symlink (macOS /tmp)
+    assert real is not None
+    assert _res(real).source != "default"
+    assert _res(alias / "d" / "policy.json").source != "default"
