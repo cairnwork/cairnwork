@@ -2,13 +2,21 @@
 
 EXPOSED_SOURCE = r"""\
 import fnmatch
-from types import ModuleType
+import functools
+from types import FunctionType, MethodType, ModuleType
 
 _TYPE_DICT = type.__dict__["__dict__"]
 _TYPE_MRO = type.__dict__["__mro__"]
 _TYPE_QUALNAME = type.__dict__["__qualname__"]
 _TYPE_MODULE = type.__dict__["__module__"]
 _TYPE_SUBCLASSES = type.__dict__["__subclasses__"]
+_FN_GLOBALS = FunctionType.__dict__["__globals__"]
+_UNWRAP = {
+    MethodType: MethodType.__dict__["__func__"],
+    staticmethod: staticmethod.__dict__["__func__"],
+    classmethod: classmethod.__dict__["__func__"],
+    functools.partial: functools.partial.__dict__["func"],
+}
 _MAX_CLASSES = 200000
 _MAX_PAIRS = 2000000
 _MAX_REPORT_BYTES = 0
@@ -35,6 +43,28 @@ def _target_modules(session):
         if type(name) is str:
             modules[name] = collector.nodeid.partition("::")[0]
     return modules
+
+
+def _target_globals(session):
+    found = {}
+    for collector in _COLLECTORS:
+        module = collector.__dict__.get("_obj")
+        if type(module) is ModuleType:
+            namespace = ModuleType.__dict__["__dict__"].__get__(module, ModuleType)
+            found[id(namespace)] = collector.nodeid.partition("::")[0]
+    return found
+
+
+def _origin_path(value, namespaces):
+    # the test file whose module namespace a callable was defined in; no user code runs
+    for _ in range(8):
+        kind = type(value)
+        if kind is FunctionType:
+            return namespaces.get(id(_FN_GLOBALS.__get__(value)))
+        if kind not in _UNWRAP:
+            return None
+        value = _UNWRAP[kind].__get__(value)
+    return None
 
 
 def _live_classes():
@@ -64,28 +94,34 @@ def _exposed_uncollected(session):
     if not session.config.option.collectonly:
         return None
     modules, classes = _target_modules(session), _live_classes()
+    namespaces = _target_globals(session)
     if classes is None:
         return None
     collected = {_without_params(item.nodeid) for item in session.items}
     functions = session.config.getini("python_functions")
     result, pairs, total = set(), 0, 0
     for cls in classes:
-        path = modules.get(_TYPE_MODULE.__get__(cls, type))
-        if path is None:
-            continue
-        owner = _TYPE_QUALNAME.__get__(cls, type).replace(".", "::")
+        home = modules.get(_TYPE_MODULE.__get__(cls, type))
+        # a class of the test module inherits through its whole MRO; any other class is read by its
+        # own dict only (each of its bases is a live class too), and only a callable that was
+        # defined in a test module counts, whatever the holding class's __module__ says (#1440)
         seen = set()
-        for base in _TYPE_MRO.__get__(cls, type):
+        for base in _TYPE_MRO.__get__(cls, type) if home else (cls,):
             for name, value in _TYPE_DICT.__get__(base, type).items():
                 if type(name) is not str or name in seen:
                     continue
                 seen.add(name)
-                pairs += 1
-                if pairs > _MAX_PAIRS:
-                    return None
+                if home:
+                    pairs += 1
+                    if pairs > _MAX_PAIRS:
+                        return None
                 if not _is_test_name(name, functions) or not (
                         callable(value) or issubclass(type(value), (staticmethod, classmethod))):
                     continue
+                path = home or _origin_path(value, namespaces)
+                if path is None:
+                    continue
+                owner = _TYPE_QUALNAME.__get__(cls, type).replace(".", "::")
                 node = f"{path}::{owner}::{name}"
                 if node not in collected and node not in result:
                     result.add(node)

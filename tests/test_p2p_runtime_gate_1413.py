@@ -42,7 +42,8 @@ ASSEMBLERS = {
 }
 
 # shapes the AST layer alone (main) reads as removed; the runtime fact must catch every shape
-MISSED_BY_AST = {"concat", "exec_concat", "fstring", "loop", "metaclass", "type_concat"}
+# "metaclass" is no longer here: its new __new__ hook is a changed dunder def, caught by #1440
+MISSED_BY_AST = {"concat", "exec_concat", "fstring", "loop", "type_concat"}
 
 
 def _reattach(base, shape, top=False):
@@ -156,7 +157,10 @@ def test_missing_or_malformed_runtime_evidence_fails_closed(payload):
 def test_real_collect_only_fact_alone_turns_removed_into_dropped(tmp_path, shape, top):
     """The gate on its own, independent of the deferred-tests guard: a real collect-only record
     of the test commit; without the fact the AST layer alone says removed (main's verdict)."""
-    base = BASE_TOP if top else BASE_CLASS
+    # `_x` is also in the base file, unchanged: the import-time rule of #1440 (a changed def
+    # reached at import) stays silent, so the runtime fact alone decides here
+    helper = "def _x():\n    assert True\n" if top else "def _x(self):\n    assert True\n"
+    base = helper + (BASE_TOP if top else BASE_CLASS)
     test = _reattach(base, ASSEMBLERS[shape], top)
     record = collect(tmp_path, test)
     node = f"{TARGET}::test_x" if top else f"{TARGET}::TestA::test_x"

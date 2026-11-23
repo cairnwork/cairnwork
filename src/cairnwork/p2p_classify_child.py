@@ -20,6 +20,7 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_function import _function
+from cairnwork.p2p_import_time import import_time_reaches_changed_def
 from cairnwork.p2p_simple_module import _simple_test_module, _utf8_source
 
 
@@ -56,6 +57,7 @@ def classify_payload(data: dict) -> dict:
                     test_tree is not None
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _hidden(test_tree, bases[path], name, path, test_ids, base_ids)
+                    and not import_time_reaches_changed_def(test_tree, bases[path])
                 )
             else:
                 origin = _inherited_origin(bases[path], owners, name)
