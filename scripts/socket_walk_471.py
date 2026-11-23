@@ -5,6 +5,8 @@ import json
 import os
 import socket
 import stat
+import sys
+import threading
 import time
 
 # /usr and the library trees hold hundreds of thousands of files and no daemon sockets; CI runners
@@ -15,6 +17,7 @@ MAX_ENTRIES = 5_000_000
 SUN_PATH_LIMIT = 104  # smallest sun_path (macOS); Linux allows 108
 _cwd_lost = False  # set when the working directory could not be restored
 BUDGET_SECONDS = 80  # report says `truncated` when the walk stopped early
+HANG_GRACE_SECONDS = 5  # a call still blocked this long after the budget is abandoned
 
 
 def location(path: str) -> str:
@@ -130,32 +133,32 @@ def _finish(counts: dict[str, int], entries: int, walked: dict[str, int]) -> dic
     return counts
 
 
-def collect(top: str = "/") -> dict[str, int]:
-    """Walk visible files within fixed time and entry bounds, returning counts only.
-
-    A directory that cannot be listed is counted as `<location>|-|unlistable`, so an empty report
-    is not read as "no sockets".
-    """
-    counts: dict[str, int] = {}
+def _walk(
+    top: str,
+    counts: dict[str, int],
+    walked: dict[str, int],
+    progress: dict[str, int],
+    outcome: dict[str, object],
+) -> None:
+    """Walk on a worker thread; `outcome["stop"]` names why it stopped early, if it did."""
 
     def unlistable(exc: OSError) -> None:
         key = f"{location(str(exc.filename or top))}|-|unlistable"
         counts[key] = counts.get(key, 0) + 1
 
-    deadline, entries = time.monotonic() + BUDGET_SECONDS, 0
-    walked: dict[str, int] = {}
+    deadline = time.monotonic() + BUDGET_SECONDS
     for root, dirs, files in os.walk(top, followlinks=False, onerror=unlistable):
         if time.monotonic() >= deadline:  # directories without files also count against the budget
-            return _stop(counts, "time", entries, walked)
+            outcome["stop"] = "time"
+            return
         dirs[:] = [d for d in dirs if os.path.join(root, d) not in SKIP]
         here = location(root)
         walked[here] = walked.get(here, 0) + len(files)
         for name in files:
-            entries += 1
-            if entries > MAX_ENTRIES or time.monotonic() >= deadline:
-                return _stop(
-                    counts, "entries" if entries > MAX_ENTRIES else "time", entries, walked
-                )
+            progress["entries"] += 1
+            if progress["entries"] > MAX_ENTRIES or time.monotonic() >= deadline:
+                outcome["stop"] = "entries" if progress["entries"] > MAX_ENTRIES else "time"
+                return
             path = os.path.join(root, name)
             try:
                 if not stat.S_ISSOCK(os.lstat(path).st_mode):
@@ -166,15 +169,52 @@ def collect(top: str = "/") -> dict[str, int]:
             kind, result = _probe(path)
             key = f"{loc}|{kind}|{result}"
             if _cwd_lost:  # the working directory is no longer the one we started in
-                return _stop(counts, "cwd", entries, walked)
+                outcome["stop"] = "cwd"
+                return
             counts[key] = counts.get(key, 0) + 1
-    return _finish(counts, entries, walked)
+
+
+def _run(top, counts, walked, progress, outcome) -> None:  # noqa: ANN001
+    try:
+        _walk(top, counts, walked, progress, outcome)
+    except BaseException as exc:  # noqa: BLE001 - re-raised on the calling thread
+        outcome["error"] = exc
+
+
+def collect(top: str = "/") -> dict[str, int]:
+    """Walk visible files within fixed time and entry bounds, returning counts only.
+
+    A directory that cannot be listed is counted as `<location>|-|unlistable`, so an empty report
+    is not read as "no sockets". The walk runs on a worker thread and the caller waits at most
+    BUDGET_SECONDS + HANG_GRACE_SECONDS: one filesystem call that never returns (a hung mount)
+    cannot hold the report past that, which then says `stopped-by-hang` with the partial counts.
+    """
+    counts: dict[str, int] = {}
+    walked: dict[str, int] = {}
+    progress = {"entries": 0}
+    outcome: dict[str, object] = {}
+    worker = threading.Thread(
+        target=_run, args=(top, counts, walked, progress, outcome), daemon=True
+    )
+    worker.start()
+    worker.join(BUDGET_SECONDS + HANG_GRACE_SECONDS)
+    if worker.is_alive():  # the worker is stuck in a call; report what it had, never wait for it
+        return _stop(dict(counts), "hang", progress["entries"], dict(walked))
+    error = outcome.get("error")
+    if isinstance(error, BaseException):
+        raise error
+    if outcome.get("stop"):
+        return _stop(counts, str(outcome["stop"]), progress["entries"], walked)
+    return _finish(counts, progress["entries"], walked)
 
 
 def main() -> None:
     report = collect()
     output = json.dumps(report, sort_keys=True)
-    print(output)
+    print(output, flush=True)
+    if "stopped-by-hang|-|-" in report:  # a worker is stuck in a call: do not wait for it at exit
+        sys.stdout.flush()
+        os._exit(0)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary:
         return

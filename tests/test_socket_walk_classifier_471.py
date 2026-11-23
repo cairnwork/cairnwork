@@ -217,3 +217,81 @@ def test_entry_cap_stops_with_its_own_reason(monkeypatch):
     monkeypatch.setattr(walk.os, "lstat", lambda _p: (_ for _ in ()).throw(OSError()))
     report = walk.collect()
     assert report["stopped-by-entries|-|-"] == 1 and report["walked-private-trees|-|-"] == 3
+
+
+def _blocking_lstat(release, ok_name=None):
+    """An lstat that never returns until released: a hung mount, for the walk's hard deadline."""
+    import stat as stat_mod
+    import types
+
+    def lstat(path):
+        if ok_name and str(path).endswith(ok_name):
+            return types.SimpleNamespace(st_mode=stat_mod.S_IFSOCK)
+        release.wait(60)
+        raise OSError("released")
+
+    return lstat
+
+
+def test_one_blocked_call_cannot_hold_the_report_past_the_hard_deadline(monkeypatch):
+    import threading
+    import time
+
+    release = threading.Event()
+
+    def fake_walk(top, followlinks=False, **_kw):
+        yield "/tmp", [], ["ok", "hang"]
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    monkeypatch.setattr(walk.os, "lstat", _blocking_lstat(release, "ok"))
+    monkeypatch.setattr(walk, "_probe", lambda _p: ("stream", "refused"))
+    monkeypatch.setattr(walk, "BUDGET_SECONDS", 0.2)
+    monkeypatch.setattr(walk, "HANG_GRACE_SECONDS", 0.2)
+    started = time.monotonic()
+    try:
+        report = walk.collect()
+    finally:
+        release.set()
+    assert time.monotonic() - started < 5
+    assert report["truncated|-|-"] == 1 and report["stopped-by-hang|-|-"] == 1
+    assert report["private-trees|stream|refused"] == 1  # what was measured before the hang stays
+
+
+def test_a_worker_error_is_raised_not_swallowed(monkeypatch):
+    def fake_walk(top, followlinks=False, **_kw):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(walk.os, "walk", fake_walk)
+    with pytest.raises(RuntimeError, match="boom"):
+        walk.collect()
+
+
+def test_script_main_prints_a_hang_report_and_exits_by_the_deadline(tmp_path):
+    """Real entry: run the script's own main() in a child whose lstat never returns."""
+    import json
+    import subprocess
+    import sys
+    import time
+
+    marker = "cw1603-private-marker"
+    cwd = tmp_path / marker
+    cwd.mkdir()
+    child = (
+        "import importlib.util, threading, os, sys\n"
+        f"spec = importlib.util.spec_from_file_location('w', {str(_path)!r})\n"
+        "w = importlib.util.module_from_spec(spec); spec.loader.exec_module(w)\n"
+        "w.BUDGET_SECONDS, w.HANG_GRACE_SECONDS = 1, 1\n"
+        "gate = threading.Event()\n"
+        "os.lstat = lambda p: gate.wait(120)\n"
+        "w.main()\n"
+    )
+    started = time.monotonic()
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, "-c", child], capture_output=True, timeout=30, check=False, cwd=cwd
+    )
+    assert time.monotonic() - started < 8  # deadline is 2 s
+    assert result.returncode == 0, result.stderr.decode(errors="replace")
+    report = json.loads(result.stdout.decode())
+    assert report["truncated|-|-"] == 1 and report["stopped-by-hang|-|-"] == 1
+    assert marker not in result.stdout.decode() + result.stderr.decode()
