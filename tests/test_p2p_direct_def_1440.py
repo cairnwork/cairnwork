@@ -25,6 +25,18 @@ RUNS_AT_IMPORT = {
     "lambda": "_body = lambda *a: None\n_body({a})",
     "comprehension": "[_body({a}) for _ in (1,)]",
     "fstring": "print(f'{{_body({a})}}')",
+    # review of fdc9b8fe: shapes that slipped through the first rule
+    "lambda_call": "(lambda: _body({a}))()",
+    "import_module": "__import__('importlib').import_module(__name__).__dict__['_bo' + 'dy']({a})",
+    "dunder_import": "__import__(__name__).__dict__['_bo' + 'dy']({a})",
+    "ann_lambda": "_go: object = lambda: _body({a})\n_go()",
+    "walrus_lambda": "(_go := lambda: _body({a}))()",
+    "tuple_lambda": "_go, _other = (lambda: _body({a})), None\n_go()",
+    "list_lambda": "_fs = [lambda: _body({a})]\n_fs[0]()",
+    "enum_hook": "import enum\nclass E(enum.Enum):\n"
+    "    def _generate_next_value_(name, start, count, last):\n        _body({a})\n"
+    "        return name\n    a = enum.auto()",
+    "class_init": "class K:\n    def __init__(self):\n        _body({a})\nK()",
     "decorated_class": "@_body\nclass Box:\n    pass",
     # hooks that run without being named at the call site
     "init_subclass": "class Base:\n    def __init_subclass__(cls, **kw):\n        _body({a})\n"
@@ -72,6 +84,23 @@ def test_a_changed_def_reached_at_import_keeps_the_deletion_dropped(tmp_path, sh
 
 HONEST_NEW = {
     "helper_only_in_a_test_body": ("def _h():\n    return 1\n", True),
+    # a changed dunder on a class that only a test body uses runs nothing at import
+    "dunder_class_only_in_test_body": (
+        "class _H:\n    def __init__(self):\n        self.v = 1\ndef _h():\n    return _H()\n",
+        True,
+    ),
+    # words that look like dynamic lookups, but only inside string constants
+    # reading a class __dict__ at import is not a lookup of a module-level def
+    "class_dict_read": (
+        "class _B:\n    pass\n_N = list(_B.__dict__)\ndef _h():\n    return 1\n",
+        True,
+    ),
+    "dynamic_words_in_strings": (
+        "def _h():\n    return 1\n"
+        "pytestmark = pytest.mark.skipif(False, reason='needs a temp dir, no exec or getattr')\n"
+        "_P = pytest.mark.parametrize('n', ['exec', 'eval', 'globals'])\n",
+        True,
+    ),
     "unchanged_helper_called_at_import": (
         "def _ci():\n    return False\npytestmark = pytest.mark.skipif(_ci(), reason='x')\n",
         False,
