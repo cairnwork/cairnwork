@@ -29,6 +29,7 @@ def lay(root: Path, files: dict, probe: str = PROBE) -> tuple[Path, Path]:
     checkout = root / "work" / "checkout"
     checkout.mkdir(parents=True, exist_ok=True)
     for name, text in files.items():
+        (checkout / name).parent.mkdir(parents=True, exist_ok=True)
         (checkout / name).write_text(text)
     probe_file = root / "probe_src.py"
     probe_file.write_text(probe)

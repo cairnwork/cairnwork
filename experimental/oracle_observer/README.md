@@ -18,3 +18,13 @@ experimental directory (14 days).
   probe's fixed inputs are readable inside the sandbox; pytest-form targets are unchanged.
 - Covered here: owner mode under Seatbelt (bwrap where the selected backend is bwrap). Account
   mode uses the shared verifier account and is not exercised by these tests.
+
+## Trust of what leaves the sandbox (Codex R1)
+
+- The base exception chain is read only from a chain file the runner writes last and closes with
+  its own nonce (kept out of argv); stderr text and a file without that nonce count as no record.
+  A base run has no candidate code, so this is a guard against a forged marker, not against code
+  that reads the runner's frames.
+- The runner serializes each observation when `observe` is called, with functions bound before the
+  probe ran and exact JSON types only (a subclass is refused), so patching `json` changes nothing.
+- A reused work directory starts from no output, chain or log file and no old runner copies.

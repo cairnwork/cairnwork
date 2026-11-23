@@ -25,6 +25,7 @@ from experimental.oracle_observer.expected import Expected
 
 RUNNER = Path(__file__).with_name("probe_runner.py")
 ENV_KEEP = ("PATH", "LANG", "LC_ALL")
+CHAIN_MAX = 16384
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,8 @@ class ProbeRun:
     output: bytes | None
     log: str = field(default="", repr=False)
     backend: str = ""
+    chain: bytes | None = field(default=None, repr=False)
+    nonce: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True)
@@ -47,14 +50,14 @@ class OracleVerdict:
     code: str = ""
 
 
-def _read_output(path: Path) -> bytes | None:
+def _read_output(path: Path, limit: int = MAX_BYTES + 2) -> bytes | None:
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             os.close(fd)
             return None
         with os.fdopen(fd, "rb") as handle:
-            return handle.read(MAX_BYTES + 2)
+            return handle.read(limit)
     except OSError:
         return None
 
@@ -89,16 +92,19 @@ def run_probe(
         path.chmod(0o444)
     # A reused workdir may hold a document from an earlier run: start from nothing, so an early
     # exit of this run cannot be judged by a stale file.
-    for stale in (out, run_dir / "probe.log"):
+    chain = run_dir / "chain.txt"
+    for stale in (out, chain, run_dir / "probe.log"):
         stale.unlink(missing_ok=True)
     out.touch(mode=0o600)
+    chain.touch(mode=0o600)
+    nonce = secrets.token_hex(16)
     env = {k: os.environ[k] for k in ENV_KEEP if k in os.environ}
     env.update(HOME=str(home), TMPDIR=str(home), **dict(getattr(backend, "run_env", ())))
     env[RUN_TOKEN_VAR] = secrets.token_hex(16)
     env["PATH"] = os.pathsep.join(filter(None, (str(Path(interpreter).parent), env.get("PATH"))))
     entries = [str(checkout / rel) for rel in pythonpath]
     argv = [interpreter, "-I", "-B", str(runner), str(checkout), str(probe_copy), str(out)]
-    argv.append(json.dumps(entries))
+    argv += [json.dumps(entries), str(chain), nonce]
     profile = backend.policy(
         read_roots=(*pytest_config.interpreter_roots(interpreter), supervisor),
         write_roots=(checkout.parent, run_dir),
@@ -111,7 +117,16 @@ def run_probe(
         backend.wrap(argv, profile_path), checkout, env, timeout, log
     )
     text = log.read_text(errors="replace") if log.exists() else ""
-    return ProbeRun(code, timed_out, int(survivors), _read_output(out), text, backend.name)
+    return ProbeRun(
+        code,
+        timed_out,
+        int(survivors),
+        _read_output(out),
+        text,
+        backend.name,
+        _read_output(chain, CHAIN_MAX),
+        nonce,
+    )
 
 
 def judge(run: ProbeRun, expected: Expected) -> OracleVerdict:
