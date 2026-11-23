@@ -23,11 +23,16 @@ _SECRET_PATTERNS = (
         r"\.[A-Za-z0-9_-]+)\b"
     ),
 )
+# Absolute filesystem paths (#1701): they name the user, the host layout and private checkouts.
+# Masked in text that is printed or stored for others; the mode-0600 debug log keeps them on
+# purpose (it records invocation paths). Not preceded by a word char, dot, slash, colon or tilde,
+# so URLs and relative paths stay.
+_ABS_PATH = re.compile(r"(?<![\w./:~-])()/(?:[\w.@+~-]+/)*[\w.@+~-]+")
 
 
-def _scrub(value: str) -> str:
+def _scrub(value: str, paths: bool = True) -> str:
     result = value
-    for pattern in _SECRET_PATTERNS:
+    for pattern in (*_SECRET_PATTERNS, *((_ABS_PATH,) if paths else ())):
         result = pattern.sub(
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )
@@ -88,7 +93,7 @@ def append_debug(path: Path | None, event: dict[str, Any]) -> None:
 
 def _redact_event(value: Any) -> Any:
     if isinstance(value, str):
-        return redact(value)
+        return _scrub(value, paths=False)[:MAX_STDERR_CHARS]
     if isinstance(value, list):
         result = []
         redact_next = False

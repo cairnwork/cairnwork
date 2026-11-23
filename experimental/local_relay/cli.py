@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from experimental.local_relay.config import DEFAULT_HAIKU_PROXY_URL, DEFAULT_LEDGER_PATH, FLAG
+from experimental.local_relay.diagnostics import redact
 from experimental.local_relay.ledger import JsonlLedger
 from experimental.local_relay.runtime import build_run_once, dry_route
 from experimental.local_worker.run_root_cleanup import INSTALLED_RUNS
@@ -42,15 +43,20 @@ def main(
         try:
             return _emit(dry_route(args), 0)
         except Exception as exc:  # noqa: BLE001 - unavailable fallback is a route failure
-            return _emit({"error": "RUN_FAILED", "detail": f"{type(exc).__name__}: {exc}"}, 1)
+            return _emit({"error": "RUN_FAILED", "detail": _detail(exc)}, 1)
     if os.environ.get(FLAG) != "1":
         return _emit({"error": "RELAY_DISABLED", "detail": f"set {FLAG}=1 to enable"}, 2)
     try:
         ledger = JsonlLedger(Path(args.ledger).expanduser())
         result = (run_once or build_run_once(args))(args, ledger)
     except Exception as exc:  # noqa: BLE001 - an unconfigured or failed runtime is never success
-        return _emit({"error": "RUN_FAILED", "detail": f"{type(exc).__name__}: {exc}"}, 1)
+        return _emit({"error": "RUN_FAILED", "detail": _detail(exc)}, 1)
     return _emit(result, 0)
+
+
+def _detail(exc: Exception) -> str:
+    """A failure text may carry credentials or absolute paths: redact before it is printed."""
+    return redact(f"{type(exc).__name__}: {exc}")
 
 
 def _emit(value: dict[str, Any], code: int) -> int:
