@@ -3,9 +3,12 @@
 
 from __future__ import annotations
 
+import ast
+
 import pytest
 
 from cairnwork.candidate_alias import runtime_shadow_added
+from cairnwork.candidate_alias_targets import target_binding_sources
 
 SHAPES = {
     "for_tuple": "import shutil\nfor w in (shutil.copy,):\n    w('a', 'b')",
@@ -73,12 +76,12 @@ def test_binding_without_a_writer_is_not_flagged(snippet):
     assert runtime_shadow_added(None, source) is False
 
 
+def _with_item(code: str) -> ast.withitem:
+    node = ast.parse(code).body[0]
+    assert isinstance(node, ast.With)
+    return node.items[0]
+
+
 def test_a_with_context_without_as_binds_nothing():
-    import ast
-
-    from cairnwork.candidate_alias_targets import target_binding_sources
-
-    item = ast.parse("with ctx(shutil.copy):\n    pass").body[0].items[0]
-    assert target_binding_sources(item) == []
-    item = ast.parse("with ctx(shutil.copy) as w:\n    pass").body[0].items[0]
-    assert len(target_binding_sources(item)) == 1
+    assert target_binding_sources(_with_item("with ctx(shutil.copy):\n    pass")) == []
+    assert len(target_binding_sources(_with_item("with ctx(shutil.copy) as w:\n    pass"))) == 1
