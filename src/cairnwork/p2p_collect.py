@@ -62,6 +62,7 @@ _tree = _classify_child._tree
 
 CLASSIFY_TIMEOUT_SECONDS = 10
 CLASSIFY_OUTPUT_CAP = 1024 * 1024
+CLASSIFY_MEMORY_LIMIT = 1 << 30  # #1246: resident bytes of the classifier child
 
 
 @dataclass(frozen=True)
@@ -239,7 +240,11 @@ def _classify_argv():
 def _run_child(argv, payload):
     """The classifier child under this module's own limits (read at call time)."""
     return run_child(
-        argv, payload, timeout=CLASSIFY_TIMEOUT_SECONDS, output_cap=CLASSIFY_OUTPUT_CAP
+        argv,
+        payload,
+        timeout=CLASSIFY_TIMEOUT_SECONDS,
+        output_cap=CLASSIFY_OUTPUT_CAP,
+        memory_limit=CLASSIFY_MEMORY_LIMIT,
     )
 
 
