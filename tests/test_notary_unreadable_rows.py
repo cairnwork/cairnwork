@@ -207,3 +207,56 @@ def test_bound_to_withholds_one_byte_over_and_counts_bytes(
     text = _padded(MAX_STORED_JSON_BYTES + extra, filler)
     sizes = _bound_to_sizes(repo, tmp_path, notarized, monkeypatch, text)
     assert len(text.encode()) not in sizes
+
+
+def _spy_notary_parse(monkeypatch) -> list[int]:
+    import cairnwork.notary as notary_module
+    import cairnwork.notary_binding as binding_module
+
+    parsed: list[int] = []
+    for module in (notary_module, binding_module):
+        real = module.json.loads
+        monkeypatch.setattr(
+            module.json,
+            "loads",
+            lambda value, *a, _real=real, **k: (parsed.append(len(value)), _real(value, *a, **k))[
+                1
+            ],
+        )
+    return parsed
+
+
+def test_an_oversized_stored_identity_is_not_parsed_and_not_verified(
+    repo, tmp_path, notarized, monkeypatch
+):
+    """#1515: expected_identity is a stored column read back like the other three."""
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    parsed = _spy_notary_parse(monkeypatch)
+    _rewrite(tmp_path, "expected_identity", _padded(MAX_STORED_JSON_BYTES + 1))
+    verdict = notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert verdict is not None and not verdict.verified
+    assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
+
+
+def test_a_stored_identity_of_exactly_the_cap_is_still_read(repo, tmp_path, notarized, monkeypatch):
+    from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
+
+    parsed = _spy_notary_parse(monkeypatch)
+    _rewrite(tmp_path, "expected_identity", _padded(MAX_STORED_JSON_BYTES))
+    notarized.verdict("task-1", "a1", expected_candidate=head_of(repo))
+    assert MAX_STORED_JSON_BYTES in parsed
+
+
+def test_row_binding_reads_an_oversized_identity_as_unreadable(
+    repo, tmp_path, notarized, monkeypatch
+):
+    from cairnwork.notary_binding import IDENTITY_UNREADABLE, MAX_STORED_JSON_BYTES
+
+    parsed = _spy_notary_parse(monkeypatch)
+    _rewrite(tmp_path, "expected_identity", _padded(MAX_STORED_JSON_BYTES + 1))
+    binding = notarized.row_binding("task-1", "a1")
+    assert binding is not None
+    assert binding.identity_problem == IDENTITY_UNREADABLE and not binding.columns_match
+    assert binding.expected_identity_sha256 is None
+    assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)

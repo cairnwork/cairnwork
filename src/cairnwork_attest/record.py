@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from cairnwork.notary import Notary, NotaryInputError, NotarySchemaMismatch, Verdict
+from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
 from cairnwork.notary_verify import _columns_match
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -180,12 +181,22 @@ def _fetch_row(uri: str, task_id: str, attempt_id: str) -> tuple[Any, ...]:
         try:  # a schema-2 ledger (not yet migrated) has no binding_json: read it as NULL
             columns = {r[1] for r in conn.execute("PRAGMA table_info(core_verifications)")}
             binding = "binding_json" if "binding_json" in columns else "NULL"
+            # a stored JSON larger than the cap is never loaded: the length is read, the text is not
             query = (
                 "SELECT task_id, attempt_id, base_commit, candidate_commit, request_hash,"
-                " request_json, http_status, status, integrity, response_json, recorded_at,"
-                f" {binding} FROM core_verifications WHERE task_id = ? AND attempt_id = ?"
+                " CASE WHEN length(CAST(request_json AS BLOB)) > :cap THEN NULL"
+                " ELSE request_json END, http_status, status, integrity,"
+                " CASE WHEN length(CAST(response_json AS BLOB)) > :cap THEN NULL"
+                " ELSE response_json END, recorded_at,"
+                f" CASE WHEN length(CAST({binding} AS BLOB)) > :cap THEN '' ELSE {binding} END,"
+                " length(CAST(request_json AS BLOB)) > :cap"
+                " OR length(CAST(response_json AS BLOB)) > :cap"
+                f" OR length(CAST({binding} AS BLOB)) > :cap"
+                " FROM core_verifications WHERE task_id = :task AND attempt_id = :attempt"
             )
-            row = conn.execute(query, (task_id, attempt_id)).fetchone()
+            row = conn.execute(
+                query, {"cap": MAX_STORED_JSON_BYTES, "task": task_id, "attempt": attempt_id}
+            ).fetchone()
         except sqlite3.Error as exc:
             raise RecordNotFound(f"query failed: {exc}", code="RECORD_NOT_FOUND") from exc
     finally:
@@ -219,9 +230,15 @@ def read_record(notary_sqlite: Path, task_id: str, attempt_id: str) -> VerdictRe
             response_json,
             recorded_at,
             binding_json,
+            too_large,
         ) = row
     except (TypeError, ValueError) as exc:
         raise RecordMalformed(f"malformed database row: {exc}", code="RECORD_MALFORMED") from exc
+    if too_large:  # never parsed: json parsing a huge stored value could exhaust memory
+        raise RecordMalformed(
+            f"a stored request, response or binding is over {MAX_STORED_JSON_BYTES} bytes",
+            code="RECORD_TOO_LARGE",
+        )
 
     return VerdictRecord(
         task_id=row_task_id,
