@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from typing import Any, cast
 
 import pytest
 
@@ -12,6 +13,7 @@ from experimental.local_relay.diagnostics import redact, redacted_tail
 
 PATH_MARK = "/srv/uniq-1701-zq/private-dir/file.txt"
 TOKEN_MARK = "ghp_UNIQ1701zqTOKENxxxxxxxx"
+NONE: Any = None  # relay inputs the scenario never reaches
 
 
 def test_redact_hides_absolute_paths_but_not_urls_or_relative_paths():
@@ -113,7 +115,7 @@ def test_adapter_and_setup_sources_redact_their_exception_text(monkeypatch, tmp_
     monkeypatch.setattr(adapters, "changed_paths", plan_fail)
     result = SimpleNamespace(checkout=tmp_path, base_sha="a" * 40)
     with pytest.raises(RuntimeError) as one:
-        adapters._changed_paths(result, tmp_path)
+        adapters._changed_paths(cast(Any, result), tmp_path)
 
     def request(*_a):
         raise OSError(f"proxy {PATH_MARK}")
@@ -156,7 +158,7 @@ def test_cli_output_and_ledger_rows_are_redacted_end_to_end(monkeypatch, capsys,
         raise LocalAttemptFailed(f"fallback {PATH_MARK}")
 
     def run_once(_args, ledger):
-        outcome = run_relay("t1", worker, None, None, fallback, ledger, RelayConfig(enabled=True))
+        outcome = run_relay("t1", worker, NONE, NONE, fallback, ledger, RelayConfig(enabled=True))
         return dataclasses.asdict(outcome)
 
     code = cli.main(
@@ -181,14 +183,14 @@ def test_a_failing_ledger_write_does_not_leak_its_path(monkeypatch, capsys):
     monkeypatch.setenv(cli.FLAG, "1")
 
     class BadLedger:
-        def append(self, _row):
+        def append(self, row):
             raise OSError(13, "denied", PATH_MARK)
 
     def worker(_context):
         raise LocalAttemptFailed("x")
 
     def run_once(_args, _ledger):
-        outcome = run_relay("t1", worker, None, None, None, BadLedger(), RelayConfig(enabled=True))
+        outcome = run_relay("t1", worker, NONE, NONE, NONE, BadLedger(), RelayConfig(enabled=True))
         return dataclasses.asdict(outcome)
 
     cli.main(
