@@ -353,4 +353,4 @@ def test_a_pass_to_pass_file_skipped_at_collection_does_not_count_as_passed(
     assert result.status == ("COMPLETED" if passes else "FAILED")
     if ext is EXT_WRONG_UNIMPORTABLE:
         assert "p2p-whole-suite" in result.reason
-        assert "tests/test_ext.py" in result.reason
+        assert "test_ext" not in result.reason  # #1186: hidden names are counted

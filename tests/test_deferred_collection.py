@@ -69,7 +69,7 @@ def test_a_new_test_pytest_does_not_collect_is_refused(project, layout):
     with pytest.raises(Rejected) as err:
         _new_tests(project, {"tests/test_regression.py": REGRESSION + layout})
     assert err.value.code == "DEFERRED_TESTS_NOT_COLLECTED"
-    assert "tests/test_regression.py::TestK::test_m" in str(err.value)
+    assert "1 new test" in str(err.value) and "TestK" not in str(err.value)  # #1186
 
 
 def _base_run(outcomes, rc=1):
@@ -105,7 +105,9 @@ def test_worker_path_needs_a_target_for_each_collected_node_id(project, tmp_path
                  verifiers=_argv(*targets))  # fmt: skip
     assert result.status == status, result.reason
     if status == "FAILED":
-        assert result.reason.startswith(f"DEFERRED_TESTS_NOT_TARGETED: {K};"), result.reason
+        assert result.reason.startswith("DEFERRED_TESTS_NOT_TARGETED: 1 test file(s);"), (
+            result.reason
+        )
 
 
 @sandbox
@@ -115,7 +117,7 @@ def test_worker_path_refuses_a_new_test_pytest_does_not_collect(project, tmp_pat
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
     assert result.reason.startswith("DEFERRED_TESTS_NOT_COLLECTED"), result.reason
-    assert "tests/test_regression.py::TestK::test_m" in result.reason
+    assert "1 new test" in result.reason and "TestK" not in result.reason  # #1186: a count
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # refused before a base run
 
 
@@ -126,7 +128,7 @@ def test_worker_path_refuses_a_new_test_the_base_run_did_not_run(project, tmp_pa
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
     assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN:"), result.reason
-    assert "tests/test_regression.py::TestK::test_m" in result.reason
+    assert "ran 1" in result.reason and "TestK" not in result.reason  # #1186: a count
 
 
 @sandbox
@@ -137,7 +139,7 @@ def test_verify_refuses_a_new_test_the_base_run_did_not_run(project, state):
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert code == 2 and out["status"] == "REFUSED" and out["verified"] is False
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN"), out
-    assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+    assert "ran 1" in out["reason"] and "TestK" not in out["reason"]  # #1186: a count
 
 
 # #697: the verification run's record must hold every new test too. TestK is collected on the base
@@ -160,7 +162,7 @@ def test_worker_path_refuses_a_new_test_the_verification_run_did_not_run(project
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED" and not result.verified
     assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
-    assert "tests/test_regression.py::TestK::test_m" in result.reason
+    assert "ran 1" in result.reason and "TestK" not in result.reason  # #1186: a count
     assert "test_regression.py::test_regression" not in result.reason
 
 
@@ -180,7 +182,7 @@ def test_verify_refuses_a_new_test_the_verification_run_did_not_run(project, sta
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert out["verified"] is False, out
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), out
-    assert "tests/test_regression.py::TestK::test_m" in out["reason"]
+    assert "ran 1" in out["reason"] and "TestK" not in out["reason"]  # #1186: a count
 
 
 class _ToCore(Exception):
@@ -229,7 +231,7 @@ def test_a_p2p_run_does_not_stand_in_for_the_verification_run(monkeypatch):
     p2p_run = _passed_run({"tests/test_x.py::TestK::test_m": "passed"})
     result, named = _judge(monkeypatch, _passed_run({other: "passed"}), (p2p_run,))
     assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION"), result.reason
-    assert named in result.reason
+    assert "ran 1" in result.reason and named not in result.reason  # #1186: a count
 
 
 def test_a_failed_verification_run_keeps_the_verdict_path(monkeypatch):
