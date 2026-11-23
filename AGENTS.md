@@ -30,7 +30,7 @@ uv run python scripts/check_size.py
 uv run pytest -q
 ```
 
-Run the sandbox tests for real on macOS: `CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q`. Without it the `sandbox`-marked tests are skipped locally, while CI's `test-macos` job sets it and fails if `sandbox-exec` is missing, so a local green run can hide a real failure. Local verification always runs the full `uv run pytest -q` (with `CAIRNWORK_REQUIRE_SANDBOX=1` on macOS). Separately, for Issue-intake tasks the verifier counts a run as passed only if every collected test passed, so a skipped test fails it: when choosing the verification commands or hidden tests of such a task, pick targets that have zero skips on the host (`scripts/env_smoke.py` reports `SKIPPED_TESTS`).
+Run the sandbox tests for real on macOS: `CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q`. Without it the `sandbox`-marked tests are skipped locally, while CI's `test-macos` job sets it and fails if `sandbox-exec` is missing, so a local green run can hide a real failure. On a pull request `test-macos` runs only the platform-specific test files (`scripts/ci_macos_platform.py`, Issue #1684); the whole macOS suite runs nightly and on manual dispatch, and a red run opens or updates the Issue "macOS nightly failed". Local verification always runs the full `uv run pytest -q` (with `CAIRNWORK_REQUIRE_SANDBOX=1` on macOS). Separately, for Issue-intake tasks the verifier counts a run as passed only if every collected test passed, so a skipped test fails it: when choosing the verification commands or hidden tests of such a task, pick targets that have zero skips on the host (`scripts/env_smoke.py` reports `SKIPPED_TESTS`).
 
 ## Merging
 
