@@ -20,6 +20,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+from cairnwork import base_fixture_names
 from cairnwork.collect_reader import Collected, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import TestCommitRejected
@@ -30,6 +31,12 @@ from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
 MAX_FILES = 50  # more changed Python files than this: the static rule alone, as before
+
+
+def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> None:
+    """The base fixture names check (#986), then this one (#974): one call for the judge."""
+    base_fixture_names.check_with_base(ctx, task, paths, run_id)
+    check(ctx, task, paths, targets, f"{run_id}c")
 
 
 def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
