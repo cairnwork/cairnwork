@@ -112,3 +112,13 @@ def test_plain_publish_reads_the_file_once(
     env.bundle.unlink()
     env.bundle.symlink_to(env.state)
     assert publish_bundle(env.bundle, env.repo, env.candidate).code == "BUNDLE_NOT_REGULAR"
+
+
+def test_verified_bytes_over_the_size_cap_are_refused(env: Env, capsys: pytest.CaptureFixture[str]):
+    """The ``verified=`` path takes the same size cap as reading the file (review of #1674)."""
+    from cairnwork_attest.bundle import MAX_BUNDLE_BYTES
+
+    assert _run(capsys, env.argv("--no-check-run"))[0] == 0
+    big = env.bundle.read_bytes() + b" " * MAX_BUNDLE_BYTES
+    result = publish_bundle(env.bundle, env.repo, env.candidate, verified=big)
+    assert result.code == "BUNDLE_TOO_LARGE" and not result.ok

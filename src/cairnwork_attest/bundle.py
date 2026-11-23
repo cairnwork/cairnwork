@@ -112,7 +112,12 @@ def read_bundle_bytes(path: Path) -> bytes:
 
 
 def parse_bundle(raw_bytes: bytes) -> dict[str, Any]:
-    """Strictly parse the bytes of a bundle into its DSSE envelope."""
+    """Strictly parse the bytes of a bundle into its DSSE envelope.
+
+    Bytes a caller hands in (publish ``verified=``) get the same size cap as a file read.
+    """
+    if len(raw_bytes) > MAX_BUNDLE_BYTES:
+        raise BundleError(f"bundle size exceeds {MAX_BUNDLE_BYTES} bytes", code="BUNDLE_TOO_LARGE")
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
