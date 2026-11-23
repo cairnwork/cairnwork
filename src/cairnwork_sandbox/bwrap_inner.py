@@ -42,7 +42,7 @@ _CHILD = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _CHANGED = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
-DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
+DANGLING_NOTE = "dangling credential links skipped (not refused, not proven safe): "
 DEPTH_NOTE = f"credential directories not scanned for links below depth {SCAN_DEPTH}: "
 _NULL = ["--ro-bind", "/dev/null"]
 
@@ -84,7 +84,7 @@ def inner_link_masks(
             if real.startswith(SYSTEM_PREFIXES):
                 continue
             if not owner and not account_may_traverse(os.path.dirname(real)):
-                skipped += _covered(real, set(roots)) and not os.path.exists(real)  # #422
+                skipped += _covered(real, set(roots)) and not _stat_ok(link)  # #422, #1045
                 continue
             if not _stat_ok(link) and not _covered(real, set(roots)):
                 skipped += 1
