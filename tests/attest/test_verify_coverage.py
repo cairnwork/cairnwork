@@ -170,4 +170,4 @@ def test_receipt_refuses_a_new_test_pytest_does_not_collect(tmp_path, mode, code
     assert got.code == code
     if mode == "full":
         assert got.detail.startswith("cannot read the bound tests: DEFERRED_TESTS_NOT_COLLECTED: ")
-        assert "tests/test_a.py::TestK::test_m" in got.detail
+        assert "1 new test" in got.detail and "TestK" not in got.detail  # #1186: no name

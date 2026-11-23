@@ -221,7 +221,7 @@ def _fails_and(side_effect):
     [
         pytest.param(
             "        (pathlib.Path(__file__).parent / 'junk.txt').write_text('x')\n",
-            "junk.txt",
+            "checkout changed (1)",
             id="checkout-mutated",
         ),
         pytest.param(

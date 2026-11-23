@@ -1,6 +1,6 @@
 """#353: a run whose credential masks did not hold for the whole run is never counted. The check
 runs on any host through the real bwrap policy builder (a fake home, no bwrap needed); the wiring
-tests use a fake backend. A real-bwrap witness is tests/test_bwrap_mask_recheck_real.py."""
+tests use a fake backend. The real-bwrap witnesses are in tests/test_bwrap_482_real.py."""
 
 import hashlib
 import json
@@ -22,7 +22,7 @@ from cairnwork import (
     verifier_exec,
 )
 from cairnwork.deferred_tests import BaseUncomparable
-from cairnwork.mask_recheck import MaskChanged, guard
+from cairnwork.mask_recheck import MaskChanged, PolicyChanged, guard
 from cairnwork.verify_context import VerifyContext
 from cairnwork_sandbox import bwrap, bwrap_private
 from cairnwork_sandbox.backend import Policy, SandboxError
@@ -188,6 +188,81 @@ def test_an_oserror_reading_a_mask_while_rechecking_counts_as_a_change(home, mon
 
     with pytest.raises(MaskChanged, match="could not be re-checked"):
         _run(home, lambda: monkeypatch.setattr(mask_recheck, "_identity", boom))
+
+
+def _drifting(home, change):
+    """A guard whose rebuilt policy is ``change(original text)`` (host churn seen on rebuild)."""
+    policy = _policy(home)
+    fake = SimpleNamespace(
+        name="bwrap",
+        masked_home_paths=BACKEND.masked_home_paths,
+        policy=lambda *_a: replace(policy, text=change(policy.text)),
+    )
+    return fake, policy
+
+
+def test_a_difference_outside_the_mask_list_is_not_called_a_credential_change(home):
+    fake, policy = _drifting(home, lambda text: text + "\n--symlink\n/run/x\n/etc/x")
+    with pytest.raises(PolicyChanged) as err:
+        with guard(fake, policy):
+            pass
+    assert err.value.code == "SANDBOX_POLICY_CHANGED" and issubclass(PolicyChanged, MaskChanged)
+    assert "CREDENTIAL" not in str(err.value)
+    assert "other than the credential masks" in str(err.value)
+    assert "retry is safe" in str(err.value)
+
+
+def test_a_changed_mask_list_keeps_the_credential_code(home):
+    fake, policy = _drifting(home, lambda text: text + "\n--tmpfs\n/home/x/.gnupg-new")
+    with pytest.raises(MaskChanged) as err:
+        with guard(fake, policy):
+            pass
+    assert type(err.value) is MaskChanged and err.value.code == "CREDENTIAL_MASK_CHANGED"
+    assert ".gnupg-new" in str(err.value)
+
+
+def test_the_same_masks_in_another_order_is_a_credential_change(home):
+    (home / ".netrc").write_text("x\n")
+    (home / ".vault-token").write_text("t\n")
+    policy = _policy(home)
+    assert len(mask_recheck.mask_paths(policy.text)) >= 2
+
+    def reorder(text):
+        lines = text.split("\n")
+        pairs = [
+            i
+            for i, line in enumerate(lines[:-1])
+            if line == "--ro-bind" and lines[i + 1] == "/dev/null"
+        ]
+        a, b = pairs[0], pairs[1]
+        lines[a : a + 3], lines[b : b + 3] = lines[b : b + 3], lines[a : a + 3]
+        return "\n".join(lines)
+
+    fake, policy = _drifting(home, reorder)
+    with pytest.raises(MaskChanged) as err:
+        with guard(fake, policy):
+            pass
+    assert type(err.value) is MaskChanged
+
+
+def test_a_mask_change_together_with_another_difference_keeps_the_credential_code(home):
+    fake, policy = _drifting(
+        home, lambda text: text + "\n--symlink\n/run/x\n/etc/x\n--tmpfs\n/home/x/.gnupg-new"
+    )
+    with pytest.raises(MaskChanged) as err:
+        with guard(fake, policy):
+            pass
+    assert type(err.value) is MaskChanged
+
+
+def test_run_confined_raises_the_policy_code_for_a_difference_outside_the_masks(
+    tmp_path, home, monkeypatch
+):
+    fake, policy = _drifting(home, lambda text: text + "\n--symlink\n/run/x\n/etc/x")
+    monkeypatch.setattr(verifier_exec, "_execute", lambda *_a, **_k: (0, False, 0))
+    args = (False, policy, "py", ["t"], tmp_path / "p", tmp_path, {})
+    with pytest.raises(PolicyChanged, match="other than the credential masks"):
+        verifier_exec._run_confined(*args, 5, tmp_path / "log", None, fake)
 
 
 def test_a_body_that_raised_propagates_unchanged(home):
