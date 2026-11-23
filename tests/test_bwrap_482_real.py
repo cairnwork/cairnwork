@@ -171,6 +171,18 @@ def _publish_walk(label: str, report_text: str) -> None:
         pass
 
 
+def _require_priority_trees_walked(report: dict, report_text: str) -> None:
+    """Fail unless every priority tree (home, /var/tmp, /tmp) was walked cleanly (#1603).
+
+    The walk visits /opt last because it holds ~240k toolchain files on CI runners and used to
+    use the whole time budget before home and /var/tmp. A stop inside /opt is not a failure of
+    these witnesses; a stop anywhere else leaves no `priority-complete` mark and fails here.
+    """
+    if "priority-complete|-|-" not in report:
+        print(report_text)
+        pytest.fail("socket walk stopped before the priority trees were walked; no category count")
+
+
 def test_owner_socket_walk_reports_categories_only(fixture_tree):
     import json
     import socket
@@ -190,9 +202,8 @@ def test_owner_socket_walk_reports_categories_only(fixture_tree):
     report = json.loads(report_text)
     assert isinstance(report, dict)
     _publish_walk("owner", report_text)
-    if "truncated|-|-" in report:
-        print(report_text)
-        pytest.fail("socket walk stopped early (time or entry cap); no category count")
+    _require_priority_trees_walked(report, report_text)
+    assert "walked-home|-|-" in report  # home really was walked, not merely absent from the report
     assert sum(count for key, count in report.items() if key.startswith("home|")) >= 1
     print(report_text)
     warnings.warn(report_text, stacklevel=2)
@@ -233,10 +244,10 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         assert socket_dir.name not in report_text
         report = json.loads(report_text)
         _publish_walk("verifier account", report_text)
-        if "truncated|-|-" in report:
-            print(report_text)
-            pytest.fail("socket walk stopped early (time or entry cap); no category count")
-        # /var/tmp is a private tree since #471 step 2b: the walk must not see the socket
+        _require_priority_trees_walked(report, report_text)
+        # /var/tmp is a private tree since #471 step 2b: the walk must not see the socket, and the
+        # zero below only means something if /var/tmp was really walked (positive control)
+        assert "walked-var-tmp|-|-" in report, report_text
         assert sum(count for key, count in report.items() if key.startswith("var-tmp|")) == 0
         print(report_text)
         warnings.warn(report_text, stacklevel=2)
