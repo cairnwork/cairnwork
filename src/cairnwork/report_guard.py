@@ -88,6 +88,12 @@ _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
     + EXPOSED_SOURCE.replace("_MAX_REPORT_BYTES = 0", f"_MAX_REPORT_BYTES = {MAX_REPORT_BYTES}")
     + '''
 
+def _split(raw):
+    """#1671: a trailing "q" (never a hex digit) on the nonce says this run stops after
+    collection. It travels only in the hand-over, so every run loads the same module and names."""
+    return (raw[:-1], True) if raw.endswith("q") else (raw, False)
+
+
 def _take():
     """Read the hand-over once and scrub it from os.environ. Runs at import: pytest loads
     this module (-p) before any conftest or test module."""
@@ -104,10 +110,10 @@ def _take():
                     break
                 chunks.append(data)
             os.close(nonce_fd)
-            return None, report_fd, b"".join(chunks).decode()
+            return (None, report_fd, *_split(b"".join(chunks).decode()))
         except (OSError, ValueError):
             return None
-    return (path, None, nonce) if path and nonce else None
+    return (path, None, *_split(nonce)) if path and nonce else None
 
 
 _HANDOVER = _take()
@@ -119,7 +125,8 @@ _HANDOVER = _take()
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
 
-    def __init__(self, path, report_fd, nonce):
+    def __init__(self, path, report_fd, nonce, quiet=False):
+        self._quiet = quiet
         self._path = path
         self._fd = report_fd
         self._nonce = nonce
@@ -168,6 +175,16 @@ _HANDOVER = _take()
     @pytest.hookimpl(tryfirst=True)
     def pytest_itemcollected(self, item, _source=_source):
         self._sources[id(item)] = (item, item.nodeid, _source(item))
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_runtestloop(self, session):
+        # #1671: the same hook in every run; only the hand-over says whether to stop after
+        # collection (a collection error still ends the session as pytest does)
+        if not self._quiet:
+            return None
+        if session.testsfailed and not session.config.option.continue_on_collection_errors:
+            raise session.Interrupted(f"{session.testsfailed} errors during collection")
+        return True
 
     @pytest.hookimpl(wrapper=True)
     def pytest_collection(self, session):
@@ -274,35 +291,16 @@ def pytest_configure(config):
 )
 
 
-QUIET_SOURCE = """
-
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtestloop(session):
-    # #1671: a collect-only run that does not say so (VerifierSpec.announce): collection and the
-    # record are a real run's, no test runs; a collection error still ends the session as pytest
-    # does
-    if session.testsfailed and not session.config.option.continue_on_collection_errors:
-        raise session.Interrupted(f"{session.testsfailed} errors during collection")
-    return True
-"""
-
-
-def install_plugin(directory: Path, data_paths=(), *, quiet: bool = False) -> None:
+def install_plugin(directory: Path, data_paths=()) -> None:
     """Write the standalone plugin into directory (which must be on the run's PYTHONPATH and a
     sandbox read root, and must not be writable by the candidate). The bytecode hook comes first
     (bytecode_hook.py): installed and probed before the plugin reads its hand-over, so a run
     whose hook is not live has no record and fails. ``data_paths`` (#850) adds the data-exec
-    hook at the end (data_exec_hook.py); none adds nothing. ``quiet`` (#1671) stops the run after
-    collection without ``--collect-only`` in its arguments."""
+    hook at the end (data_exec_hook.py); none adds nothing."""
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        handle.write(
-            HOOK_SOURCE
-            + _PLUGIN_SOURCE
-            + plugin_source(data_paths)
-            + (QUIET_SOURCE if quiet else "")
-        )
+        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE + plugin_source(data_paths))
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 

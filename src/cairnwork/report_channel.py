@@ -73,12 +73,15 @@ class GuardChannel:
             self._report.close()
 
 
-def open_channel(private: Path) -> GuardChannel:
-    """A fresh channel with a new nonce; ``private`` holds the (immediately unlinked) report."""
+def open_channel(private: Path, quiet: bool = False) -> GuardChannel:
+    """A fresh channel with a new nonce; ``private`` holds the (immediately unlinked) report.
+    ``quiet`` (#1671) adds the "q" the plugin reads as "stop after collection"."""
     nonce = secrets.token_hex(16)
     read_end, write_end = os.pipe()
     try:
-        os.write(write_end, nonce.encode())  # 32 bytes: far below the pipe buffer
+        os.write(
+            write_end, (nonce + ("q" if quiet else "")).encode()
+        )  # 33 bytes: far below the pipe buffer
     except BaseException:
         os.close(read_end)
         raise

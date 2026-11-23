@@ -26,6 +26,16 @@ WRONG = {  # categories: arguments read at import, a skip that fires only then
     "if '--collect-only' in sys.argv:\n    pytest.skip('x', allow_module_level=True)\n"
     "class Hid(TC):\n" + BODY,
 }
+GUARD = "sys.modules.get('_cairnwork_report_guard')"
+SEEN = "'--collect-only' in sys.argv"  # the announced run that lists the tests
+HOOK = {  # hidden from the announced run by its flag and from the quiet run by the guard module
+    "class-attribute-from-guard-hook": "import sys\nfrom unittest import TestCase as TC\n"
+    f"class Hid(TC):\n    __test__ = not ({SEEN} or hasattr({GUARD}, 'pytest_runtestloop'))\n"
+    + BODY,
+    "class-attribute-from-guard-name-list": "import sys\nfrom unittest import TestCase as TC\n"
+    f"class Hid(TC):\n    __test__ = not ({SEEN} or [n for n in dir({GUARD}) if 'loop' in n])\n"
+    + BODY,
+}
 RIGHT = {
     "plain-class": "class TestHid:\n" + BODY,
     "argv-read-not-used": "import sys\nclass TestHid:\n    n = len(sys.argv)\n" + BODY,
@@ -36,6 +46,18 @@ RIGHT = {
 @pytest.mark.parametrize("shape", WRONG)
 def test_a_test_that_hides_only_under_collect_only_is_refused(project, tmp_path, shape):
     result = _run(project, tmp_path, WRONG[shape])
+    assert result.status == "FAILED", result.reason
+    assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
+    assert MARK not in repr(result) and "Hid" not in result.reason
+
+
+@sandbox
+@pytest.mark.parametrize("shape", HOOK)
+def test_the_quiet_run_cannot_be_told_apart_by_the_guard_module(project, tmp_path, shape):
+    """Review of #1698: both runs load the same guard module with the same names, so a test that
+    hides from the announced run by its flag and from the quiet run by the module is seen by the
+    quiet one and refused."""
+    result = _run(project, tmp_path, HOOK[shape])
     assert result.status == "FAILED", result.reason
     assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
     assert MARK not in repr(result) and "Hid" not in result.reason

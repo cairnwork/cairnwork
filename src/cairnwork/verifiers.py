@@ -210,7 +210,7 @@ def _prepare_run(
         directory.mkdir()
     guard = private / "guard"
     guard.mkdir()
-    report_guard.install_plugin(guard, quiet=quiet)  # the trusted plugin, read-only to the sandbox
+    report_guard.install_plugin(guard)  # the trusted plugin, read-only to the sandbox
     guard.chmod(0o750)
     _write_new(ini, ini_text)
     env = {key: os.environ[key] for key in _ENV_KEEP if key in os.environ}
@@ -237,7 +237,7 @@ def _prepare_run(
         env.update(channel.env())
     else:  # verifier account: sudo closes descriptors, so path and nonce stay in the environment
         env[report_guard.PATH_ENV] = str(verdict_path)
-        env[report_guard.NONCE_ENV] = verdict_nonce
+        env[report_guard.NONCE_ENV] = verdict_nonce + ("q" if quiet else "")
     return run_dir, home, tmp, env, verdict_path, verdict_nonce
 
 
@@ -246,7 +246,8 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     plugins = pytest_config.installed_plugins(python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
-    channel = report_channel.open_channel(private) if account is None else None
+    quiet = spec.collect_only and not spec.announce  # #1671
+    channel = report_channel.open_channel(private, quiet) if account is None else None
     # close the channel, then drop private/run even if that close raises
     with unless_interrupted(partial(close_private, private, account)):
         try:
