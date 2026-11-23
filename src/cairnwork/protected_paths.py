@@ -13,10 +13,12 @@ client repo that happens to hold such a path is refused too (fail closed, one ru
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from pathlib import PurePosixPath
 from typing import Any
 
+from cairnwork.protected_policy import POLICY_ENV, ResolvedPolicy, resolve
 from cairnwork_protocol.ids import MAX_ID_BYTES
 
 SAFE_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]*")
@@ -68,6 +70,17 @@ PROTECTED_NAMES = (
 )
 
 
+_policy: ResolvedPolicy | None = None
+
+
+def active_policy() -> ResolvedPolicy:
+    """The one resolved policy every enforcement site reads (#1585 AC6), resolved once."""
+    global _policy
+    if _policy is None:
+        _policy = resolve(PROTECTED_PATHS, os.environ.get(POLICY_ENV))
+    return _policy
+
+
 def path_refusal(path: Any) -> tuple[str, str] | None:
     """``(reason code, detail)`` when ``path`` may not be an allowed file, else None."""
     if not isinstance(path, str):
@@ -83,7 +96,7 @@ def path_refusal(path: Any) -> tuple[str, str] | None:
     return None
 
 
-def protected_rule(path: str) -> str | None:
+def protected_rule(path: str, repo: str | None = None) -> str | None:
     """The ``PROTECTED_NAMES`` or ``PROTECTED_PATHS`` pattern ``path`` matches (as written in the
     list), or None when the path is not protected."""
     low = path.casefold()
@@ -91,7 +104,7 @@ def protected_rule(path: str) -> str | None:
     for pattern in PROTECTED_NAMES:
         if fnmatch.fnmatchcase(name, pattern):
             return pattern
-    for entry in PROTECTED_PATHS:
+    for entry in active_policy().paths_for(repo):
         rule = entry.casefold()
         if rule.endswith("*"):
             if low.startswith(rule[:-1]):

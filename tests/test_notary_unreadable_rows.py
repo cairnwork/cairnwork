@@ -143,7 +143,9 @@ def _parsed_sizes(monkeypatch) -> list[int]:
     return sizes
 
 
-@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+@pytest.mark.parametrize(
+    "column", ["request_json", "response_json", "binding_json", "expected_identity"]
+)
 def test_a_stored_json_of_exactly_the_cap_is_still_read(
     repo, tmp_path, notarized, monkeypatch, column
 ):
@@ -155,7 +157,9 @@ def test_a_stored_json_of_exactly_the_cap_is_still_read(
     assert MAX_STORED_JSON_BYTES in sizes  # at the cap it is read (">" not ">=")
 
 
-@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+@pytest.mark.parametrize(
+    "column", ["request_json", "response_json", "binding_json", "expected_identity"]
+)
 def test_a_stored_json_one_byte_over_the_cap_is_withheld(
     repo, tmp_path, notarized, monkeypatch, column
 ):
@@ -168,7 +172,9 @@ def test_a_stored_json_one_byte_over_the_cap_is_withheld(
     assert MAX_STORED_JSON_BYTES + 1 not in sizes
 
 
-@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+@pytest.mark.parametrize(
+    "column", ["request_json", "response_json", "binding_json", "expected_identity"]
+)
 def test_the_cap_counts_bytes_not_characters(repo, tmp_path, notarized, monkeypatch, column):
     from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
 
@@ -207,3 +213,34 @@ def test_bound_to_withholds_one_byte_over_and_counts_bytes(
     text = _padded(MAX_STORED_JSON_BYTES + extra, filler)
     sizes = _bound_to_sizes(repo, tmp_path, notarized, monkeypatch, text)
     assert len(text.encode()) not in sizes
+
+
+def test_row_binding_reads_an_oversized_identity_as_unreadable(
+    repo, tmp_path, notarized, monkeypatch
+):
+    from cairnwork.notary_binding import IDENTITY_UNREADABLE, MAX_STORED_JSON_BYTES
+
+    sizes = _parsed_sizes(monkeypatch)
+    text = _padded(MAX_STORED_JSON_BYTES + 2, "é")  # under the cap in characters, over in bytes
+    assert len(text) <= MAX_STORED_JSON_BYTES < len(text.encode())
+    _rewrite(tmp_path, "expected_identity", text)
+    binding = notarized.row_binding("task-1", "a1")
+    assert binding is not None
+    assert binding.identity_problem == IDENTITY_UNREADABLE and not binding.columns_match
+    assert binding.expected_identity_sha256 is None
+    assert all(size <= MAX_STORED_JSON_BYTES for size in sizes)
+
+
+def test_row_binding_reads_an_identity_of_exactly_the_cap(repo, tmp_path, notarized, monkeypatch):
+    import hashlib
+
+    from cairnwork.notary_binding import IDENTITY_UNREADABLE, MAX_STORED_JSON_BYTES
+
+    sizes = _parsed_sizes(monkeypatch)
+    text = _padded(MAX_STORED_JSON_BYTES)
+    _rewrite(tmp_path, "expected_identity", text)
+    binding = notarized.row_binding("task-1", "a1")
+    assert binding is not None
+    assert binding.expected_identity_sha256 == hashlib.sha256(text.encode()).hexdigest()
+    assert MAX_STORED_JSON_BYTES in sizes
+    assert binding.identity_problem != IDENTITY_UNREADABLE

@@ -192,8 +192,9 @@ def test_a_fix_introduced_module_import_of_a_new_top_level_module_is_uncomparabl
     code, out = run_cli(project, state, tests, {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
     assert out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
-    detail = out["uncomparable"]["detail"]  # B2: the guard's record names the file
-    assert "tests/test_regression.py" in detail and "inside the test function" in detail
+    detail = out["uncomparable"]["detail"]  # #1186: a hidden test file is counted, not named
+    assert "collection errors 1" in detail and "inside the test function" in detail
+    assert "test_regression" not in detail
     assert out["core_status"] == "" and out["binding"] is None
 
 

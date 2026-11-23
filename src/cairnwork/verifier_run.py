@@ -35,6 +35,7 @@ class VerifierRun:
     forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
     log_too_big: bool = False  # the run's log went over MAX_LOG_BYTES (#481, base_comparison)
     why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
+    hidden_tests: bool = False  # #1186: reason rendering must not expose overlay names
     # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
     # in the observation's artifact hash, so recording them changes no bound digest
     notes: tuple[str, ...] = ()

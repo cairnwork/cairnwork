@@ -24,6 +24,10 @@ sides; a test the AST reader cannot see stays a P2P test (at worst a wrong refus
 wrong acceptance). The removed tests join ``changed``: both are left to the author's verifiers.
 AST classification has a 10-second process limit; timeout or child failure is refused
 (``TEST_COMMIT_ANALYSIS_LIMIT``).
+
+The classifier runs in a child under a 10 s wall-clock limit and a 1 GiB resident-memory limit
+(#1246; the memory limit is sampled, see ``child_run.run_child``); a hit is refused with
+``TEST_COMMIT_ANALYSIS_LIMIT``, never verified.
 """
 
 from __future__ import annotations
@@ -62,6 +66,7 @@ _tree = _classify_child._tree
 
 CLASSIFY_TIMEOUT_SECONDS = 10
 CLASSIFY_OUTPUT_CAP = 1024 * 1024
+CLASSIFY_MEMORY_LIMIT = 1 << 30  # #1246: resident bytes of the classifier child
 
 
 @dataclass(frozen=True)
@@ -239,7 +244,11 @@ def _classify_argv():
 def _run_child(argv, payload):
     """The classifier child under this module's own limits (read at call time)."""
     return run_child(
-        argv, payload, timeout=CLASSIFY_TIMEOUT_SECONDS, output_cap=CLASSIFY_OUTPUT_CAP
+        argv,
+        payload,
+        timeout=CLASSIFY_TIMEOUT_SECONDS,
+        output_cap=CLASSIFY_OUTPUT_CAP,
+        memory_limit=CLASSIFY_MEMORY_LIMIT,
     )
 
 
