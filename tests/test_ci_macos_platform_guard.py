@@ -47,7 +47,26 @@ SRC_PLATFORM_MODULES = {
     "src/cairnwork_sandbox/__init__.py",
 }
 PLATFORM_IN_SRC = re.compile(r"sys\.platform|platform\.system|os\.uname|darwin", re.IGNORECASE)
-LINUX_JOBS = ("test", "test-linux-sandbox", "test-linux-verifier-account", "demo-linux")
+_PR_PUSH = "github.event_name == 'pull_request' || github.event_name == 'push'"
+_MAIN_DISPATCH = "(github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')"
+_MACOS = (
+    f"github.event_name == 'pull_request' || github.event_name == 'schedule' || {_MAIN_DISPATCH}"
+)
+# Every job condition is pinned exactly: an extra "or" branch must turn the guard red. The report
+# job fires on 'failure' only: a run cancelled by a newer run is not a red run, a timeout is a
+# failure (accepted trade-off; a cancel with no replacement leaves no Issue).
+EXPECTED_IF = {
+    "test": _PR_PUSH,
+    "test-linux-sandbox": _PR_PUSH,
+    "test-linux-verifier-account": _PR_PUSH,
+    "demo-linux": _PR_PUSH,
+    "test-macos-shard": "${{ " + _MACOS + " }}",
+    "test-macos": "${{ always() && (" + _MACOS + ") }}",
+    "macos-nightly-report": (
+        "${{ always() && (github.event_name == 'schedule' || " + _MAIN_DISPATCH + ")"
+        " && needs.test-macos-shard.result == 'failure' }}"
+    ),
+}
 
 
 def selected() -> list[str]:
@@ -133,17 +152,18 @@ def job_block(text: str, name: str) -> str:
     return "\n" + found.group(1) if found else ""
 
 
+def job_if(job: str) -> str:
+    condition = re.search(r"\n    if: (.*)", job)
+    return condition.group(1).strip() if condition else ""
+
+
 def report_problems(text: str) -> list[str]:
     job = job_block(text, "macos-nightly-report")
     problems = []
     if not job:
         return ["a red full macOS run no longer opens or updates an Issue"]
-    condition = re.search(r"\n    if: (.*)", job)
-    cond = condition.group(1) if condition else ""
-    if "needs.test-macos-shard.result == 'failure'" not in cond or "pull_request" in cond:
-        problems.append("the report job does not fire on a red full macOS run only")
-    if "github.ref == 'refs/heads/main'" not in cond or "schedule" not in cond:
-        problems.append("the report job is not limited to the schedule and main dispatch")
+    if job_if(job) != EXPECTED_IF["macos-nightly-report"]:
+        problems.append("the report job's if is not exactly: a red full run on schedule or main")
     perms = re.search(r"\n    permissions:\n((?:      .*\n)+)", job)
     if not perms or {ln.strip() for ln in perms.group(1).splitlines()} != {
         "contents: read",
@@ -158,16 +178,9 @@ def report_problems(text: str) -> list[str]:
 def trigger_problems(text: str) -> list[str]:
     """A manual or scheduled run starts neither the Linux jobs nor a non-main macOS run."""
     problems = []
-    for name in LINUX_JOBS:
-        condition = re.search(r"\n    if: (.*)", job_block(text, name))
-        cond = condition.group(1) if condition else ""
-        if "workflow_dispatch" in cond or "schedule" in cond or "pull_request" not in cond:
-            problems.append(f"Linux job {name} must run only on pull_request and push")
-    for name in ("test-macos-shard", "test-macos"):
-        condition = re.search(r"\n    if: (.*)", job_block(text, name))
-        cond = condition.group(1) if condition else ""
-        if "push" in cond or "github.ref == 'refs/heads/main'" not in cond:
-            problems.append(f"macOS job {name} must skip push and a non-main dispatch")
+    for name, expected in EXPECTED_IF.items():
+        if name != "macos-nightly-report" and job_if(job_block(text, name)) != expected:
+            problems.append(f"job {name}: its if is not exactly the pinned expression")
     return problems
 
 
