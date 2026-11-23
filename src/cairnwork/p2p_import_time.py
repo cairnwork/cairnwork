@@ -18,7 +18,8 @@ _DYNAMIC = frozenset(
     {"globals", "locals", "vars", "getattr", "exec", "eval", "modules", "dir", "attrgetter"}
     | {"f_globals", "f_locals", "_getframe", "currentframe", "getmembers"}
     | {"__globals__", "__getattribute__", "__getattr__", "__builtins__"}
-    | {"import_module", "__import__"}
+    | {"import_module", "__import__", "importlib", "builtins", "gc", "pkgutil", "runpy"}
+    | {"get_objects", "getmodule", "resolve_name", "__dict__"}
 )
 # enum hooks such as _generate_next_value_ run when the class is built, without being named
 _SUNDER = re.compile(r"_[a-z][a-z_]*_")
@@ -33,11 +34,22 @@ def import_time_reaches_changed_def(test_tree: ast.Module, base_tree: ast.Module
         if not changed:
             return False
         tainted = _taint(test_tree, changed)
-        if any(_SUNDER.fullmatch(name) for name in changed):
+        if _sunder_hook_in_class(test_tree, tainted):
             return True
-        return bool(_import_refs(test_tree) & (tainted | _DYNAMIC))
+        names, words = _import_refs(test_tree)
+        return bool(names & (tainted | _DYNAMIC)) or bool(words & tainted)
     except RecursionError:  # ast.dump of a very deep expression: not provably unreachable
         return True
+
+
+def _sunder_hook_in_class(tree: ast.Module, tainted: set[str]) -> bool:
+    """An enum hook such as ``_generate_next_value_`` that runs (or reaches a changed def) when
+    its class is built, without being named at import."""
+    for cls in (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)):
+        for node in ast.walk(cls):
+            if isinstance(node, _DEFS) and _SUNDER.fullmatch(node.name) and node.name in tainted:
+                return True
+    return False
 
 
 def _def_table(tree: ast.AST) -> dict[str, list[str]]:
@@ -89,9 +101,20 @@ def _taint(tree: ast.Module, changed: set[str]) -> set[str]:
     return tainted
 
 
-def _import_refs(tree: ast.Module) -> set[str]:
-    """Names mentioned by code that runs at import: everything but function and lambda bodies."""
-    found: set[str] = set()
+def _import_refs(tree: ast.Module) -> tuple[set[str], set[str]]:
+    """What code that runs at import mentions: (names, words found in string constants).
+
+    Everything but function bodies counts (lambda bodies too: they may be called at once). An
+    import alias of a lookup primitive is one more lookup name, and a ``__dict__`` read counts
+    as a dynamic lookup unless its receiver is a class defined in this file."""
+    names: set[str] = set()
+    words: set[str] = set()
+    classes = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name.split(".")[-1] in _DYNAMIC:
+                    names.add(alias.name.split(".")[-1])  # the alias hides the name below
     pending: list[ast.AST] = [tree]
     while pending:
         node = pending.pop()
@@ -108,8 +131,12 @@ def _import_refs(tree: ast.Module) -> set[str]:
         if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
             continue  # a docstring or a bare literal runs nothing
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
-            found.add(node.id)
+            names.add(node.id)
         elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
-            found.add(node.attr)
+            own_class = isinstance(node.value, ast.Name) and node.value.id in classes
+            if node.attr != "__dict__" or not own_class:
+                names.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            words.update(_WORD.findall(node.value))
         pending += list(ast.iter_child_nodes(node))
-    return found
+    return names, words

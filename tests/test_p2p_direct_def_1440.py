@@ -37,6 +37,22 @@ RUNS_AT_IMPORT = {
     "    def _generate_next_value_(name, start, count, last):\n        _body({a})\n"
     "        return name\n    a = enum.auto()",
     "class_init": "class K:\n    def __init__(self):\n        _body({a})\nK()",
+    # review of fb9d82c6: delta and cross-model findings
+    "string_lookup": "__import__('sys').modules[__name__].__dict__['_body']({a})",
+    "string_name_only": "import pkgutil\npkgutil.resolve_name(__name__ + '._body')({a})",
+    "module_dict_read": "import sys as _s\n_s.modules[__name__].__dict__['_bo' + 'dy']({a})",
+    "builtins_alias": "from builtins import vars as v\nv()['_bo' + 'dy']({a})",
+    "unchanged_enum_hook": "import enum\nclass E(enum.Enum):\n"
+    "    def _generate_next_value_(name, start, count, last):\n        return _body({a}) or name\n"
+    "    a = enum.auto()",
+    "globals_attr": "def _hook():\n    pass\n_hook.__globals__['_bo' + 'dy']({a})",
+    "getattribute_attr": "K = type('K', (), {{}})\nK.__getattribute__(K, '__doc__')\n_body({a})",
+    "builtins_name": "print(__builtins__)\n_body({a})",
+    "moved_body_is_a_method": "class K:\n    def __init__(self):\n        assert True\nK()",
+    "ann_lambda_body": "_body: object = lambda *a: None\n_body({a})",
+    "walrus_lambda_body": "(_body := lambda *a: None)\n_body({a})",
+    "unpack_lambda_body": "_body, _o = (lambda *a: None), 1\n_body({a})",
+    "list_lambda_body": "_body = [lambda *a: None][0]\n_body({a})",
     "decorated_class": "@_body\nclass Box:\n    pass",
     # hooks that run without being named at the call site
     "init_subclass": "class Base:\n    def __init_subclass__(cls, **kw):\n        _body({a})\n"
@@ -93,6 +109,10 @@ HONEST_NEW = {
     # reading a class __dict__ at import is not a lookup of a module-level def
     "class_dict_read": (
         "class _B:\n    pass\n_N = list(_B.__dict__)\ndef _h():\n    return 1\n",
+        True,
+    ),
+    "unused_sunder_helper": (
+        "def _generate_next_value_(n, s, c, last):\n    return n\ndef _h():\n    return 1\n",
         True,
     ),
     "dynamic_words_in_strings": (
@@ -212,3 +232,16 @@ def test_e2e_the_real_entry_refuses_both_families(repo, tmp_path, name, top):
     result = _e2e(repo, tmp_path, BASE_TOP if top else BASE_CLASS, test)
     assert not result.verified
     assert result.reason.startswith(REFUSED), result.reason
+
+
+def test_object_enumeration_is_a_dynamic_lookup_at_import():
+    """gc.get_objects cannot run inside the collect sandbox, so this one is checked on the AST."""
+    import ast
+
+    from cairnwork.p2p_import_time import import_time_reaches_changed_def as reaches
+
+    test = ast.parse(
+        "import gc, types\ndef _body(): pass\n"
+        "[f for f in gc.get_objects() if isinstance(f, types.FunctionType)][0]()\n"
+    )
+    assert reaches(test, ast.parse("x = 1\n"))
