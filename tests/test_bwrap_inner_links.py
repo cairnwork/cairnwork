@@ -310,6 +310,7 @@ def test_account_mode_refuses_an_unreadable_target_under_a_root_not_counts_it_da
     unreachable-target branch must refuse like the reachable one, not count it as dangling."""
     locked = world / "out" / "locked"
     locked.mkdir(mode=0o700)
+    (locked / "tok").write_text("secret\n")  # must exist: the root guard below stats it
     (world / "home" / ".aws").mkdir()
     (world / "home" / ".aws" / "x").symlink_to(locked / "tok")
     locked.chmod(0)
