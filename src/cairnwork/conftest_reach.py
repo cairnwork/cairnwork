@@ -175,7 +175,7 @@ def _imports(tree: ast.Module, *, stdlib: bool = True) -> Iterator[tuple[int, It
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
         elif values := _plugin_values(node, tree if stdlib else None):
-            if unreadable(node, values):
+            if unreadable(node, values, tree):
                 yield -1, ()
             else:
                 yield 0, _strings(values)

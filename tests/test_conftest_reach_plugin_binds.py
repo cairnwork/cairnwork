@@ -41,6 +41,18 @@ def _reach(text):
             id="with_call",
         ),
         pytest.param("pytest_plugins.append(f())\n", id="method_call_arg"),
+        pytest.param(
+            "list = lambda x: ['evil']\npytest_plugins = list(['safe'])\n", id="builtin_assigned"
+        ),
+        pytest.param(
+            "def list(x):\n    return ['evil']\npytest_plugins = list(['safe'])\n",
+            id="builtin_def",
+        ),
+        pytest.param(
+            "from plist import P as list\npytest_plugins = list(['safe'])\n",
+            id="builtin_imported",
+        ),
+        pytest.param("with open('p') as pytest_plugins:\n    pass\n", id="with_other_manager"),
         pytest.param("(pytest_plugins := f(['safe']))\n", id="walrus_call"),
     ],
 )
@@ -62,6 +74,8 @@ def test_unreadable_binding_is_refused(text):
         "match x:\n    case ['safe'] as pytest_plugins:\n        pass\n",
         "pytest_plugins = list(('safe',))\n",
         "pytest_plugins = PLUGINS\n",
+        "def h():\n    import pytest_plugins\n",
+        "class K:\n    from plist import pytest_plugins\n",
         "import plist\n",
         "from plist import P\n",
     ],
