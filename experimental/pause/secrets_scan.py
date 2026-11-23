@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from experimental.pause.secrets_decode import decoded_views
+
 # Leak guard, recall first: a name (assignment or --flag) whose lower-cased form, with - and _
 # removed, ends in a credential word is a secret name, glued prefixes included (masterkey,
 # adminpass). The only exemption is this closed list of ordinary words. Domain names such as
@@ -52,9 +54,36 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Upper- or mixed-case forms (SK-..., -----Begin ...), run on the lower-cased text: a literal
+# prefix keeps the search fast, which re.IGNORECASE would not (#1556).
+_LOWER_PATTERNS = (
+    (
+        "api_key",
+        re.compile(
+            r"(?:sk-ant-|sk-|gh[pousr]_|github_pat_|akia|asia|aiza|xox[abpres]-)[a-z0-9_\-]{12,}"
+        ),
+    ),
+    ("private_key", re.compile(r"-----begin [a-z0-9 ]*private key-----")),
+)
+# the header with its spaces and line breaks gone: a header split over lines (#1556)
+_SPLIT_PEM = re.compile(r"-----begin[a-z0-9]*privatekey-----")
+
+
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     """Return matched categories only; never include the matched text. ``names`` are configured
-    account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``."""
+    account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``. The text
+    is also scanned after URL, ``\\u``, HTML, base64, base32 and hex decoding (#1556); a text with
+    more encoded parts than the bounds allow is refused as ``encoded_overflow``."""
+    hits = _scan_view(text, names)
+    views = decoded_views(text)
+    if views is None:
+        return [*hits, "encoded_overflow"]
+    for view in views:
+        hits += [h for h in _scan_view(view, names) if h not in hits]
+    return hits
+
+
+def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
     cleaned = _drop_invisible(text)  # the text as written, minus invisible characters (#1204)
     normalized = _drop_invisible(unicodedata.normalize("NFKC", cleaned))  # look-alikes (#1362)
     # the earlier view, kept as is (a value made only of an invisible character still counts)
@@ -72,6 +101,13 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
             variants += (compact, wrapped)
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
+    low_compact = compact.lower()
+    lowered = tuple(dict.fromkeys((text.lower(), normalized.lower(), low_compact, wrapped.lower())))
+    for name, pattern in _LOWER_PATTERNS:
+        if name not in hits and any(pattern.search(v) for v in lowered):
+            hits.append(name)
+    if "private_key" not in hits and _SPLIT_PEM.search(low_compact):
+        hits.append("private_key")
     for pattern, category in ((_ASSIGNMENT, "assigned_secret"), (_FLAG, "flag_secret")):
         # cleaned: NFKC can shorten a value below the floor, so the value is also judged as written
         for candidate in dict.fromkeys(
