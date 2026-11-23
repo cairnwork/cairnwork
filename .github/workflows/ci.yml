@@ -6,6 +6,7 @@ on:
   pull_request:
   schedule:
     - cron: '17 19 * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ permissions:
 # Nothing re-runs it automatically; a cancelled run can be re-run by hand. PR heads are always
 # tested before they land, unaffected by this.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || (github.event_name == 'schedule' && 'nightly') || 'main' }}
+  group: ci-${{ github.event.pull_request.number || ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'nightly') || 'main' }}
   cancel-in-progress: true
 
 jobs:
@@ -95,6 +96,10 @@ jobs:
   # scripts/ci_macos_weights.json); the sealed #1353 gate runs on shard 1, the serial verifier-account
   # tests on shard 2. The job below named test-macos stays the required check: it passes only when
   # every shard passed.
+  # On a pull request the shards run only the platform-specific test files (Issue #1684,
+  # scripts/ci_macos_platform.py; the Linux jobs run everything else); the schedule and a manual
+  # dispatch run the whole suite, and a red one opens or updates an Issue (macos-nightly-report).
+  # tests/test_ci_macos_platform_guard.py pins this wiring and the selection. Check names unchanged.
   test-macos-shard:
     name: test-macos-shard (${{ matrix.shard }})
     if: github.event_name != 'push'
@@ -132,7 +137,7 @@ jobs:
           # so only main's lock is trusted. The private, empty uv cache keeps a cache that an
           # earlier run's PR code could have written out of the trusted venv.
           case "$EVENT:$BASE_REF:$GITHUB_REF" in
-            pull_request:main:* | push::refs/heads/main | schedule::refs/heads/main) ;;
+            pull_request:main:* | push::refs/heads/main | schedule::refs/heads/main | workflow_dispatch::refs/heads/main) ;;
             *) echo "the #1353 gate trusts only main's lock"; exit 1 ;;
           esac
           [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "base sha is not 40-hex"; exit 1; }
@@ -169,10 +174,16 @@ jobs:
       # #406 step 4: everything except the shared verifier account runs in parallel; files that
       # share state are pinned to one worker by their xdist_group mark (tests/xdist_groups.py).
       - name: Tests of this shard
+        env:
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
+          # Only a pull request gets the platform-specific subset (Issue #1684); every other event
+          # (schedule, workflow_dispatch) runs the whole suite, so an unknown event fails closed.
+          mode=()
+          [ "$EVENT" = "pull_request" ] && mode=(--platform-only)
           files=()
-          while IFS= read -r f; do files+=("$f"); done < <(uv run python scripts/ci_macos_shard.py "${{ matrix.shard }}")
+          while IFS= read -r f; do files+=("$f"); done < <(uv run python scripts/ci_macos_shard.py "${{ matrix.shard }}" ${mode[@]+"${mode[@]}"})
           # an empty list would make pytest run the whole tree (and the witness file)
           [ "${#files[@]}" -gt 0 ] || { echo "no test files for shard ${{ matrix.shard }}"; exit 1; }
           uv run pytest -q -o faulthandler_timeout=1200 -n auto --dist loadgroup -m "not verifier_account" "${files[@]}"
@@ -193,6 +204,38 @@ jobs:
         env:
           RESULT: ${{ needs.test-macos-shard.result }}
         run: test "$RESULT" = success
+
+  # A red full macOS run (nightly or manual dispatch) must not be silent (Issue #1684): one open
+  # Issue "macOS nightly failed" gets a comment per red run; a failed lookup still files an Issue.
+  macos-nightly-report:
+    name: open or update the macOS nightly Issue
+    needs: test-macos-shard
+    if: ${{ always() && github.event_name != 'push' && github.event_name != 'pull_request' && needs.test-macos-shard.result == 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update the "macOS nightly failed" Issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EVENT: ${{ github.event_name }}
+          RESULT: ${{ needs.test-macos-shard.result }}
+        run: |
+          set -euo pipefail
+          body="$(printf 'The full macOS suite (%s run) finished %s.\n\nRun: %s\n' "$EVENT" "$RESULT" "$RUN_URL")"
+          n="$(gh issue list --repo "$REPO" --state open --limit 100 \
+            --search 'macOS nightly failed in:title' --json number,title \
+            --jq '[.[] | select(.title == "macOS nightly failed")][0].number // empty' || true)"
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "macOS nightly failed" --body "$body"
+          fi
 
   # Linux bwrap backend, witnessed on real bwrap. On a GitHub ubuntu-24.04 runner an AppArmor
   # rule restricts capability-bearing user namespaces by default, so the job asserts available()
