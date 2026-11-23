@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import confined, pytest_config, report_channel, report_guard
+from cairnwork import confined, mask_recheck, pytest_config, report_channel, report_guard
 from cairnwork.confined import RUN_TOKEN_VAR
 from cairnwork.pycache_guard import PYCACHE_DIR
 from experimental.import_origin import audit_bootstrap
@@ -123,14 +123,15 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
     log = run_dir / "pytest.log"
     code = None
     try:
-        code, timed_out, _survivors = confined.execute(
-            backend.wrap(argv, profile_path),
-            checkout,
-            env,
-            timeout,
-            log,
-            pass_fds=(*channel.pass_fds, write_fd),
-        )
+        with mask_recheck.guard(backend, profile):  # #353, #1681: a run whose masks moved is void
+            code, timed_out, _survivors = confined.execute(
+                backend.wrap(argv, profile_path),
+                checkout,
+                env,
+                timeout,
+                log,
+                pass_fds=(*channel.pass_fds, write_fd),
+            )
         if timed_out:
             code = None
     finally:
