@@ -55,18 +55,24 @@ def _call(node: ast.AST, bound: set[str]) -> bool:
 
 
 def _bound(tree: ast.Module) -> set[str]:
-    """Every name the module binds anywhere: def, class, assignment, import, parameter, loop,
-    ``with`` or walrus target. A builtin name in it may be anything (``list = lambda x: ...``)."""
+    """Every name the module binds at module level (also inside ``if``, ``try``, ``with`` and
+    ``for``): def, class, assignment, import, loop, ``with`` or walrus target. A builtin name in
+    it may be anything (``list = lambda x: ...``). A parameter or a name bound inside a def,
+    class or lambda is local and does not count."""
     out: set[str] = set()
-    for n in ast.walk(tree):
+    todo: list[ast.AST] = [tree]
+    while todo:
+        n = todo.pop()
         if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             out.add(n.name)
-        elif isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
-            out.add(n.id)
-        elif isinstance(n, ast.alias):
-            out.add(n.asname or n.name.split(".")[0])
-        elif isinstance(n, ast.arg):
-            out.add(n.arg)
+        elif isinstance(n, ast.Lambda):
+            continue
+        else:
+            if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
+                out.add(n.id)
+            elif isinstance(n, ast.alias):
+                out.add(n.asname or n.name.split(".")[0])
+            todo += ast.iter_child_nodes(n)
     return out
 
 
