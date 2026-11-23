@@ -15,7 +15,7 @@ import stat
 from functools import partial
 from pathlib import Path
 
-from cairnwork import confined, deny_channel
+from cairnwork import confined, deny_channel, mask_recheck
 
 
 def _same_directory(path: Path, before: os.stat_result) -> bool:
@@ -57,11 +57,13 @@ def _run_confined(deny, profile, python, argv, profile_path, checkout, env, *res
     ``rest`` is _execute's (timeout, log_path, account, backend, pass_fds). Returns the profile
     used, _execute's three values and the deny evidence (None when not recorded)."""
     backend = rest[3]
+    original = profile  # the untagged policy still carries its build inputs for the mask re-check
     profile, tag = deny_channel.tagged(profile, backend.name, deny)
     _write_new(profile_path, profile.text.encode())
     canary = partial(_canary, python, profile_path, checkout, env, rest[2], backend)
     with deny_channel.watch(deny, backend.name, tag, canary) as seen:
-        returncode, timed_out, survivors = _execute(argv, profile_path, checkout, env, *rest)
+        with mask_recheck.guard(backend, original):
+            returncode, timed_out, survivors = _execute(argv, profile_path, checkout, env, *rest)
     return profile, returncode, timed_out, survivors, seen.evidence
 
 

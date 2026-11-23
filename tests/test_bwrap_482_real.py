@@ -9,10 +9,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
 
 import pytest
+from fixture_tree import world_dir
 
+from cairnwork.mask_recheck import MaskChanged, guard
+from cairnwork.verifier_account import VerifierAccount
 from cairnwork_sandbox import bwrap
 
 pytestmark = pytest.mark.sandbox
@@ -93,8 +98,6 @@ def account_tree(monkeypatch):
 def _account_run(base: Path, argv: list[str], text: str = "") -> subprocess.CompletedProcess:
     """Run argv as the verifier account on real bwrap, with ``text`` or else the policy the account
     path builds (mask_home_credentials=False); VerifierAccount.wrap adds sudo -n -u <account>."""
-    from cairnwork.verifier_account import VerifierAccount
-
     path = base / "policy.txt"
     path.write_text(
         text or bwrap.BACKEND.policy((), (), home=base / "home", mask_home_credentials=False).text
@@ -216,8 +219,6 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
         policy = bwrap.BACKEND.policy((), (), home=base / "home", mask_home_credentials=False)
         policy_path = base / "walk-policy.txt"
         policy_path.write_text(policy.text)
-        from cairnwork.verifier_account import VerifierAccount
-
         account = VerifierAccount()
         with account.exclusive(120):
             result = subprocess.run(
@@ -244,3 +245,89 @@ def test_verifier_socket_walk_reports_categories_only(account_tree):
             listener.close()
         socket_path.unlink(missing_ok=True)
         socket_dir.rmdir()
+
+
+# --- #353: a credential link re-pointed while a run is going (the guard must refuse the run) ---
+CANARY_353 = "CW-353-CANARY\n"
+# The run says it is ready, waits for the host's re-point, then prints what the link now reaches.
+SCRIPT_353 = (
+    'touch "$1/ready"; i=0; '
+    'while [ ! -e "$1/go" ] && [ "$i" -lt 150 ]; do sleep 0.2; i=$((i+1)); done; '
+    'cat "$2/.ssh/id"'
+)
+
+
+@pytest.fixture
+def repoint_tree():
+    """home/.ssh -> keys/v1 (empty); keys/v2/id holds the canary; run/ is the write root."""
+    with world_dir("cw353-") as base:
+        base = base.resolve()
+        (base / "keys" / "v1").mkdir(parents=True)
+        (base / "keys" / "v2").mkdir()
+        (base / "keys" / "v2" / "id").write_text(CANARY_353)
+        (base / "home").mkdir()
+        (base / "home" / ".ssh").symlink_to(base / "keys" / "v1")
+        (base / "run").mkdir()
+        for path in (base / "run", base / "home", base / "keys" / "v1", base / "keys" / "v2"):
+            os.chmod(path, 0o777 if path.name == "run" else 0o755)
+        os.chmod(base / "keys" / "v2" / "id", 0o644)
+        yield base
+
+
+def _repoint_during_run(base: Path) -> threading.Thread:
+    """After the run signals ready, point .ssh at keys/v2, then let the run go on."""
+
+    def work() -> None:
+        deadline = time.monotonic() + 60
+        while not (base / "run" / "ready").exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        link = base / "home" / ".ssh"
+        link.unlink()
+        link.symlink_to(base / "keys" / "v2")
+        (base / "run" / "go").write_text("")
+
+    thread = threading.Thread(target=work)
+    thread.start()
+    return thread
+
+
+def _guarded_run(base: Path, owner: bool, seen: list[subprocess.CompletedProcess]) -> None:
+    """The guarded run: the sandboxed command, with the host re-pointing the link meanwhile."""
+    policy = bwrap.BACKEND.policy(
+        (), (base / "run",), home=base / "home", mask_home_credentials=owner
+    )
+    (base / "policy.txt").write_text(policy.text)
+    argv = ["/bin/sh", "-c", SCRIPT_353, "sh", str(base / "run"), str(base / "home")]
+    thread = _repoint_during_run(base)
+    try:
+        with guard(bwrap.BACKEND, policy):
+            if owner:
+                wrapped = bwrap.wrap(argv, base / "policy.txt")
+                seen.append(subprocess.run(wrapped, capture_output=True, timeout=90, check=False))  # noqa: S603
+            else:
+                account = VerifierAccount()
+                with account.exclusive(60):
+                    wrapped = account.wrap(argv, base / "policy.txt")
+                    seen.append(
+                        subprocess.run(  # noqa: S603
+                            wrapped, capture_output=True, timeout=90, check=False, cwd=account.root
+                        )
+                    )
+    finally:
+        thread.join()
+
+
+def test_a_link_repointed_during_an_owner_run_is_not_counted(repoint_tree):
+    seen: list[subprocess.CompletedProcess] = []
+    with pytest.raises(MaskChanged, match=r"\.ssh"):
+        _guarded_run(repoint_tree, True, seen)
+    # Witness: the run read the canary through the new link, so the mask had really stopped holding.
+    assert seen and seen[0].stdout.decode() == CANARY_353, seen
+
+
+@pytest.mark.verifier_account
+def test_a_link_repointed_during_an_account_run_is_not_counted(repoint_tree):
+    seen: list[subprocess.CompletedProcess] = []
+    with pytest.raises(MaskChanged, match=r"\.ssh"):
+        _guarded_run(repoint_tree, False, seen)
+    assert seen and seen[0].stdout.decode() == CANARY_353, seen

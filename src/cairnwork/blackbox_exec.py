@@ -22,7 +22,7 @@ from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import gitcmd, pytest_config
+from cairnwork import gitcmd, mask_recheck, pytest_config
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.blackbox import MAX_BYTES, Declaration
@@ -157,9 +157,10 @@ def _run_in_open(
         argv = [python, "-P", "-m", MODULE]
         if claim_root is not None:  # strict: the declaration reaches a candidate once (#1353 P2)
             consume(claim_root, declaration_key(declaration))
-        returncode, timed_out, survivors = _execute(
-            argv, profile_path, checkout, env, timeout, log_path, account, backend
-        )
+        with mask_recheck.guard(backend, profile):
+            returncode, timed_out, survivors = _execute(
+                argv, profile_path, checkout, env, timeout, log_path, account, backend
+            )
     else:
         _write_new(log_path, b"no sandbox backend available: blackbox not executed\n")
         returncode, timed_out, survivors = None, False, 0
