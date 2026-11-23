@@ -203,8 +203,7 @@ def _check_run_step(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> _St
     result = post_check_run(
         bundle,
         args.repo_slug,
-        public_key=pubkey.path,
-        loaded_key=pubkey.public,
+        public_key=pubkey.public if pubkey.public is not None else pubkey.path,
         repo=Path(args.repo),
         token=os.environ.get(TOKEN_ENV),
         gh=args.gh,

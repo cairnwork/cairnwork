@@ -15,7 +15,7 @@ from test_on_verified_single_read import _note
 from cairnwork_attest import checkrun, on_verified
 from cairnwork_attest.bundle import parse_bundle
 from cairnwork_attest.dsse import _sign_bytes
-from cairnwork_attest.keys import public_key_pem
+from cairnwork_attest.keys import load_private_key, public_key_pem
 
 pytestmark = pytest.mark.usefixtures("production_git_env")
 
@@ -104,4 +104,32 @@ def test_reusing_an_existing_bundle_checks_it_with_the_loaded_key(
     monkeypatch.setattr(on_verified, "_verify_loaded", spy)
     rc, _, obj = _run(capsys, env.argv("--no-check-run"))
     assert rc == 0 and obj["steps"][0]["detail"] == "reused existing bundle"
-    assert len(seen) >= 2 and all(key is not None for key in seen)
+    mine = load_private_key(env.state).public_key().public_bytes_raw()
+    assert len(seen) >= 2 and all(k is not None and k.public_bytes_raw() == mine for k in seen)
+
+
+def test_check_run_given_a_loaded_key_uses_exactly_that_key(
+    env: Env, http: FakeHttp, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A key object is the only key: a wrong one refuses, the right one verifies (no file read)."""
+    assert _run(capsys, env.argv("--no-check-run"))[0] == 0
+    right = load_private_key(env.state).public_key()
+    seen: list[Any] = []
+    real = checkrun._verify_loaded
+    monkeypatch.setattr(
+        checkrun, "_verify_loaded", lambda *a, **k: seen.append(k["public_key"]) or real(*a, **k)
+    )
+    for key in (Ed25519PrivateKey.generate().public_key(), right):
+        http.calls.clear()
+        checkrun.post_check_run(
+            env.bundle,
+            checkrun.SLUG_FOR_TESTS if False else "o/r",
+            public_key=key,
+            repo=env.repo,
+            token=TOKEN,
+            http=http,
+        )
+        summaries.append(str(http.calls)) if (
+            summaries := locals().get("summaries")
+        ) is not None else None
+    assert seen[0] is not right and seen[1] is right
