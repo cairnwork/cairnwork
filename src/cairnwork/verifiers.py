@@ -199,7 +199,9 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     return tuple(runs)
 
 
-def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_seed=""):
+def _prepare_run(
+    private: Path, ini: Path, ini_text: bytes, channel=None, hash_seed="", quiet=False
+):
     """Create the per-run directory (the only place besides the checkout the child may
     write), its HOME and TMPDIR, and the scrubbed environment."""
     run_dir = private / "run"
@@ -208,7 +210,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_s
         directory.mkdir()
     guard = private / "guard"
     guard.mkdir()
-    report_guard.install_plugin(guard)  # the trusted plugin, read-only to the sandbox
+    report_guard.install_plugin(guard, quiet=quiet)  # the trusted plugin, read-only to the sandbox
     guard.chmod(0o750)
     _write_new(ini, ini_text)
     env = {key: os.environ[key] for key in _ENV_KEEP if key in os.environ}
@@ -281,7 +283,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
     log_path, ini, profile_path = map(private.joinpath, _RUN_FILES)
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
-        private, ini, ini_text, channel, ctx.hash_seed
+        private, ini, ini_text, channel, ctx.hash_seed, spec.collect_only and not spec.announce
     )
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)

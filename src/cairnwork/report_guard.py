@@ -274,16 +274,35 @@ def pytest_configure(config):
 )
 
 
-def install_plugin(directory: Path, data_paths=()) -> None:
+QUIET_SOURCE = """
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtestloop(session):
+    # #1671: a collect-only run that does not say so (VerifierSpec.announce): collection and the
+    # record are a real run's, no test runs; a collection error still ends the session as pytest
+    # does
+    if session.testsfailed and not session.config.option.continue_on_collection_errors:
+        raise session.Interrupted(f"{session.testsfailed} errors during collection")
+    return True
+"""
+
+
+def install_plugin(directory: Path, data_paths=(), quiet: bool = False) -> None:
     """Write the standalone plugin into directory (which must be on the run's PYTHONPATH and a
     sandbox read root, and must not be writable by the candidate). The bytecode hook comes first
     (bytecode_hook.py): installed and probed before the plugin reads its hand-over, so a run
     whose hook is not live has no record and fails. ``data_paths`` (#850) adds the data-exec
-    hook at the end (data_exec_hook.py); none adds nothing."""
+    hook at the end (data_exec_hook.py); none adds nothing. ``quiet`` (#1671) stops the run after
+    collection without ``--collect-only`` in its arguments."""
     path = directory / f"{MODULE}.py"
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o640)
     with os.fdopen(fd, "w") as handle:
-        handle.write(HOOK_SOURCE + _PLUGIN_SOURCE + plugin_source(data_paths))
+        handle.write(
+            HOOK_SOURCE
+            + _PLUGIN_SOURCE
+            + plugin_source(data_paths)
+            + (QUIET_SOURCE if quiet else "")
+        )
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
