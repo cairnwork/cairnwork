@@ -5,6 +5,9 @@ from __future__ import annotations
 import re
 import unicodedata
 
+from experimental.pause.secrets_clean import drop_invisible as _drop_invisible
+from experimental.pause.secrets_decode import decoded_views
+
 # Leak guard, recall first: a name (assignment or --flag) whose lower-cased form, with - and _
 # removed, ends in a credential word is a secret name, glued prefixes included (masterkey,
 # adminpass). The only exemption is this closed list of ordinary words. Domain names such as
@@ -52,9 +55,41 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
 )
 
 
+# Upper- or mixed-case forms (SK-..., GHP_...), run on the lower-cased text: a literal prefix keeps
+# the search fast, which re.IGNORECASE would not (#1556). The vendor shape is required (a left
+# boundary, a long tail, a digit) so that task-4821-..., asia-southeast1-a or GHS_RUNNER_TEMP pass.
+_LOWER_PATTERNS = (
+    (
+        "api_key",
+        re.compile(
+            r"(?<![a-z0-9])(?:sk-ant-(?=[a-z_-]*[0-9])[a-z0-9_\-]{16,}|sk-(?=[a-z_-]*[0-9])[a-z0-9_\-]{20,}"
+            r"|gh[pousr]_[a-z0-9]{30,}|github_pat_[a-z0-9_]{20,}|xox[abpres]-(?=[a-z-]*[0-9])[a-z0-9-]{12,})"
+        ),
+    ),
+    ("private_key", re.compile(r"-----begin [a-z0-9 ]*private key-----")),
+)
+# the header with its spaces and line breaks gone: a header split over lines (#1556)
+_SPLIT_PEM = re.compile(r"-----begin[a-z0-9]*privatekey-----")
+_PEM_BLANKS = re.compile(r"[\s+_.]+")  # a space may be written as + or _ or .
+
+
 def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
     """Return matched categories only; never include the matched text. ``names`` are configured
-    account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``."""
+    account or host names (AC4): a whole-word, case-insensitive hit is ``account_name``. The text
+    is also scanned after URL, ``\\u``, HTML, base64, base32 and hex decoding (#1556); a text with
+    more encoded parts than the bounds allow is refused as ``encoded_overflow``."""
+    hits = _scan_view(text, names)
+    cleaned = _drop_invisible(text)
+    normalized = _drop_invisible(unicodedata.normalize("NFKC", cleaned))  # as _scan_view sees it
+    views = decoded_views((text, cleaned, normalized))
+    if views is None:
+        return [*hits, "encoded_overflow"]
+    for view in views:
+        hits += [h for h in _scan_view(view, names) if h not in hits]
+    return hits
+
+
+def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
     cleaned = _drop_invisible(text)  # the text as written, minus invisible characters (#1204)
     normalized = _drop_invisible(unicodedata.normalize("NFKC", cleaned))  # look-alikes (#1362)
     # the earlier view, kept as is (a value made only of an invisible character still counts)
@@ -72,6 +107,13 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
             variants += (compact, wrapped)
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
+    low_compact = _PEM_BLANKS.sub("", normalized.lower())
+    lowered = tuple(dict.fromkeys((text.lower(), normalized.lower(), low_compact, wrapped.lower())))
+    for name, pattern in _LOWER_PATTERNS:
+        if name not in hits and any(pattern.search(v) for v in lowered):
+            hits.append(name)
+    if "private_key" not in hits and _SPLIT_PEM.search(low_compact):
+        hits.append("private_key")
     for pattern, category in ((_ASSIGNMENT, "assigned_secret"), (_FLAG, "flag_secret")):
         # cleaned: NFKC can shorten a value below the floor, so the value is also judged as written
         for candidate in dict.fromkeys(
@@ -101,24 +143,6 @@ def scan(text: str, names: tuple[str, ...] = ()) -> list[str]:
 
 
 _ZERO_WIDTH = r"[\u00ad\u200b-\u200d\u2060\u2061-\u2064\ufeff]"  # the earlier hand list
-_ASCII_CONTROL = re.compile(r"[\x00-\x08\x0e-\x1f\x7f]")
-_FILLERS = frozenset("\u115f\u1160\u3164\uffa0\u2800")  # Default_Ignorable, not in C*/Mn/Me
-
-
-def _drop_invisible(text: str, repl: str = "") -> str:
-    """``text`` without invisible characters, chosen by Unicode category as textclean does: C*
-    (control, format, private use, unassigned) except whitespace, the combining marks Mn/Me, and
-    the fillers outside those categories (Hangul fillers, Braille blank). ``repl`` stands in for
-    each one (a space: an invisible character may itself be the separator)."""
-
-    if text.isascii() and not _ASCII_CONTROL.search(text):
-        return text  # nothing to drop; skips a per-character pass over a large input
-
-    def invisible(ch: str) -> bool:
-        cat = unicodedata.category(ch)
-        return (cat[0] == "C" and not ch.isspace()) or cat in ("Mn", "Me") or ch in _FILLERS
-
-    return "".join(repl if invisible(ch) else ch for ch in text)
 
 
 def _forms(word: str) -> tuple[str, ...]:

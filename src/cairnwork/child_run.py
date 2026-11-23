@@ -11,9 +11,13 @@ import os
 import signal
 import subprocess
 import threading
+import time
+
+_PS = "/bin/ps"
+_POLL_SECONDS = 0.05
 
 
-def run_child(argv, payload, *, timeout, output_cap):
+def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
     """Run ``argv`` with ``payload`` on stdin; return ``(stdout, timed_out, returncode)``.
 
     Output over ``output_cap``, a thread that cannot start, a spawn failure or a reader/writer
@@ -21,7 +25,14 @@ def run_child(argv, payload, *, timeout, output_cap):
     partial result as success. A timeout alone (the cap not hit) returns the output read so far,
     ``True`` and the kill's return code (-9), so a caller must check ``timed_out`` first. Any
     other exit returns the child's own return code as is. The whole process group is killed and
-    reaped on every exit path."""
+    reaped on every exit path.
+
+    ``memory_limit`` (bytes, #1246) is a sampled soft limit: the resident memory of the child's
+    process group is read every 50 ms while it runs, so a spike shorter than a sample can pass,
+    and a process that leaves the group (its own session) is not counted. Going over the limit,
+    or a reading that cannot be taken while the group is still alive, kills the group and gives
+    ``(b"", False, 1)``, a refusal like the output cap. A reading that runs out of the time limit
+    counts as a timeout. (``RLIMIT_AS`` is not enforced on macOS, so the parent measures.)"""
     output: list[bytes] = []
     size = 0
     process = None
@@ -49,17 +60,12 @@ def run_child(argv, payload, *, timeout, output_cap):
         writer = threading.Thread(target=_write_input, args=(process.stdin, payload), daemon=True)
         reader.start()
         writer.start()
-        try:
-            process.wait(timeout=timeout)
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            _kill_child_group(process.pid)
-            process.wait()
+        timed_out, over_memory = _wait(process, timeout, memory_limit)
         _kill_child_group(process.pid)
+        process.wait()
         writer.join(timeout=1)
         reader.join(timeout=1)
-        if reader.is_alive() or writer.is_alive() or size >= output_cap:
+        if reader.is_alive() or writer.is_alive() or size >= output_cap or over_memory:
             return b"", timed_out, 1
         return b"".join(output), timed_out, process.returncode
     except (OSError, RuntimeError):  # RuntimeError: a thread that cannot start
@@ -68,6 +74,67 @@ def run_child(argv, payload, *, timeout, output_cap):
         if process is not None:  # every exit path: kill the whole group, reap the child
             _kill_child_group(process.pid)
             process.wait()
+
+
+def _wait(process, timeout, memory_limit):
+    """Wait for the child; return ``(timed_out, over_memory)``. Both end with the group killed."""
+    if memory_limit is None:
+        try:
+            process.wait(timeout=timeout)
+            return False, False
+        except subprocess.TimeoutExpired:
+            _kill_child_group(process.pid)
+            return True, False
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            _kill_child_group(process.pid)
+            return True, False
+        try:
+            process.wait(timeout=min(_POLL_SECONDS, left))
+            return False, False
+        except subprocess.TimeoutExpired:
+            pass
+        used = _group_rss_bytes(process.pid, max(deadline - time.monotonic(), 0.01))
+        if used is None or used > memory_limit:
+            _kill_child_group(process.pid)
+            ran_out = used is None and time.monotonic() >= deadline
+            return ran_out, not ran_out
+
+
+def _group_rss_bytes(group, budget):
+    """Resident bytes of every process in ``group``, or None when it cannot be read.
+
+    The reading gets at most ``budget`` seconds (the time the child has left). No row for the
+    group is an exited group (0) only when ``killpg(group, 0)`` says it is gone; a group that is
+    still alive but missing from the table is a reading that failed."""
+    try:
+        done = subprocess.run(
+            [_PS, "-axo", "pgid=,rss="],
+            capture_output=True,
+            env={},
+            timeout=min(5, budget),
+            check=True,
+            text=True,
+        )
+        total, seen = 0, False
+        for line in done.stdout.splitlines():
+            fields = line.split()
+            if len(fields) == 2 and int(fields[0]) == group:
+                total += int(fields[1]) * 1024
+                seen = True
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if seen:
+        return total
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return 0
+    except PermissionError:
+        return None
+    return None
 
 
 def _write_input(stream, payload):

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.node_file import file_part, name_part
-from cairnwork.reasons import _DELIMITERS
+from cairnwork.reasons import _DELIMITERS, all_skipped, why_not_passed
 from cairnwork.textclean import replace_hidden
 
 _SEP = "::"  # between the parts of a node id (node_file splits the file off, #1272)
@@ -25,6 +25,44 @@ _READ_CAP = 2 << 20
 _UNAVAILABLE = "assertion detail unavailable"
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 _HEADER = re.compile(r"^_{2,} (.+?) _{2,}$")
+
+
+def failure_reason(
+    verdict,
+    profile,
+    ran,
+    timed_out,
+    mutated,
+    survivors,
+    too_big,
+    returncode,
+    forged,
+    not_run,
+    hidden,
+    denied,
+):
+    """Build the word-only failure reason without changing any verdict input."""
+    return why_not_passed(
+        ran_sandboxed=profile is not None,
+        returncode=returncode,
+        timed_out=timed_out,
+        mutated=mutated,
+        survivors=survivors,
+        log_too_big=too_big,
+        tests_ran=ran,
+        report_too_big=verdict.too_big,
+        forged=forged,
+        not_run=not_run,
+        renamed=verdict.renamed,
+        exitstatus=verdict.exitstatus,
+        testsfailed=verdict.testsfailed,
+        fail_kind=verdict.fail_kind,
+        data_refused=verdict.data_refused,
+        hidden_tests=hidden,
+        denied_path=denied,
+        all_skipped=all_skipped(verdict.collected, verdict.outcomes),
+        outcomes=verdict.outcomes,
+    )
 
 
 def _clean(value, limit: int) -> str:

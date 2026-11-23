@@ -141,7 +141,9 @@ Candidate code runs confined by an OS sandbox; when no working backend exists no
       creates a credential path or socket tree during a run leaves the secret readable for the
       rest of it. This is detected after the run, not prevented: the run is not counted and raises
       `CREDENTIAL_MASK_CHANGED` (a retry is safe; a base run is UNCOMPARABLE), by comparing the
-      masked objects and the policy rebuilt from the same inputs. For files this is detection
+      masked objects and the policy rebuilt from the same inputs. A rebuilt policy that differs
+      only outside the mask list (tree or `/etc` links) raises `SANDBOX_POLICY_CHANGED` instead:
+      same handling, but the masks held. For files this is detection
       only: a read already done inside the run is not undone, and a change undone before the check
       is not seen. A host tool that rewrites a masked path by replacement fails the run.
       A link found *inside* a credential directory (`~/.aws/credentials -> /srv/x/cred`, up to
@@ -325,6 +327,12 @@ the declaration lacks; its `assurance.blackbox_checks` is `unpinned`, so regener
 (`not_checked` means no id check ran: no policy, or no non-empty commitment pin).
 In full mode, `assurance.test_scope=signer_choice` likewise means the policy did not pin `test_roots`,
 so the receiver did not re-derive the producer's test scope.
+Compatibility (#1478, after #1375): a full-mode receiver that pins `test_roots` re-runs the producer's
+test-commit scope check, which now refuses a case-only variant of a base path or of another added path. A receipt
+signed earlier, on a case-sensitive checkout, for a test commit that carries such variants is therefore refused
+with `TEST_SOURCE_MISMATCH` (`test commit scope: TEST_COMMIT_SCOPE: ... only in case ...`). This only tightens; it
+needs no migration, since such a receipt is exactly the one the refusal exists for, and a producer re-signs after
+renaming the variant.
 What Core required is read from the contract, so both receipt versions also refuse a request whose
 contract and plan require different ids, whose plan or evidence names another contract, change set
 or plan, or whose `predicate.verifier_observations` differs from its observations
