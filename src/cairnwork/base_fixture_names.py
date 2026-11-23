@@ -20,7 +20,7 @@ from cairnwork.verifiers import run_verifiers
 
 MAX_TARGETS = 20
 LOG = logging.getLogger(__name__)
-LOUD = ("RUN_COUNT", "NO_NAMES_RECORDED")  # plus every RUN_FAULT: an attempt that gave nothing
+LOUD = ("RUN_FAULT", "RUN_COUNT", "NO_NAMES_RECORDED")  # attempted, gave nothing
 
 
 def _on_base(repo: Path, base: str, path: str) -> bool:
@@ -42,16 +42,14 @@ def collect(ctx, task, paths: tuple[str, ...], run_id: str):
     """The names the base run recorded, or None; a None is logged with its reason code."""
     names, reason = probe(ctx, task, paths, run_id)
     if names is None:
-        level = (
-            logging.WARNING if reason in LOUD or reason.startswith("RUN_FAULT") else logging.INFO
-        )
+        level = logging.WARNING if reason in LOUD else logging.INFO
         LOG.log(level, "base fixture names not used (%s): the #916 rule stands alone", reason)
     return names
 
 
 def probe(ctx, task, paths: tuple[str, ...], run_id: str):
     """(names, reason): the names the base run recorded and "OK", or (None, a reason code):
-    ACCOUNT_RUN, NO_CONFTEST_CHANGE, NO_BASE_TARGET (not attempted), RUN_FAULT:<type>,
+    ACCOUNT_RUN, NO_CONFTEST_CHANGE, NO_BASE_TARGET (not attempted), RUN_FAULT,
     RUN_COUNT or NO_NAMES_RECORDED (attempted, nothing usable). Diagnostics only."""
     conftests = conftest_of(paths)
     if ctx.account is not None:
@@ -72,5 +70,5 @@ def probe(ctx, task, paths: tuple[str, ...], run_id: str):
             return None, "RUN_COUNT"
         names = runs[0].fixture_names
         return (names, "OK") if names is not None else (None, "NO_NAMES_RECORDED")
-    except Exception as exc:  # noqa: BLE001 - any fault means no names (the #916 rule)
-        return None, f"RUN_FAULT:{type(exc).__name__}"
+    except Exception:  # noqa: BLE001 - any fault means no names (the #916 rule)
+        return None, "RUN_FAULT"  # never read the exception: the candidate shapes its name

@@ -85,7 +85,7 @@ def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
         (object(), PATHS, "ok", None, "ACCOUNT_RUN", "INFO"),
         (None, ("tests/test_a.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
         (None, ("tests/conftest.py", "tests/test_new.py"), "ok", None, "NO_BASE_TARGET", "INFO"),
-        (None, PATHS, "ok", RuntimeError("x"), "RUN_FAULT:RuntimeError", "WARNING"),
+        (None, PATHS, "ok", RuntimeError("x"), "RUN_FAULT", "WARNING"),
         (None, PATHS, "none", None, "NO_NAMES_RECORDED", "WARNING"),
         (None, PATHS, "ok", None, "OK", ""),
     ],
@@ -119,3 +119,33 @@ def test_an_empty_name_set_is_still_names_not_a_none(task, monkeypatch, caplog):
         assert bfn.collect(ctx, task, PATHS, "r-f") == frozenset()
     assert bfn.probe(ctx, task, PATHS, "r-f") == (frozenset(), "OK")
     assert caplog.records == []
+
+
+class _Meta(type):
+    def __getattribute__(cls, attr):  # a candidate-shaped class whose name cannot be read
+        if attr == "__name__":
+            raise RuntimeError("name trap")
+        return super().__getattribute__(attr)
+
+
+class _Trap(Exception, metaclass=_Meta):
+    pass
+
+
+@pytest.mark.parametrize("hostile", ["/Users/x/secret\nINJECT", "tmp/\rpath"])
+def test_an_exception_class_name_never_reaches_the_reason_or_log(
+    task, monkeypatch, caplog, hostile
+):
+    _calls(monkeypatch, error=type(hostile, (Exception,), {})("x"))
+    ctx = SimpleNamespace(account=None)
+    with caplog.at_level("INFO", logger=bfn.LOG.name):
+        assert bfn.collect(ctx, task, PATHS, "r-f") is None
+    assert bfn.probe(ctx, task, PATHS, "r-f") == (None, "RUN_FAULT")
+    assert hostile not in "".join(r.getMessage() for r in caplog.records)
+
+
+def test_an_exception_whose_name_raises_still_gives_none(task, monkeypatch):
+    _calls(monkeypatch, error=_Trap())
+    ctx = SimpleNamespace(account=None)
+    assert bfn.collect(ctx, task, PATHS, "r-f") is None
+    assert bfn.probe(ctx, task, PATHS, "r-f") == (None, "RUN_FAULT")
