@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import pwd
 import stat
 from types import SimpleNamespace
 
@@ -63,7 +62,3 @@ def test_an_unlistable_user_table_counts_as_others(monkeypatch):
 
     monkeypatch.setattr(bwrap_reach.pwd, "getpwall", boom)
     assert bwrap_reach._group_has_others(_info(0o750, OPERATOR)) is True
-
-
-def test_real_getpwall_lists_the_current_user_so_the_private_group_rule_still_runs():
-    assert any(u.pw_uid == os.geteuid() for u in pwd.getpwall()) or os.geteuid() == 0

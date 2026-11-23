@@ -6,10 +6,9 @@ user namespace cannot drop them), so the kernel lets it through a directory by t
 by a group it is in, or by a POSIX ACL. The policy is built by the owner without naming the
 account, so a directory counts as enterable unless shown otherwise: ``o+x``; ``g+x`` when its
 group holds any user other than the directory's owner (a user-private group, as on the usual
-``0750`` home, does not) or when the user table cannot be shown complete; ``u+x`` when the owner
-could be the account itself (neither root nor the operator running the policy); or any POSIX access
-ACL, or an error reading one. This errs toward masking: an over-mask fails the run at mount
-(EPERM), an under-mask leaks the credential.
+``0750`` home, does not); ``u+x`` when the owner is neither root nor the operator (it may be the
+account); or any POSIX access ACL, or an error reading one. Errs toward masking: an over-mask fails
+the run at mount (EPERM), an under-mask leaks the credential.
 """
 
 from __future__ import annotations
@@ -26,8 +25,7 @@ _ACL = "system.posix_acl_access"
 
 def account_may_traverse(directory: str) -> bool:
     """Every directory from ``/`` down to ``directory`` is a real directory the account may enter.
-    ``lstat`` so a symlinked component counts as a link, not a directory, and so as not traversable
-    (fail closed). A stat error also counts as not traversable."""
+    ``lstat``: a symlinked component or a stat error counts as not traversable (fail closed)."""
     current = ""
     for part in Path(directory).parts:
         current = os.path.join(current, part) if current else part
@@ -41,10 +39,8 @@ def account_may_traverse(directory: str) -> bool:
 
 
 def _may_enter(path: str, info: os.stat_result) -> bool:
-    if info.st_mode & 0o001:
+    if info.st_mode & 0o001 or (info.st_mode & 0o100 and info.st_uid not in (0, os.geteuid())):
         return True
-    if info.st_mode & 0o100 and info.st_uid not in (0, os.geteuid()):
-        return True  # the account itself may own it; only root and the operator are known not to be
     if info.st_mode & 0o010 and _group_has_others(info):
         return True
     return _has_acl(path)
@@ -52,27 +48,21 @@ def _may_enter(path: str, info: os.stat_result) -> bool:
 
 def _group_has_others(info: os.stat_result) -> bool:
     """A user other than the directory's owner is in its group: a listed member, or a user whose
-    primary group it is. An unknown group or owner counts as yes, and so does a user table that
-    cannot be listed or does not list the owner (NSS/LDAP with enumeration off hides members)."""
+    primary group it is. Unknown group or owner, or an unlistable user table or one lacking the
+    owner (NSS/LDAP enumeration off), counts as yes."""
     try:
         members = grp.getgrgid(info.st_gid).gr_mem
         owner = pwd.getpwuid(info.st_uid).pw_name
-    except KeyError:
-        return True
-    if any(member != owner for member in members):
-        return True
-    try:
         users = pwd.getpwall()
-    except (OSError, KeyError):
+    except (KeyError, OSError):
         return True
-    if not any(u.pw_uid == info.st_uid for u in users):
+    if any(member != owner for member in members) or all(u.pw_uid != info.st_uid for u in users):
         return True
     return any(u.pw_gid == info.st_gid and u.pw_uid != info.st_uid for u in users)
 
 
 def _has_acl(path: str) -> bool:
-    """The directory carries a POSIX access ACL, or reading its xattrs fails. A filesystem without
-    xattrs has no ACL; off Linux (no ``os.listxattr``) bwrap does not run."""
+    """The directory has a POSIX access ACL, or reading its xattrs fails; no xattrs means no ACL."""
     listxattr = getattr(os, "listxattr", None)
     if listxattr is None:
         return False
