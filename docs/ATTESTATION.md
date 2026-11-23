@@ -21,7 +21,7 @@ confirming that all integrity invariants hold:
 If any check fails or the notary verdict is not verified, statement creation is refused:
 `cairnwork-attest statement` prints the error code to stderr and exits 2. The codes (from
 `cairnwork_attest.record`, `statement`, `keys` and `bundle`): `RECORD_NOT_FOUND`,
-`RECORD_NOT_VERIFIED` (`RecordNotVerified`), `RECORD_MALFORMED`, `DUPLICATE_KEY`,
+`RECORD_NOT_VERIFIED` (`RecordNotVerified`), `RECORD_MALFORMED`, `RECORD_TOO_LARGE` (a stored request, response or binding over 4 MiB, never parsed), `DUPLICATE_KEY`,
 `INVALID_<BINDING|REQUEST|RESPONSE>_JSON` and `INVALID_<BINDING|REQUEST|RESPONSE>_STRUCTURE`
 (`RecordMalformed`, `record.py`), `BINDING_HASH_MISMATCH`, `CANDIDATE_MISMATCH`,
 `VERIFIED_RECORD_FORGED`, `VERIFIED_RECORD_TAMPERED`; with `--sign` also the key codes
