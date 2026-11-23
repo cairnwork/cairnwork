@@ -157,4 +157,4 @@ def test_plain_publish_does_not_reread_the_file_after_the_guarded_read(
     result = publish_bundle(env.bundle, env.repo, env.candidate, notes_ref=ref)
     assert result.code == "PUBLISHED"
     note = _note(env.bare, env.candidate, ref)
-    assert note == original.decode() and MARKER not in note
+    assert note is not None and note == original.decode() and MARKER not in note
