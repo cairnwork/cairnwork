@@ -25,14 +25,20 @@ _SECRET_PATTERNS = (
 )
 # Absolute filesystem paths (#1701): they name the user, the host layout and private checkouts.
 # Masked in text that is printed or stored for others; the mode-0600 debug log keeps them on
-# purpose (it records invocation paths). Not preceded by a word char, dot, slash, colon or tilde,
-# so URLs and relative paths stay.
-_ABS_PATH = re.compile(r"(?<![\w./:~-])()/(?:[\w.@+~-]+/)*[\w.@+~-]+")
+# purpose (it records invocation paths). A path is not preceded by a word char, dot, slash, colon
+# or tilde, so URLs and relative paths stay. Home directories may contain spaces, so a path under
+# /Users or /home is masked to the end of the line or the next quote; file:// URLs likewise.
+# Known limit: a sentence-final period after a path is masked with it.
+_ABS_PATHS = (
+    re.compile(r"\bfile://[^\s\"'<>]*"),
+    re.compile(r"(?<![\w./:~-])/(?:Users|home)/[^\n\"'<>]*"),
+    re.compile(r"(?<![\w./:~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+"),
+)
 
 
 def _scrub(value: str, paths: bool = True) -> str:
     result = value
-    for pattern in (*_SECRET_PATTERNS, *((_ABS_PATH,) if paths else ())):
+    for pattern in (*_SECRET_PATTERNS, *(_ABS_PATHS if paths else ())):
         result = pattern.sub(
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )

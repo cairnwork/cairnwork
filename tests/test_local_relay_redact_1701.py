@@ -66,3 +66,15 @@ def test_git_failure_text_is_redacted(monkeypatch):
     with pytest.raises(RuntimeError) as err:
         runtime._git(runtime.Path("x"), "status")
     assert "uniq-1701-zq" not in str(err.value) and "UNIQ1701zq" not in str(err.value)
+
+
+def test_file_urls_are_masked():
+    out = redact("open file:///srv/uniq-1701-zq/x.txt failed")
+    assert "uniq-1701-zq" not in out and out.endswith("failed")
+
+
+def test_home_paths_with_spaces_are_masked_whole():
+    out = redact("cannot open /Users/Uniq1701 Zq/Docs Dir/a.txt")
+    assert "Uniq1701" not in out and "Zq" not in out and "Docs" not in out
+    out = redact("cannot open /home/uniq1701 zq/a.txt\nnext line /ok")
+    assert "uniq1701" not in out and "zq" not in out and "next line" in out
