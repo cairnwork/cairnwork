@@ -269,6 +269,13 @@ _PLAIN = [
         + "abcdefghijklmnopqrstuvwxyz012"
         for n in (1, 4, 5, 8, 40)
     ),
+    *(
+        "Authorization: " + word + "\u200b" * 4 + " abcdEFGH1234ijklMNOP5678"
+        for word in (
+            "\uff22\uff45\uff41\uff52\uff45\uff52",
+            "\U0001d401\U0001d41e\U0001d41a\U0001d42b\U0001d41e\U0001d42b",
+        )
+    ),
     "Authorization: Bearer\u200b\u200d\u2060\ufeff sk-live-"
     + MARK
     + "abcdefghijklmnopqrstuvwxyz012",

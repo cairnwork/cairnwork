@@ -85,7 +85,7 @@ def _pieces(text: str) -> list[str]:
                 piece.append(ch)
                 spaced = spaced or ch.isspace()
         elif unicodedata.normalize("NFKC", ch).isascii():
-            run = 0
+            run, spaced = 0, False
             piece.append(ch)
         else:
             out.append("".join(piece))
