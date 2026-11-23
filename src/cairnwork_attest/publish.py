@@ -24,8 +24,8 @@ from cairnwork.gitcmd import (
     ssh_batch_mode,
 )
 from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
-from cairnwork_attest.bundle import BundleError, read_bundle
-from cairnwork_attest.record import AttestError, parse_strict_json
+from cairnwork_attest.bundle import BundleError, parse_bundle, read_bundle_bytes
+from cairnwork_attest.record import AttestError
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _REMOTE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._-]*$")
@@ -168,22 +168,25 @@ def _check_args(
     return None
 
 
-def _read_and_check_bundle(bundle: Path, candidate: str) -> bytes:
-    """Validate the bundle and return the exact bytes that were validated."""
-    envelope = read_bundle(bundle)
+def _read_and_check_bundle(bundle: Path, candidate: str, verified: bytes | None = None) -> bytes:
+    """Validate the bundle and return the exact bytes that were validated.
+
+    The file is read once (the same guarded read as ``read_bundle``: no symlink, FIFO or oversize
+    file). ``verified`` is a caller's bytes that it already checked (on-verified verifies the
+    signature on them): they are published as they are and the file is not read at all (#458).
+    """
+    raw = verified if verified is not None else read_bundle_bytes(bundle)
+    _check_statement(parse_bundle(raw), candidate)
+    return raw
+
+
+def _check_statement(envelope: dict, candidate: str) -> None:
+    """The statement's subject must be the candidate."""
     try:
-        raw = bundle.read_bytes()
-        again = parse_strict_json(
-            raw.decode("utf-8"),
-            error_cls=BundleError,
-            malformed_code="BUNDLE_MALFORMED",
-            constant_code="BUNDLE_MALFORMED",
-        )
         raw_payload = base64.b64decode(envelope["payload"], validate=True)
         statement = json.loads(raw_payload)
         subject = statement["subject"][0]["digest"]["gitCommit"]
     except (
-        OSError,
         KeyError,
         IndexError,
         TypeError,
@@ -192,14 +195,11 @@ def _read_and_check_bundle(bundle: Path, candidate: str) -> bytes:
         RecursionError,
     ) as exc:
         raise BundleError(f"statement shape: {exc}", code="STATEMENT_SHAPE") from exc
-    if again != envelope:
-        raise BundleError("bundle changed while being read", code="BUNDLE_CHANGED")
     if subject != candidate:
         raise BundleError(
             f"bundle subject gitCommit does not match candidate {candidate}",
             code="CANDIDATE_MISMATCH",
         )
-    return raw
 
 
 def _store_blob(run: Runner, repo: Path, raw: bytes) -> str:
@@ -287,6 +287,7 @@ def publish_bundle(
     notes_ref: str = "refs/notes/cairnwork",
     max_attempts: int = 5,
     run: Runner | None = None,
+    verified: bytes | None = None,
 ) -> PublishResult:
     """Publish a signed bundle as a git note on ``notes_ref`` and push it to ``remote``."""
     git = run or _git
@@ -294,7 +295,7 @@ def publish_bundle(
     if usage is not None:
         return _fail("USAGE", usage, candidate, notes_ref, _redact(remote), 0)
     try:
-        raw = _read_and_check_bundle(bundle, candidate)
+        raw = _read_and_check_bundle(bundle, candidate, verified)
     except AttestError as exc:
         return _fail(exc.code, exc.message, candidate, notes_ref, remote, 0)
     if git(repo, "cat-file", "-e", f"{candidate}^{{commit}}").returncode != 0:

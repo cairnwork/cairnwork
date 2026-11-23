@@ -50,6 +50,11 @@ def write_bundle(path: Path, envelope: Mapping[str, Any]) -> None:
 
 def read_bundle(path: Path) -> dict[str, Any]:
     """Read a DSSE envelope JSON file under 4 MiB with strict JSON validation."""
+    return parse_bundle(read_bundle_bytes(path))
+
+
+def read_bundle_bytes(path: Path) -> bytes:
+    """Read a bundle file once (regular file, under 4 MiB) and return its exact bytes."""
     p = Path(path)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
@@ -101,10 +106,18 @@ def read_bundle(path: Path) -> dict[str, Any]:
                 f"bundle size exceeds {MAX_BUNDLE_BYTES} bytes",
                 code="BUNDLE_TOO_LARGE",
             )
-        raw_bytes = b"".join(chunks)
+        return b"".join(chunks)
     finally:
         os.close(fd)
 
+
+def parse_bundle(raw_bytes: bytes) -> dict[str, Any]:
+    """Strictly parse the bytes of a bundle into its DSSE envelope.
+
+    Bytes a caller hands in (publish ``verified=``) get the same size cap as a file read.
+    """
+    if len(raw_bytes) > MAX_BUNDLE_BYTES:
+        raise BundleError(f"bundle size exceeds {MAX_BUNDLE_BYTES} bytes", code="BUNDLE_TOO_LARGE")
     try:
         text = raw_bytes.decode("utf-8")
     except UnicodeDecodeError as exc:
