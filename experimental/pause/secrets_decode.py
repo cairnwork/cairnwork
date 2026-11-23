@@ -8,7 +8,9 @@ needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a dec
 base32 characters without a break) longer than ``MAX_CHARS``, is refused.
 Encoded text of fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from
 noise). Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76
-columns are), and only ASCII whitespace rejoins pieces.
+columns are); any whitespace, NBSP included, rejoins pieces. A false refusal is possible by
+design (not measured): an unbroken run of 32K+ base64/base32 characters (a long list of hashes
+or UUIDs, a hex dump, a large data URI) is refused, not scanned.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ _MIN_SEGMENT = 16
 _B64 = re.compile(r"[A-Za-z0-9+/_-]{16,}={0,2}")
 # base64 cut into lines or words (each piece of 16 or more characters, the last of 4 or more)
 _B64_WRAPPED = re.compile(
-    r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{16,}[ \t\r\n]+){1,}[A-Za-z0-9+/_-]{4,}={0,2}"
+    r"(?<![A-Za-z0-9+/_-])(?:[A-Za-z0-9+/_-]{16,}\s+){1,}[A-Za-z0-9+/_-]{4,}={0,2}"
 )
 _B32 = re.compile(r"(?<![A-Za-z2-7])[A-Za-z2-7]{16,}={0,6}")
 _HEX = re.compile(r"(?:[0-9a-fA-F]{2}){8,}")

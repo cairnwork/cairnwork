@@ -202,3 +202,9 @@ def test_invisible_chars_inside_an_encoded_secret(key, wrap):
     hits = Scanner(NAMES).scan(f"data {wrap(key)}")
     assert "api_key" in hits
     assert "encoded_overflow" not in hits
+
+
+def test_nbsp_separated_base64_is_rejoined():
+    blob = base64.b64encode((KEY + "x" * 40).encode()).decode()
+    pieces = [blob[i : i + 20] for i in range(0, len(blob), 20)]
+    assert "api_key" in Scanner(NAMES).scan("\u00a0".join(pieces))
