@@ -28,3 +28,6 @@ experimental directory (14 days).
 - The runner serializes each observation when `observe` is called, with functions bound before the
   probe ran and exact JSON types only (a subclass is refused), so patching `json` changes nothing.
 - A reused work directory starts from no output, chain or log file and no old runner copies.
+- The nonce reaches the runner through a file that the runner reads and deletes before the probe
+  starts: it is in no argv entry (`sys.orig_argv` included) and no environment variable. An exception
+  class is named in the document and the chain only when that name resolves back to the same class.

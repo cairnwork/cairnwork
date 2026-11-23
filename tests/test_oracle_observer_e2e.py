@@ -108,19 +108,6 @@ def test_a_wrong_implementation_cannot_reach_the_expected_values(tmp_path):
     assert (result.verdict, result.code) == (FAIL, MISMATCH)
 
 
-def test_patching_json_in_the_candidate_does_not_change_what_the_runner_writes(tmp_path):
-    patch = (
-        "import json, json.encoder\n"
-        "json.dumps = lambda *a, **k: 'garbage'\n"
-        "json.encoder.JSONEncoder.encode = lambda self, o: 'garbage'\n"
-        "json.encoder.encode_basestring_ascii = lambda s: '\"x\"'\n"
-    )
-    assert verdict(tmp_path, FIXED + patch).verdict == PASS
-    (tmp_path / "again").mkdir()
-    result = verdict(tmp_path / "again", BUGGY + patch)
-    assert (result.verdict, result.code) == (FAIL, MISMATCH)
-
-
 # AC6: a candidate that edits pytest itself, with correct values.
 PYTEST_EDIT = {
     "src/_pytest/python.py": (

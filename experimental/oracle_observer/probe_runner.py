@@ -1,5 +1,5 @@
 """Runs inside the sandbox: ``python -I -B probe_runner.py <checkout> <probe file> <out path>
-<sys.path entries as JSON> <chain path> <nonce>``. No pytest, conftest, ini or plugins.
+<sys.path entries as JSON> <chain path> <nonce file>``. No pytest, conftest, ini or plugins.
 
 The probe is plain Python run with two names bound: ``observe(key, value)`` and
 ``observe_raises(key, call)``. On a clean finish the observations are written as one JSON document
@@ -8,11 +8,13 @@ duplicate key or a value JSON cannot hold ends the run non-zero with no document
 exception chain is written to <chain path> (a file the runner created) as
 ``ORACLE_CHAIN <env> <module>.<QualName>`` lines (outermost first; <env> is 1 for an
 environment failure, the classes of env_failure.py) closed by ``ORACLE_CHAIN_END <nonce>``. The
-nonce is the runner's, removed from argv before the probe starts. A base run has no candidate
+nonce is read into memory from <nonce file>, which the runner deletes before the probe starts
+(it is in neither argv, ``sys.orig_argv`` nor the environment). A base run has no candidate
 code, so the base classifier (base.py) trusts a chain file that ends with its nonce; stderr text is
 never read for it, and a candidate run's chain is noise. The observations are serialized here by
 code that only uses functions bound before the probe ran, at the moment ``observe`` is called."""
 
+import builtins
 import json
 import json.encoder
 import math
@@ -34,7 +36,8 @@ MAX_DEPTH = 32
 os_write, os_close, os_exit, os_open = os.write, os.close, os._exit, os.open
 quote = json.encoder.encode_basestring_ascii
 int_repr, float_repr, is_finite = int.__repr__, float.__repr__, math.isfinite
-dict_items, join = dict.items, str.join
+dict_items, join, get_attr = dict.items, str.join, getattr
+BUILTINS = dict(vars(builtins))
 
 
 def env_link(exc):
@@ -59,8 +62,7 @@ def chain_lines(exc):
             if len(lines) >= CHAIN_LIMIT:
                 return ["ORACLE_CHAIN 1 <chain too long>"]
             seen.add(id(exc))
-            cls = type(exc)
-            name = re.sub(r"[^\w.<>]", "?", f"{cls.__module__}.{cls.__qualname__}")
+            name = re.sub(r"[^\w.<>]", "?", class_name(type(exc)))
             lines.append(f"ORACLE_CHAIN {int(env_link(exc))} {name}")
             exc = exc.__cause__ or exc.__context__
     except BaseException:  # noqa: BLE001 - unreadable chain: fail closed
@@ -109,8 +111,28 @@ def dump(value, depth=0):
     raise TypeError("not a JSON value")
 
 
+def class_name(cls):
+    """``module.QualName`` when that name resolves back to ``cls`` itself, else ``<unresolved>``."""
+    try:
+        module, qualname = cls.__module__, cls.__qualname__
+        if type(module) is not str or type(qualname) is not str:
+            return "<unresolved>"
+        if module == "builtins":
+            found = BUILTINS.get(qualname)
+        else:
+            found = sys.modules.get(module)
+            for part in qualname.split("."):
+                found = get_attr(found, part, None)
+        return f"{module}.{qualname}" if found is cls else "<unresolved>"
+    except BaseException:  # noqa: BLE001 - unreadable: unresolved
+        return "<unresolved>"
+
+
 def main(argv):
-    checkout, probe, out, extra, chain, nonce = argv[1:7]
+    checkout, probe, out, extra, chain, nonce_file = argv[1:7]
+    with open(nonce_file, encoding="ascii") as handle:
+        nonce = handle.read().strip()
+    os.unlink(nonce_file)
     sys.argv[:] = [probe]
     try:
         run(checkout, probe, out, extra)
@@ -135,8 +157,7 @@ def run(checkout, probe, out, extra):
         try:
             call()
         except Exception as exc:  # noqa: BLE001 - recording the class is the point
-            cls = type(exc)
-            raises[key] = f"{cls.__module__}.{cls.__qualname__}"
+            raises[key] = class_name(type(exc))
         else:
             raises[key] = "<no exception>"
 

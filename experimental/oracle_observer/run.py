@@ -98,13 +98,17 @@ def run_probe(
     out.touch(mode=0o600)
     chain.touch(mode=0o600)
     nonce = secrets.token_hex(16)
+    nonce_file = run_dir / "nonce.txt"
+    nonce_file.unlink(missing_ok=True)
+    nonce_file.write_text(nonce, encoding="ascii")
+    nonce_file.chmod(0o600)
     env = {k: os.environ[k] for k in ENV_KEEP if k in os.environ}
     env.update(HOME=str(home), TMPDIR=str(home), **dict(getattr(backend, "run_env", ())))
     env[RUN_TOKEN_VAR] = secrets.token_hex(16)
     env["PATH"] = os.pathsep.join(filter(None, (str(Path(interpreter).parent), env.get("PATH"))))
     entries = [str(checkout / rel) for rel in pythonpath]
     argv = [interpreter, "-I", "-B", str(runner), str(checkout), str(probe_copy), str(out)]
-    argv += [json.dumps(entries), str(chain), nonce]
+    argv += [json.dumps(entries), str(chain), str(nonce_file)]
     profile = backend.policy(
         read_roots=(*pytest_config.interpreter_roots(interpreter), supervisor),
         write_roots=(checkout.parent, run_dir),
@@ -116,6 +120,7 @@ def run_probe(
     code, timed_out, survivors = confined.execute(
         backend.wrap(argv, profile_path), checkout, env, timeout, log
     )
+    nonce_file.unlink(missing_ok=True)
     text = log.read_text(errors="replace") if log.exists() else ""
     return ProbeRun(
         code,

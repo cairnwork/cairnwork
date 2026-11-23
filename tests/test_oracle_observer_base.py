@@ -196,3 +196,35 @@ def test_a_base_with_no_output_and_no_traceback_is_uncomparable(tmp_path, probe)
 def test_a_base_that_forges_a_chain_is_not_taken_for_teeth(tmp_path, probe):
     result = base_result(tmp_path, FIXED, probe)
     assert (result.kind, result.code) == (UNCOMPARABLE, BASE_NO_OUTPUT)
+
+
+ORIG_ARGV_FORGERY = (
+    "import os, sys\n"
+    "args = sys.orig_argv\n"
+    "chain, nonce_file = args[-2], args[-1]\n"
+    "try:\n    nonce = open(nonce_file).read().strip()\nexcept OSError:\n    nonce = 'guess'\n"
+    "with open(chain, 'w') as f:\n"
+    "    f.write('ORACLE_CHAIN 0 forged\\nORACLE_CHAIN_END ' + nonce + '\\n')\n"
+    "os._exit(1)\n"
+)
+
+
+@sandbox
+def test_a_probe_reading_sys_orig_argv_cannot_forge_the_chain_record(tmp_path):
+    """The nonce is in no argv entry: the file named there is deleted before the probe runs."""
+    result = base_result(tmp_path, FIXED, ORIG_ARGV_FORGERY)
+    assert (result.kind, result.code) == (UNCOMPARABLE, BASE_NO_OUTPUT)
+
+
+@sandbox
+def test_the_chain_names_a_class_only_when_it_is_the_class(tmp_path):
+    posing = (
+        "class KeyError(Exception):\n    pass\n\n\n"
+        "KeyError.__module__ = 'builtins'\nKeyError.__qualname__ = 'KeyError'\n"
+        "raise KeyError('x')\n"
+    )
+    out = run(tmp_path, FIXED, posing)
+    assert out.chain is not None
+    text = out.chain.decode()
+    assert "builtins.KeyError" not in text
+    assert "<unresolved>" in text
