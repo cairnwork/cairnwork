@@ -29,7 +29,9 @@ _SECRET_PATTERNS = (
 # or tilde, so URLs and relative paths stay. Paths under well-known roots may contain spaces, so
 # they are masked up to the next ": ", " (", quote or line end (the error reason after the colon
 # survives). file: URLs are masked to the next space. Known limits: a sentence-final period after
-# a path goes with it, and text after a spaced path with no such stop goes with it too.
+# a path goes with it, and text after a spaced path with no such stop goes with it too. A path
+# with spaces under a root NOT in _ROOTS, and a file: URL with raw spaces, are masked only to the
+# first space (the rest stays).
 _ROOTS = "Users|home|Volumes|private|var|tmp|Library|opt|srv|mnt|root|Applications"
 _ABS_PATHS = (
     re.compile(r"(?i)\bfile:/+[^\s\"'<>]*"),
@@ -48,12 +50,16 @@ def _scrub(value: str, paths: bool = True) -> str:
 
 
 def redact_deep(value: Any) -> Any:
-    """Scrub (credentials and paths, no length cap) every string inside nested dicts and lists:
-    the one choke point for output that is printed or stored."""
+    """Scrub (credentials and paths, no length cap) every string, dict keys included, inside
+    nested dicts and lists: the one choke point for output that is printed or stored.
+
+    Redaction is applied at ``cli._emit`` and ``JsonlLedger.append``, not inside ``RelayResult``:
+    a library caller that prints a ``RelayResult`` directly bypasses it. ``--dry-route`` success
+    output is not redacted on purpose (it shows the operator's own configured paths)."""
     if isinstance(value, str):
         return _scrub(value)
     if isinstance(value, dict):
-        return {key: redact_deep(item) for key, item in value.items()}
+        return {redact_deep(key): redact_deep(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [redact_deep(item) for item in value]
     return value

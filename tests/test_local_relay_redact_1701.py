@@ -197,3 +197,10 @@ def test_a_failing_ledger_write_does_not_leak_its_path(monkeypatch, capsys):
     )
     out = capsys.readouterr().out
     assert "LEDGER_ERROR" in out and "uniq-1701-zq" not in out
+
+
+def test_dict_keys_are_scrubbed_too():
+    from experimental.local_relay.diagnostics import redact_deep
+
+    out = redact_deep({PATH_MARK: {f"k {TOKEN_MARK}": ["v"]}})
+    assert "uniq-1701-zq" not in str(out) and "UNIQ1701zq" not in str(out)

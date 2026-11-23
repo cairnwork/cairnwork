@@ -28,7 +28,11 @@ def parser() -> argparse.ArgumentParser:
     ap.add_argument("--runs", type=Path, default=INSTALLED_RUNS)
     ap.add_argument("--fixture", type=Path, help="run one task described by fixture repo JSON")
     ap.add_argument("--canary-report", type=Path)
-    ap.add_argument("--dry-route", action="store_true")
+    ap.add_argument(
+        "--dry-route",
+        action="store_true",
+        help="print the route; configured paths are not redacted",
+    )
     ap.add_argument("command", choices=("run-once",))
     return ap
 
