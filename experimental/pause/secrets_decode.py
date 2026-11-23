@@ -6,6 +6,7 @@ when one is hit it returns ``None`` and the caller refuses; it never skips. Limi
 needs more than ``_DEPTH`` decoding layers, more than ``MAX_VIEWS`` views, a decoded view over
 ``MAX_VIEW_CHARS`` characters, or ``MAX_CHARS`` characters in all, is refused. Encoded text of
 fewer than ``_MIN_SEGMENT`` characters is not decoded (too short to tell from noise).
+Base64 cut into pieces shorter than 16 characters is not rejoined (MIME 64/76 columns are).
 """
 
 from __future__ import annotations
@@ -35,7 +36,6 @@ _UNI = re.compile(
     r"|\\{1,2}u\{([0-9a-fA-F]{1,6})\}"
 )
 _TEXT = re.compile(rb"[\x20-\x7e\r\n\t]{16,}")
-_SAMPLE = 64  # bytes looked at before a long run is decoded in full
 
 
 def _codepoint(match: re.Match[str]) -> str:
@@ -68,19 +68,14 @@ def _readable(raw: bytes | None) -> bool:
 
 
 def _decode_blobs(text: str) -> list[str]:
-    """Readable text hidden in base64 (any alignment, split over lines), base32 or hex runs. A
-    run that starts like text but is longer than the view bound is refused, not skipped."""
+    """Readable text hidden in base64 (any alignment, split over lines), base32 or hex runs. Each
+    run is decoded in full and every readable stretch of it is a view, wherever it sits."""
     raws: list[bytes] = []
     runs = [*_B64.findall(text)]
     runs += [re.sub(r"\s+", "", w) for w in _B64_WRAPPED.findall(text)]
     for run in runs:
         for offset in range(4):  # the run may start inside another word
-            head = _b64_decode(run[: _SAMPLE * 2], offset)
-            if not _readable(head):
-                continue
-            if len(run) > MAX_VIEW_CHARS * 2:
-                raise _Refuse
-            full = _b64_decode(run, offset)
+            full = _b64_decode(run, offset)  # the whole run: junk bytes in front hide nothing
             if full is not None:
                 raws.append(full)
     for run in _B32.findall(text):

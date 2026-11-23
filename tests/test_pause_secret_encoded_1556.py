@@ -159,3 +159,10 @@ def test_limits_are_pinned():
 
 def test_plain_results_unchanged_order():
     assert scan(f"API_KEY=abcdEFGH12345678abcd {KEY}") == ["api_key", "assigned_secret"]
+
+
+@pytest.mark.parametrize("pad", [96, 128, 129, 200, 1000, 3000])
+def test_binary_padding_in_front_hides_nothing(pad):
+    raw = bytes(range(128, 256)) * (pad // 128 + 1)
+    blob = base64.b64encode(raw[:pad] + KEY.encode() + b"=" * 5).decode()
+    assert Scanner(NAMES).scan(f"data {blob}") != []
