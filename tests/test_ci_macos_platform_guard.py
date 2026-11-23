@@ -182,7 +182,8 @@ def report_problems(text: str) -> list[str]:
             "issues: write",
         }:
             problems.append(f"{name} needs exactly contents: read and issues: write")
-        if f"\n    needs: {needs}\n" not in job or title not in job:
+        made = re.findall(r'--title "([^"]*)"', job)
+        if f"\n    needs: {needs}\n" not in job or made != [title]:
             problems.append(f"{name} is not tied to its jobs or its Issue title")
     return problems
 

@@ -30,7 +30,8 @@ jobs:
     # Issue #1696: a pull request runs the whole suite on the minimum Python (3.11) only; the other
     # two legs keep their names (test (3.12), test (3.13): required checks, no ruleset change) and
     # pass at once. A push to main, the nightly and a manual run on main run all three versions;
-    # a red one opens or updates an Issue (linux-nightly-report).
+    # only a red nightly or a red manual run on main opens or updates an Issue (linux-nightly-report);
+    # a red push to main shows as a red check on that commit.
     env:
       FULL_SUITE: ${{ matrix.python-version == '3.11' || github.event_name != 'pull_request' }}
     strategy:
