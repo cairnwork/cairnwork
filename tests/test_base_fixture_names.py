@@ -77,3 +77,27 @@ def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
     calls = _calls(monkeypatch, frozenset({"shared"}))
     assert bfn.collect(SimpleNamespace(account=None), task, paths, "r-f") is None
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("account", "paths", "kind", "error", "reason", "level"),
+    [
+        (object(), PATHS, "ok", None, "ACCOUNT_RUN", "INFO"),
+        (None, ("tests/test_a.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
+        (None, ("tests/conftest.py", "tests/test_new.py"), "ok", None, "NO_BASE_TARGET", "INFO"),
+        (None, PATHS, "ok", RuntimeError("x"), "RUN_FAULT:RuntimeError", "WARNING"),
+        (None, PATHS, "none", None, "NO_NAMES_RECORDED", "WARNING"),
+        (None, PATHS, "ok", None, "OK", ""),
+    ],
+)
+def test_a_none_carries_its_reason(
+    task, monkeypatch, caplog, account, paths, kind, error, reason, level
+):
+    _calls(monkeypatch, None if kind == "none" else frozenset({"s"}), error=error)
+    ctx = SimpleNamespace(account=account)
+    with caplog.at_level("INFO", logger=bfn.LOG.name):
+        names = bfn.collect(ctx, task, paths, "r-f")
+    assert bfn.probe(ctx, task, paths, "r-f")[1] == reason
+    assert (names is None) == (reason != "OK")
+    assert [r.levelname for r in caplog.records] == ([level] if level else [])
+    assert all(reason in r.getMessage() for r in caplog.records)
