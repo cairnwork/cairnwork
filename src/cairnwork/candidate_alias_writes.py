@@ -5,6 +5,8 @@ from __future__ import annotations
 import ast
 import re
 
+from cairnwork.candidate_alias_targets import target_binding_sources
+
 _WRITE_ATTRS = frozenset(
     {
         "write_text",
@@ -349,6 +351,16 @@ def _is_writer_assign(node: ast.AST, modules: dict[str, str], names: frozenset[s
     )
 
 
+def _binds_writer_by_target(node: ast.AST, modules: dict[str, str], names: frozenset[str]) -> bool:
+    """``for w in (shutil.copy,)``, ``with ctx(shutil.copy) as w``, ``case w`` on a writer, or a
+    parameter default naming a writer: a writer reaches a name the call detector cannot follow."""
+    return any(
+        _is_writer_reference(part, modules, names)
+        for source in target_binding_sources(node)
+        for part in ast.walk(source)
+    )
+
+
 def _writer_names(
     openers: frozenset[str], writers: frozenset[str], fileios: frozenset[str]
 ) -> frozenset[str]:
@@ -375,6 +387,7 @@ def _is_write_statement(
     names = _writer_names(openers, writers, fileios)
     return any(
         _is_writer_assign(part, modules, names)
+        or _binds_writer_by_target(part, modules, names)
         or (
             isinstance(part, ast.Call)
             and _is_write_call(part, openers, writers, modules, fileios, flag_openers)
