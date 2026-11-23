@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 
-from cairnwork import __version__
+from cairnwork import __version__, failure_evidence
 from cairnwork.gitcmd import run_git_bytes
 
 _MAX_CHANGES = 256 * 1024
@@ -76,5 +76,6 @@ def record_only(result, status: str, task, candidate: str) -> dict:
     """The verify output's record-only fields (#1105): never in a hash, receipt or verdict."""
     return {
         "failure_evidence": result.failure_evidence,
+        **failure_evidence.headline(result.failure_evidence),  # #1555: pytest_exit_code/output
         "replay_set": for_status(status, task, candidate, result.verified),
     }

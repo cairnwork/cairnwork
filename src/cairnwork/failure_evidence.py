@@ -26,6 +26,8 @@ MAX_NODEIDS = 20
 MAX_LINES = 200
 MAX_BYTES = 16 * 1024
 MAX_ID = 200
+OUT_LINES = 60  # the verify output's pytest_output: the end of the masked tail (#1555)
+OUT_CHARS = 4096
 MAX_LINE = 512  # the masker is superlinear: cut each kept line before masking it
 # mask over a bounded window longer than what is shown, so a cut does not hide half a secret
 # from the masker
@@ -58,6 +60,7 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
         evidence.append(
             {
                 "id": run.spec.verifier_id,
+                "returncode": _exit_code(getattr(run, "returncode", None)),
                 "failed_nodeids": shown,
                 "failed_nodeids_truncated": not withheld
                 and (len(failed) > MAX_NODEIDS or any(was_cut for _, was_cut in pairs)),
@@ -69,6 +72,29 @@ def capture(runs, *, home: str, hidden: bool = False, account: bool = False) -> 
             }
         )
     return evidence
+
+
+def _exit_code(value) -> int | None:
+    return value if type(value) is int else None  # not a bool, not a timeout's None
+
+
+def headline(entries) -> dict:
+    """``pytest_exit_code`` and ``pytest_output`` of the first entry with an exit code (#1555):
+    the verify output's top-level view of ``capture``. Record-only; never raises. The output is the
+    end of the entry's already masked tail (never of a raw log), and None where the tail is
+    withheld or missing, so it follows the account and deferred-test rules above."""
+    try:
+        for entry in entries:
+            code = _exit_code(entry.get("returncode"))
+            if code is None:
+                continue
+            tail, shown = entry.get("log_tail"), None
+            if type(tail) is str and tail and not entry.get("log_tail_withheld"):
+                shown = "\n".join(tail.splitlines()[-OUT_LINES:])[-OUT_CHARS:]
+            return {"pytest_exit_code": code, "pytest_output": shown}
+    except Exception:  # noqa: BLE001 - record-only: a malformed entry changes no verdict
+        return {"pytest_exit_code": None, "pytest_output": None}
+    return {"pytest_exit_code": None, "pytest_output": None}
 
 
 def capture_for_task(runs, task, ctx) -> list[dict]:
