@@ -1,6 +1,9 @@
 """Which test files one macOS CI shard runs (ci.yml, job test-macos-shard).
 
-Usage: python3 scripts/ci_macos_shard.py 1|2   (prints one path per line)
+Usage: python3 scripts/ci_macos_shard.py 1|2 [--platform-only]   (prints one path per line)
+
+--platform-only (pull requests, Issue #1684) keeps only the platform-specific files
+(scripts/ci_macos_platform.py); without it the shards split the whole suite.
 
 Two shards, balanced by the measured cost of each test file (scripts/ci_macos_weights.json): the
 heaviest files first, each onto the shard with the smaller load so far; a shard starts with the
@@ -77,15 +80,36 @@ def loads(shards: dict[str, list[str]], table: dict) -> dict[str, float]:
     }
 
 
-def files_for(shard: str, root: Path) -> list[str]:
+def _platform_module():
+    """scripts/ci_macos_platform.py, loaded by path: this file runs as a script and as scripts.*"""
+    spec = importlib.util.spec_from_file_location(
+        "ci_macos_platform", WEIGHTS.with_name("ci_macos_platform.py")
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("cannot load scripts/ci_macos_platform.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def files_for(shard: str, root: Path, platform_only: bool = False) -> list[str]:
     table = json.loads(WEIGHTS.read_text())
-    return assign(test_files(root), table, xdist_group_of(root))[shard]
+    paths = test_files(root)
+    if platform_only:
+        paths = _platform_module().platform_files(root, paths)
+    return assign(paths, table, xdist_group_of(root))[shard]
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or sys.argv[1] not in SHARDS:
-        sys.exit(f"usage: ci_macos_shard.py {'|'.join(SHARDS)}")
-    chosen = files_for(sys.argv[1], Path(__file__).resolve().parent.parent)
+    args = sys.argv[1:]
+    if (
+        len(args) not in (1, 2)
+        or args[0] not in SHARDS
+        or args[1:] not in ([], ["--platform-only"])
+    ):
+        sys.exit(f"usage: ci_macos_shard.py {'|'.join(SHARDS)} [--platform-only]")
+    root = Path(__file__).resolve().parent.parent
+    chosen = files_for(args[0], root, platform_only=len(args) == 2)
     if not chosen:
         sys.exit("ci_macos_shard.py: no test files for this shard")
     print("\n".join(chosen))

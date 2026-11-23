@@ -268,6 +268,8 @@ worker account and `test_source: "bundle"`); under the default `"auto"` a commit
 not hold is fetched from `origin`. A compromised author account is outside what the verifier
 defends. The static test-commit checks (conftest allowlist, module plugins, archives) are
 hygiene against accidents, not a boundary against a hostile author.
+The scope filter refuses, as it does a `.pth`, a metadata directory (`*.dist-info`, `*.egg-info`)
+or an `.egg-link` in the test commit, so a `pytest11` entry point cannot ride in with the tests (#843).
 
 ### What a VERIFIED rests on (#303)
 

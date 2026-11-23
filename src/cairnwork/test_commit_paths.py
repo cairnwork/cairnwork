@@ -18,12 +18,20 @@ _NOT_TEST_FILES = frozenset(
 )  # fmt: skip
 
 
+# #843: a pytest11 entry point is a plugin pytest loads on its own, like a .pth line or a conftest;
+# it lives in a metadata directory (name.dist-info, name.egg-info) or an egg-link file.
+_METADATA_DIRS = (".dist-info", ".egg-info")
+
+
 def out_of_scope(path: str, status: str) -> bool:  # #798: conftest.py only added/modified
     posix, name = PurePosixPath(path), PurePosixPath(path).name.casefold()
     return (
         (name in _NOT_TEST_FILES and (posix.name != "conftest.py" or status not in ("A", "M")))
-        or name.endswith(".pth")
-        or any(part.casefold() in _SITE_NAMES for part in posix.parts)
+        or name.endswith((".pth", ".egg-link"))
+        or any(
+            part.casefold() in _SITE_NAMES or part.casefold().endswith(_METADATA_DIRS)
+            for part in posix.parts
+        )
     )
 
 
