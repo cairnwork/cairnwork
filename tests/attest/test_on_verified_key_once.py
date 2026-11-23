@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from pathlib import Path
 from typing import Any
 
@@ -39,8 +40,6 @@ def _forge(bundle: Path, key_file: Path) -> None:
     attacker = Ed25519PrivateKey.generate()
     payload = base64.b64decode(parse_bundle(bundle.read_bytes())["payload"])
     forged = _sign_bytes(payload, attacker)
-    import json
-
     bundle.write_text(json.dumps(forged, sort_keys=True, separators=(",", ":")))
     key_file.write_text(public_key_pem(attacker.public_key()))
 
@@ -89,3 +88,20 @@ def test_a_key_file_swapped_before_check_run_is_ignored(
     assert rc == 0 and _codes(obj)[-1] == ("check_run", "CREATED")
     summary = str(http.calls)
     assert "VERIFIED" in summary and "SIGNATURE_INVALID" not in summary
+
+
+def test_reusing_an_existing_bundle_checks_it_with_the_loaded_key(
+    env: Env, http: FakeHttp, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert _run(capsys, env.argv("--no-check-run"))[0] == 0
+    seen: list[Any] = []
+    real = on_verified._verify_loaded
+
+    def spy(*a: Any, **k: Any) -> Any:
+        seen.append(k.get("public_key"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(on_verified, "_verify_loaded", spy)
+    rc, _, obj = _run(capsys, env.argv("--no-check-run"))
+    assert rc == 0 and obj["steps"][0]["detail"] == "reused existing bundle"
+    assert len(seen) >= 2 and all(key is not None for key in seen)

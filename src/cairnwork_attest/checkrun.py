@@ -23,6 +23,8 @@ from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from cairnwork.protection import verdict_text
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.checkrun_gh import gh_http, gh_problem
@@ -236,7 +238,7 @@ def post_check_run(
     repo_slug: str,
     *,
     public_key: Path | None = None,
-    loaded_key: Any = None,
+    loaded_key: Ed25519PublicKey | None = None,
     repo: Path | None = None,
     name: str = "cairnwork attestation",
     details_url: str | None = None,
@@ -247,7 +249,8 @@ def post_check_run(
     """Post a neutral Check Run on the bundle's candidate commit.
 
     Never raises for bad input. With ``public_key`` the signature is checked
-    offline (full ``verify_bundle`` when ``repo`` is also given). The token is
+    offline (full ``verify_bundle`` when ``repo`` is also given). A ``loaded_key`` replaces
+    reading the ``public_key`` file: it must be the key of that file, never another. The token is
     only placed in the Authorization header, never in any result. With ``gh``
     (a ``gh``-compatible CLI that authenticates itself) no token is used at all.
     """
