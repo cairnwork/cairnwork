@@ -341,9 +341,10 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
         files = {file_part(target) for target in targets}
+        hidden = any(getattr(run, "hidden_tests", False) for run in runs)
         detail = "; ".join(
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
-            + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
+            + _collection_error_detail(run, hidden)
             + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
             + skip_hint(run)
             + (COLLECT_HINT if set(run.collect_errors) & files else "")
@@ -351,6 +352,8 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
     if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
+        hidden = any(getattr(run, "hidden_tests", False) for run in runs)
+        missing = str(len(missing)) if hidden else missing
         detail = f"no verifier collected or ran {missing}" + "".join(map(skip_hint, runs))
         return Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN", detail)
     verdict = base_teeth(runs, targets)  # #775: a fixture or OSError failure is not teeth
@@ -358,6 +361,14 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         return Comparison(*verdict)
     codes = [run.returncode for run in runs]
     return Comparison("NO_TEETH", "TESTS_DO_NOT_FAIL_ON_BASE", f"pytest exit codes {codes}")
+
+
+def _collection_error_detail(run, hidden):
+    errors = run.collect_errors
+    if not errors:
+        return ""
+    shown = str(len(errors)) if hidden else _names(errors)
+    return f", collection errors {shown}"
 
 
 def not_run(runs, targets) -> list[str]:

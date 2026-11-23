@@ -41,6 +41,19 @@ def _kind_causes(fail_kind) -> list[str]:
     return [f"{said[kind]} {_names([node])[3:]}" for node, kind in fail_kind.items()][:MAX_NAMES]
 
 
+def _kind_counts(fail_kind):
+    counts = {}
+    for kind in fail_kind.values():
+        label = "plugin" if str(kind).startswith("plugin:") else kind
+        counts[label] = counts.get(label, 0) + 1
+    return counts
+
+
+def _hidden_outcome_cause(outcomes):
+    failed = sum(value != "passed" for value in (outcomes or {}).values())
+    return f"pytest collected tests that did not pass ({failed} failed)"
+
+
 def _outcome_cause(outcomes) -> str:
     """Summarize collected tests that did not pass; outcome values are untrusted text."""
     failed = [(node, result) for node, result in outcomes.items() if result != "passed"]
@@ -99,23 +112,25 @@ def why_not_passed(
     log_too_big: bool, tests_ran: bool, report_too_big: bool = False, forged=(), not_run=(),
     renamed=(), exitstatus=None, testsfailed=None, fail_kind=None, data_refused=(),
     denied_path="",
+    hidden_tests: bool = False,
     all_skipped: bool = False,
     outcomes=None,
 ) -> str:  # fmt: skip
     """The causes that made a run fail, ``""`` if none (then the run passed)."""
     causes = []
+    names = (lambda values: str(len(values))) if hidden_tests else _names
     if not ran_sandboxed:
         causes.append("no sandbox backend: verifier not executed")
     if timed_out:
         causes.append("timed out")
     if mutated:
-        causes.append(f"checkout changed ({_names(mutated)})")
+        causes.append(f"checkout changed ({names(mutated)})")
     if forged:  # pycache_guard.py, bytecode_roots.py: bytecode the run may not supply
         causes.append(
-            f"FORGED_BYTECODE: bytecode cache holds code the run may not supply ({_names(forged)})"
+            f"FORGED_BYTECODE: bytecode cache holds code the run may not supply ({names(forged)})"
         )
     if data_refused:  # #850 data_exec_hook.py: refused even when the test caught the refusal
-        causes.append(f"DATA_EXEC_REFUSED: declared test data executed ({_names(data_refused)})")
+        causes.append(f"DATA_EXEC_REFUSED: declared test data executed ({names(data_refused)})")
     if survivors:
         causes.append(
             f"{survivors} process(es) outlived the run, or the process list was unreadable"
@@ -126,7 +141,7 @@ def why_not_passed(
     if report_too_big:
         causes.append("test report over the size cap")
     if renamed:  # report_guard.py: a test's node id or file changed after pytest collected it
-        causes.append(f"items renamed after collection ({_names(renamed)})")
+        causes.append(f"items renamed after collection ({names(renamed)})")
     # report_guard.py: pytest's own status as recorded at sessionfinish (None: no record)
     disagrees = (
         ran_sandboxed and not timed_out and exitstatus is not None
@@ -139,19 +154,25 @@ def why_not_passed(
         )
     if ran_sandboxed and not timed_out and returncode != 0:
         causes.append(f"pytest exit code {returncode}")
-        causes.extend(_kind_causes(fail_kind or {}))
+        if hidden_tests:
+            causes.extend(
+                f"{kind} error ({count})" for kind, count in _kind_counts(fail_kind or {}).items()
+            )
+        else:
+            causes.extend(_kind_causes(fail_kind or {}))
         if denied_path:  # #962: a candidate run; the same denial on a base run is BASE_ENV_ERROR
             causes.append(
                 f"the failing tests report an operation not permitted (EPERM) at"
-                f" {_names([denied_path])[3:]}, outside the run's write roots: unless the change"
+                f" {_names([denied_path])[3:]}, outside the"
+                " run's write roots: unless the change"
                 " raised this itself, likely the run environment, not evidence about the change"
             )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not_run and not all_skipped:
         causes.append(
-            f"pytest passed but no test ran for a target or skipped module ({_names(not_run)})"
+            f"pytest passed but no test ran for a target or skipped module ({names(not_run)})"
         )
     elif ran_sandboxed and returncode == 0 and not tests_ran and not renamed and not disagrees:
-        cause = _outcome_cause(outcomes or {})
+        cause = _hidden_outcome_cause(outcomes) if hidden_tests else _outcome_cause(outcomes or {})
         causes.append(
             cause
             or (
@@ -177,14 +198,20 @@ def plain_test_failure(sandboxed: bool, returncode, clean: bool, outcomes) -> bo
     return sandboxed and returncode == 1 and clean and "failed" in outcomes.values()
 
 
-def _missing_modules(run) -> str:
+def _missing_modules(run, hidden=False) -> str:
     """#796 S3: the new submodules a failed run's test files could not import (the guard's
     re-validated record), so a candidate that does not add the module is told so; text only."""
     modules = [module for _node, module, _origin in getattr(run, "submodule_errors", ())]
-    return f"; collection could not import {_names(modules)}" if modules else ""
+    if not modules:
+        return ""
+    return (
+        f"; collection could not import {len(modules)} module(s)"
+        if hidden
+        else f"; collection could not import {_names(modules)}"
+    )
 
 
-def skip_origins(run, base) -> str:
+def skip_origins(run, base, hidden=False) -> str:
     """#1565: where each skipped test of a failed run comes from, by the base run's record (text
     only, the verdict stays FAILED): ``base-skip`` (skipped on the base too), ``candidate-skip``
     (the base ran it), ``new-skip`` (no such node on the base), ``always-skip`` (all skipped).
@@ -205,7 +232,11 @@ def skip_origins(run, base) -> str:
         "candidate-skip": [n for n in skipped if n in nodes and n not in skips],
         "new-skip": [n for n in skipped if n not in nodes],
     }
-    shown = "; ".join(f"{kind} {_names(found)}" for kind, found in groups.items() if found)
+    shown = "; ".join(
+        f"{kind} {len(found) if hidden else _names(found)}"
+        for kind, found in groups.items()
+        if found
+    )
     return f" (skip origin: {shown})" if shown else ""
 
 
@@ -215,8 +246,12 @@ def explain(runs, base=None) -> str:
     notes. Notes never change the verdict: they only say what the host left open around a run."""
     failed = [
         f"{run.spec.verifier_id}: {run.why or 'no cause recorded'}"
-        + _missing_modules(run)
-        + (skip_origins(run, base) if "collected tests that did not pass" in run.why else "")
+        + _missing_modules(run, hidden=getattr(run, "hidden_tests", False))
+        + (
+            skip_origins(run, base, hidden=getattr(run, "hidden_tests", False))
+            if "collected tests that did not pass" in run.why
+            else ""
+        )
         + "".join(f" ({note})" for note in run.notes)  # fixed strings from the backend
         for run in runs
         if not run.observation.passed
@@ -235,6 +270,8 @@ def skip_hint(run) -> str:
     """#813: the module a collector skipped for (``importorskip``); text for the reason, the
     verdict is not read from it. The names come from the run's record: cut and cleaned here."""
     deps = getattr(run, "skipped_deps", ())
+    if getattr(run, "hidden_tests", False):
+        return f"; skipped at collection, could not import {len(deps)} module(s)" if deps else ""
     return f"; skipped at collection, could not import {_names(deps)}" if deps else ""
 
 
