@@ -64,7 +64,7 @@ def _priority_complete(counts: dict[str, int], entered: set[str]) -> bool:
         return False
     for root in PRIORITY_ROOTS:
         root = os.path.normpath(os.path.expanduser(root))
-        if os.path.isdir(root) and not {root, os.path.realpath(root)} & entered:
+        if os.path.lexists(root) and not {root, os.path.realpath(root)} & entered:
             return False
     return True
 

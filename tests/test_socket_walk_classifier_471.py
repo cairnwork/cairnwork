@@ -494,3 +494,15 @@ def test_a_vanished_file_does_not_withhold_the_marker(monkeypatch):
     monkeypatch.setattr(walk.os, "walk", fake_walk)
     monkeypatch.setattr(walk.os, "lstat", gone)
     assert walk.PRIORITY_DONE in walk.collect()
+
+
+def test_marker_is_withheld_for_a_dangling_symlink_root(monkeypatch, short_tmp):
+    link = short_tmp / "dangling"
+    link.symlink_to(short_tmp / "nowhere")  # exists as a link, target does not
+    report = _marker_for(monkeypatch, (str(link),), [], [str(short_tmp)])
+    assert walk.PRIORITY_DONE not in report
+
+
+def test_marker_is_given_when_a_priority_root_does_not_exist_at_all(monkeypatch, short_tmp):
+    report = _marker_for(monkeypatch, (str(short_tmp / "absent"),), [], [str(short_tmp)])
+    assert walk.PRIORITY_DONE in report
