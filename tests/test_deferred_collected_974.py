@@ -72,13 +72,16 @@ def test_a_test_commit_run_with_no_record_is_refused_when_the_base_collected(mon
     assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
 
 
-def test_a_test_commit_run_with_no_record_is_refused_even_without_base_evidence(monkeypatch):
+def test_a_run_that_is_broken_on_the_base_probe_too_keeps_the_static_rule(monkeypatch):
+    """#804: a table plugin that fails to load breaks every run; the base run says UNCOMPARABLE."""
     task = _fake(monkeypatch, None, None)
-    with pytest.raises(Rejected) as err:
-        _check(task, {f"{PATH}::test_x"})
-    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
-    task = _fake(monkeypatch, None)
+    _check(task, {f"{PATH}::test_x"})
+
+
+def test_all_new_files_are_refused_when_a_base_test_file_collects(monkeypatch):
+    task = _fake(monkeypatch, None, Collected())
     monkeypatch.setattr(deferred_collected, "_exists", lambda *a: False)  # every file is new
+    monkeypatch.setattr(deferred_collected, "_probe_files", lambda *a: ("tests/test_old.py",))
     with pytest.raises(Rejected) as err:
         _check(task, set())
     assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
@@ -127,6 +130,8 @@ def test_one_unusable_batch_makes_the_whole_collect_unusable(monkeypatch):
         )  # the later batch fails, the first is fine
 
     monkeypatch.setattr(deferred_collected, "_collect", fake)
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: False)
+    monkeypatch.setattr(deferred_collected, "_probe_files", lambda *a: ("tests/test_old.py",))
     names = tuple(f"t{i}.py" for i in range(deferred_collected.MAX_FILES + 1))
     assert deferred_collected._collect_all(None, "c", names, "r") is None
     task = SimpleNamespace(test_commit="t", base_commit="b")
@@ -139,8 +144,15 @@ def test_one_unusable_batch_makes_the_whole_collect_unusable(monkeypatch):
 def test_a_hidden_test_in_a_new_file_cannot_hide_behind_a_failed_collect_run(
     project, tmp_path, monkeypatch
 ):
-    def broken(*a, **k):
-        raise OSError("collect-only run failed")
+    real = deferred_collected.run_verifiers
+
+    calls = []
+
+    def broken(ctx, commit, *a, **k):
+        calls.append(commit)
+        if len(calls) == 1:  # only the test commit's run fails; the base probe after it reads
+            raise OSError("collect-only run failed")
+        return real(ctx, commit, *a, **k)
 
     monkeypatch.setattr(deferred_collected, "run_verifiers", broken)
     result = _run(project, tmp_path, WRONG["attribute-base"])  # new file, no base evidence

@@ -10,9 +10,10 @@ commit's Python files: an id collected only on the test commit, parametrisation 
 
 It only adds refusals. A collector error in a file leaves that file to the static rule. A test
 commit run with no usable record (timeout, crash, no report) is refused
-DEFERRED_TESTS_COLLECT_FAILED, with or without base evidence (the candidate must not be able to
-turn the check off by failing the run); more than MAX_FILES files are collected in batches; only
-an unreadable base run leaves the old ids unknown and the static rule in place;
+DEFERRED_TESTS_COLLECT_FAILED when a base probe collects normally (the candidate must not be able
+to turn the check off by failing the run; a run broken everywhere stays UNCOMPARABLE, #804);
+more than MAX_FILES files are collected in batches; only an unreadable base run leaves the old
+ids unknown and the static rule in place;
 the receipt receiver re-derives the set statically without running pytest, so a test commit this
 check accepts is judged the same there. A test whose body changes under an id the base already
 collects is not seen by ids: the AST comparison still decides it.
@@ -50,13 +51,18 @@ def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
     if not files:
         return
     after = _collect_all(ctx, task.test_commit, files, f"{run_id}t")
-    if after is None:  # no usable record: refuse, whatever the base says (the run may be the lever)
+    on_base = tuple(f for f in files if _exists(task, f))
+    if after is None:
+        # no usable record. If a base probe reads, the failure is specific to the test commit
+        # (the run may be the lever): refuse. If the probe fails too, the run itself is broken
+        # here (e.g. a table plugin that fails to load): the base run reports UNCOMPARABLE (#804)
+        if _collect_all(ctx, task.base_commit, _probe_files(task, on_base), f"{run_id}p") is None:
+            return
         raise TestCommitRejected(
             "DEFERRED_TESTS_COLLECT_FAILED",
             "pytest's collect-only run on the test commit gave no usable record (timeout,"
             " crash or no report), so Cairnwork cannot tell which tests it adds; rerun the task",
         )
-    on_base = tuple(f for f in files if _exists(task, f))
     before = _collect_all(ctx, task.base_commit, on_base, f"{run_id}b") if on_base else NONE
     if before is None:  # the base's own run failed: the old ids are unknown, the static rule stays
         return
@@ -103,6 +109,18 @@ def _collect(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected
         for run in runs:  # evidence for this check only, not for Core
             shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
     return None if got is None or got.unusable else got
+
+
+def _probe_files(task, on_base: tuple[str, ...]) -> tuple[str, ...]:
+    """The changed files that exist on base, else one test file of the base (all files are new)."""
+    if on_base:
+        return on_base
+    try:
+        listing = run_git(task.repo, "ls-tree", "-r", "--name-only", task.base_commit)
+    except GitCommandError:
+        return ()
+    names = [n for n in listing.splitlines() if n.endswith(".py") and "test" in Path(n).name]
+    return tuple(names[:1])
 
 
 def _exists(task, path: str) -> bool:
