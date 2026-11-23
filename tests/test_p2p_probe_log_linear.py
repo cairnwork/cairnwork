@@ -19,7 +19,8 @@ def _growth(
 ) -> float:
     """Time of ``work(text)`` on a text 4x as long over the time on the short one (best of
     ``runs`` each). About 4 for linear work, about 16 for quadratic; a slow or busy machine slows
-    both sides alike, so no wall-clock limit is involved."""
+    both sides alike, so no wall-clock limit is involved. ``clock`` can be injected: the control
+    test reads a count of touched characters instead of time."""
 
     def best(size: int) -> float:
         times = []
@@ -64,3 +65,16 @@ def test_the_growth_check_catches_quadratic_work_and_passes_linear_work():
 
     assert _growth(quadratic, small=4096, clock=clock) > GROWTH_LIMIT
     assert _growth(linear, small=1_000_000, clock=clock) < GROWTH_LIMIT
+
+
+def test_the_default_clock_is_the_real_one_and_measures_elapsed_time():
+    """The control injects a counting clock, so nothing else would notice the default being
+    swapped for a constant (the growth would read 0 and every timing test would pass)."""
+    import inspect
+
+    assert inspect.signature(_growth).parameters["clock"].default is time.perf_counter
+
+    def busy(size: int) -> None:
+        sum(range(size))
+
+    assert _growth(busy, small=20000, runs=1) > 0
