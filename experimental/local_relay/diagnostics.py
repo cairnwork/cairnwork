@@ -70,6 +70,11 @@ def redact(value: str) -> str:
     return _scrub(value)[:MAX_STDERR_CHARS]
 
 
+def scrubbed(value: str) -> str:
+    """Redact like ``redact`` but keep the whole text (a JSON verdict must stay parseable)."""
+    return _scrub(value)
+
+
 def redacted_tail(value: str, max_lines: int, max_chars: int) -> str:
     """Redact the WHOLE text first, then keep its last lines and chars (failures end the text)."""
     return "\n".join(_scrub(value).splitlines()[-max_lines:])[-max_chars:]

@@ -10,6 +10,7 @@ XDIST_GROUPS = {
     # each process of this uid whose environment carries that tag: one test's sweep kills the
     # wrapper processes of a test running at the same time on another worker.
     "local_worker_run_tag": (
+        "test_local_worker_deny_default.py",
         "test_local_worker_gitquery.py",
         "test_local_worker_ignore_rules.py",
         "test_local_worker_paging.py",

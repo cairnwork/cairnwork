@@ -31,7 +31,7 @@ class RowBinding:
 
 
 # A stored request, response or binding larger than this is read as unreadable, not parsed: json
-# parsing a huge value could exhaust memory. (main's Notary.verify has no such cap: see #1515.)
+# parsing a huge value could exhaust memory. The stored expected identity is held to it too.
 MAX_STORED_JSON_BYTES = 4 * 1024 * 1024
 
 
@@ -60,8 +60,10 @@ def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | Non
             " THEN NULL ELSE request_json END,"
             " CASE WHEN length(CAST(response_json AS BLOB)) > :cap"
             " THEN NULL ELSE response_json END,"
-            " expected_identity,"
-            " CASE WHEN length(CAST(binding_json AS BLOB)) > :cap THEN '' ELSE binding_json END"
+            " CASE WHEN length(CAST(expected_identity AS BLOB)) > :cap"
+            " THEN '' ELSE expected_identity END,"
+            " CASE WHEN length(CAST(binding_json AS BLOB)) > :cap THEN '' ELSE binding_json END,"
+            " length(CAST(expected_identity AS BLOB)) > :cap"
             " FROM core_verifications WHERE task_id = :task AND attempt_id = :attempt",
             {"cap": MAX_STORED_JSON_BYTES, "task": task_id, "attempt": attempt_id},
         ).fetchone()
@@ -85,7 +87,9 @@ def _row_binding(notary: Any, task_id: str, attempt_id: str) -> RowBinding | Non
                         raise
     if row is None:
         return None
-    base, candidate, request_json, response_json, expected, binding_json = row
+    base, candidate, request_json, response_json, expected, binding_json, identity_over = row
+    if identity_over:  # an oversized stored identity is never hashed or parsed
+        return RowBinding(None, IDENTITY_UNREADABLE, False)
     try:
         expected_digest = _identity_digest(expected)
         binding = None if binding_json is None else json.loads(binding_json)

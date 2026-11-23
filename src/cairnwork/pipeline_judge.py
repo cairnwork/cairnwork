@@ -41,11 +41,11 @@ from cairnwork.deferred_tests import (
     test_paths,
     untargeted,
 )
-from cairnwork.node_ids import show, unmatched_note, without_case
+from cairnwork.node_ids import unmatched_note, without_case
 from cairnwork.p2p import P2PPlan, run_plan
-from cairnwork.p2p_nodes import clean
 from cairnwork.pytest_config import PytestConfigError, gate_import_paths, test_file_rule
 from cairnwork.reasons import explain, verdict_reason
+from cairnwork.seed_detail import seed_sensitive_detail
 from cairnwork.skip_evidence import raise_for_env_skips
 from cairnwork.verifier_account import VerifierAccountError
 from cairnwork.verifier_spec import protected_verifier_inputs
@@ -124,7 +124,9 @@ def tests_with_teeth(
             "name each such file, or each of its new or changed tests, as a verifier target; "
             "改了模組層或類別本體，請點名整個檔案"
         )
-        raise TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{', '.join(missing)}; {hint}")
+        raise TestCommitRejected(
+            "DEFERRED_TESTS_NOT_TARGETED", f"{len(missing)} test file(s); {hint}"
+        )
     # #796: a base run goes on after a collect error (never a collect-only spec): the other files
     # still run, and a module-level import of a name the fix adds can be told from other errors
     base = tuple(
@@ -181,13 +183,15 @@ def _check_seed_replay(ctx, result, runs, targets, base, test_commit, is_test) -
     second_failed = _failed_targets(second_runs, targets)
     if second_comparison.kind != "TEETH" or first_failed != second_failed:
         changed = sorted(first_failed ^ second_failed)
-        detail = _seed_sensitive_detail(
+        hidden = any(getattr(run, "hidden_tests", False) for run in runs)
+        detail = seed_sensitive_detail(
             changed,
             first_failed,
             second_failed,
             ctx.hash_seed,
             second_ctx.hash_seed,
             second_comparison,
+            hidden,
         )
         raise BaseUncomparable(Comparison("UNCOMPARABLE", "BASE_SEED_SENSITIVE", detail))
 
@@ -201,32 +205,6 @@ def _failed_targets(runs, targets: frozenset[str]) -> frozenset[str]:
         for node, outcome in run.outcomes.items()
         if outcome == "failed" and without_case(node) in target_prefixes
     )
-
-
-def _seed_sensitive_detail(
-    changed, first_failed, second_failed, first_seed, second_seed, comparison
-):
-    """Bound candidate-controlled node IDs before placing them in a refusal detail."""
-    ids = sorted(set(changed) | set(first_failed) | set(second_failed))[:20]
-    quoted = [_quoted_node_id(node) for node in ids]
-    detail = (
-        f"failed node IDs differ or second run was invalid at seeds "
-        f"seed {first_seed} and seed {second_seed}: {quoted}"
-    )
-    note = unmatched_note(set(changed) | set(first_failed), set(second_failed))
-    if note:
-        detail += f"; {note}"
-    if comparison.kind != "TEETH":
-        detail += f"; second run: {comparison.kind} {comparison.code}"
-    return detail
-
-
-def _quoted_node_id(node: str) -> str:
-    """Return a repr-quoted node ID no longer than 200 characters."""
-    candidate = show(node)
-    while len(repr(candidate)) > 200:
-        candidate = candidate[: max(0, len(candidate) - (len(repr(candidate)) - 199))]
-    return repr(candidate)
 
 
 def judge_candidate(
@@ -343,14 +321,17 @@ def _not_run_refusal(missing, test_files, verified_by, judged) -> str:
     if not all(item.observation.passed for item in judged):
         return ""
     if missing:
-        return f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {missing}"
+        return (
+            f"DEFERRED_TESTS_NOT_RUN_IN_VERIFICATION: no verifier collected or ran {len(missing)}"
+        )
     gone = _base_nodes_gone(test_files, verified_by)
     if not gone:
         return ""
-    shown = ", ".join(map(clean, gone[:10])) + (f", +{len(gone) - 10} more" if gone[10:] else "")
     head = f"NAMED_TESTS_NOT_RUN: {len(gone)} test(s) the base run ran did not run on the candidate"
-    note = unmatched_note(gone, {node for run in judged for node in run.outcomes})
-    return f"{head}: {shown}" + (f"; {note}" if note else "")
+    note = unmatched_note(
+        gone, {node for run in judged for node in run.outcomes}
+    )  # #1186: no names
+    return head + (f"; {note}" if note else "")
 
 
 def _base_nodes_gone(test_files, runs) -> list[str]:

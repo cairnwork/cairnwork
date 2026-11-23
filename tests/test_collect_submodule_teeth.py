@@ -169,7 +169,8 @@ def test_a_candidate_that_does_not_add_the_module_is_not_verified(project, state
                                                     "    return a + b\n"})  # fmt: skip
     assert code == 2 and out["status"] == "FAILED" and out["uncomparable"] is None, out
     assert out["core_status"] not in ("", "VERIFIED")
-    assert "collection could not import 1: calcpkg.newmod" in out["reason"]  # AC8b
+    assert "collection could not import 1 module(s)" in out["reason"]  # AC8b, #1186
+    assert "newmod" not in out["reason"] and "test_regression" not in out["reason"]
 
 
 @pytest.mark.sandbox
