@@ -12,7 +12,8 @@ from pathlib import Path
 
 from cairnwork.candidate_recognise import recognised_test_imports
 from cairnwork.candidate_recognise_names import base_roots_from_tree
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import GitCommandError
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _IMPORT_CALLS = frozenset({"import_module", "__import__", "importorskip"})
@@ -149,7 +150,7 @@ def _validate_oid(commit: str) -> None:
 
 
 def _tree_entries(repo: Path, commit: str) -> tuple[tuple[int, str, str, str], ...]:
-    raw = run_git_bytes(repo, "ls-tree", "-r", "-z", commit)
+    raw = read_git_bytes(repo, "ls-tree", "-r", "-z", commit)
     entries = []
     for item in raw.split(b"\0"):
         if not item:
@@ -172,7 +173,7 @@ def _read_source_blobs(repo: Path, sources: list[tuple[str, str, str]]) -> dict[
     oids = list(dict.fromkeys(oid for _, _, oid in sources))
     if not oids:
         return {}
-    raw = run_git_bytes(
+    raw = read_git_bytes(
         repo, "cat-file", "--batch", stdin="".join(f"{oid}\n" for oid in oids).encode()
     )
     blobs: dict[str, bytes] = {}

@@ -7,7 +7,7 @@ from conftest import commit_change, git
 from test_deferred_tests import make_test_commit
 from verify_helpers import base_of, candidate, verify
 
-from cairnwork import candidate_sys_path, pipeline_judge
+from cairnwork import candidate_sys_path, git_read_cap, pipeline_judge
 from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.verify_context import VerifyContext
 from cairnwork.workspace import CandidateRejected
@@ -216,7 +216,7 @@ def test_changed_blob_read_failure_is_closed(project, monkeypatch):
     def unreadable(*args, **kwargs):
         raise OSError("synthetic blob read failure")
 
-    monkeypatch.setattr(candidate_sys_path, "run_git_bytes", unreadable)
+    monkeypatch.setattr(git_read_cap, "run_git_bytes", unreadable)
     with pytest.raises(CandidateRejected) as got:
         candidate_sys_path.refuse_new_sys_path_mutation(project, base, cand, ("src/calc.py",))
     assert got.value.code == "UNREADABLE_CHANGE"
@@ -256,7 +256,7 @@ def test_newline_candidate_path_is_escaped_in_unreadable_rejection(repo, monkeyp
     def unreadable(*args, **kwargs):
         raise OSError(f"cannot read {path}")
 
-    monkeypatch.setattr(candidate_sys_path, "run_git_bytes", unreadable)
+    monkeypatch.setattr(git_read_cap, "run_git_bytes", unreadable)
 
     with pytest.raises(CandidateRejected) as got:
         candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, ("pkg/module.py",))
