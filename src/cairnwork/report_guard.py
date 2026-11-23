@@ -125,8 +125,7 @@ _HANDOVER = _take()
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
 
-    def __init__(self, path, report_fd, nonce, quiet=False):
-        self._quiet = quiet
+    def __init__(self, path, report_fd, nonce):
         self._path = path
         self._fd = report_fd
         self._nonce = nonce
@@ -175,16 +174,6 @@ _HANDOVER = _take()
     @pytest.hookimpl(tryfirst=True)
     def pytest_itemcollected(self, item, _source=_source):
         self._sources[id(item)] = (item, item.nodeid, _source(item))
-
-    @pytest.hookimpl(tryfirst=True)
-    def pytest_runtestloop(self, session):
-        # #1671: the same hook in every run; only the hand-over says whether to stop after
-        # collection (a collection error still ends the session as pytest does)
-        if not self._quiet:
-            return None
-        if session.testsfailed and not session.config.option.continue_on_collection_errors:
-            raise session.Interrupted(f"{session.testsfailed} errors during collection")
-        return True
 
     @pytest.hookimpl(wrapper=True)
     def pytest_collection(self, session):
@@ -282,10 +271,29 @@ _HANDOVER = _take()
         chmod(self._path, 0o644)  # the owner reads it (a different user under the account)
 
 
+def _stopper(quiet):
+    """#1671: registered in every run; whether it stops after collection lives only in this
+    closure, on no attribute of any registered plugin object (a collection error still ends
+    the session as pytest does)."""
+
+    class _Stop:
+        @pytest.hookimpl(tryfirst=True)
+        def pytest_runtestloop(self, session):
+            if not quiet:
+                return None
+            if session.testsfailed and not session.config.option.continue_on_collection_errors:
+                raise session.Interrupted(f"{session.testsfailed} errors during collection")
+            return True
+
+    return _Stop()
+
+
 def pytest_configure(config):
     global _HANDOVER
     if _HANDOVER:
-        config.pluginmanager.register(_Reporter(*_HANDOVER), "cairnwork_report_guard")
+        *plain, quiet = _HANDOVER
+        config.pluginmanager.register(_Reporter(*plain), "cairnwork_report_guard")
+        config.pluginmanager.register(_stopper(quiet), "cairnwork_report_stop")
         _HANDOVER = None
 '''
 )

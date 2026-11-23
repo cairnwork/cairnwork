@@ -94,3 +94,28 @@ def test_a_quiet_collect_run_reads_the_same_as_an_announced_one(repo, tmp_path):
     assert {"tests/test_ok.py::test_one", "tests/test_ok.py::test_two"} <= set(quiet.ids)
     loud = got[True][1]
     assert (quiet.ids, quiet.error_files) == (loud.ids, loud.error_files)
+
+
+def test_the_quiet_flag_is_not_state_on_any_registered_plugin(tmp_path, monkeypatch):
+    """Review of #1698: a test can reach every registered plugin object through the plugin
+    manager, so the quiet bit sits in a closure, on no attribute of any of them."""
+    import importlib.util
+    from types import SimpleNamespace
+
+    from cairnwork import report_guard
+
+    report_guard.install_plugin(tmp_path)
+    (module_file,) = [p for p in tmp_path.glob("*.py") if p.name != "sitecustomize.py"][:1]
+    monkeypatch.setenv(report_guard.PATH_ENV, str(tmp_path / "verdict.json"))
+    monkeypatch.setenv(report_guard.NONCE_ENV, "a" * 32 + "q")
+    spec = importlib.util.spec_from_file_location("_guard_under_test", module_file)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    manager = pytest.PytestPluginManager()
+    module.pytest_configure(SimpleNamespace(pluginmanager=manager))
+    plugins = [p for p in manager.get_plugins() if type(p).__name__ in ("_Reporter", "_Stop")]
+    assert len(plugins) == 2
+    for plugin in plugins:
+        state = {**vars(type(plugin)), **vars(plugin)}
+        assert not [k for k, v in state.items() if v is True or "quiet" in str(k)], state
