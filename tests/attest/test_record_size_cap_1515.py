@@ -24,9 +24,12 @@ def _rewrite(state: Path, column: str, value: str) -> None:
         conn.close()
 
 
-def _padded(total: int) -> str:
+def _padded(total: int, filler: str = "x") -> str:
     head, tail = '{"pad":"', '"}'
-    return head + "x" * (total - len(head) - len(tail)) + tail
+    width = len(filler.encode())
+    room = total - len(head) - len(tail)
+    assert room % width == 0
+    return head + filler * (room // width) + tail
 
 
 def _spy(monkeypatch) -> list[int]:
@@ -35,7 +38,7 @@ def _spy(monkeypatch) -> list[int]:
     monkeypatch.setattr(
         record_module.json,
         "loads",
-        lambda value, *a, **k: (parsed.append(len(value)), real(value, *a, **k))[1],
+        lambda value, *a, **k: (parsed.append(len(value.encode())), real(value, *a, **k))[1],
     )
     return parsed
 
@@ -82,3 +85,48 @@ def test_a_normal_row_still_reads(ledger):
     state, task, attempt = ledger
     rec = read_record(state / "notary.sqlite", task, attempt)
     assert json.loads(rec.request_json) == rec.request
+
+
+@pytest.mark.parametrize("column", ["request_json", "response_json", "binding_json"])
+def test_the_cap_counts_bytes_not_characters(ledger, monkeypatch, column):
+    state, task, attempt = ledger
+    parsed = _spy(monkeypatch)
+    text = _padded(MAX_STORED_JSON_BYTES + 2, "é")  # 2 bytes each: under the cap in characters
+    assert len(text) <= MAX_STORED_JSON_BYTES < len(text.encode())
+    _rewrite(state, column, text)
+    with pytest.raises(RecordMalformed) as err:
+        read_record(state / "notary.sqlite", task, attempt)
+    assert err.value.code == "RECORD_TOO_LARGE"
+    assert all(size <= MAX_STORED_JSON_BYTES for size in parsed)
+
+
+def _schema2_ledger(path: Path, request_json: str) -> Path:
+    db = path / "notary.sqlite"
+    conn = sqlite3.connect(db)
+    try:  # a ledger not yet migrated to schema 3: no binding_json column
+        conn.execute(
+            "CREATE TABLE core_verifications (task_id, attempt_id, base_commit, candidate_commit,"
+            " request_hash, request_json, http_status, status, integrity, response_json,"
+            " recorded_at, expected_identity)"
+        )
+        conn.execute(
+            "INSERT INTO core_verifications VALUES ('t','a','b','c','h',?,200,'VERIFIED','i',"
+            "'{\"r\":1}','now',NULL)",
+            (request_json,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return db
+
+
+def test_a_schema_2_ledger_without_binding_json_still_reads(tmp_path):
+    rec = read_record(_schema2_ledger(tmp_path, '{"q":1}'), "t", "a")
+    assert rec.binding is None and rec.request == {"q": 1}
+
+
+def test_a_schema_2_ledger_with_an_oversized_request_is_refused(tmp_path):
+    db = _schema2_ledger(tmp_path, _padded(MAX_STORED_JSON_BYTES + 1))
+    with pytest.raises(RecordMalformed) as err:
+        read_record(db, "t", "a")
+    assert err.value.code == "RECORD_TOO_LARGE"

@@ -181,7 +181,7 @@ def _fetch_row(uri: str, task_id: str, attempt_id: str) -> tuple[Any, ...]:
         try:  # a schema-2 ledger (not yet migrated) has no binding_json: read it as NULL
             columns = {r[1] for r in conn.execute("PRAGMA table_info(core_verifications)")}
             binding = "binding_json" if "binding_json" in columns else "NULL"
-            # a stored JSON larger than the cap is never loaded: the length is read, the text is not
+            # over the cap (bytes): never handed to Python or parsed (SQLite still sizes it)
             query = (
                 "SELECT task_id, attempt_id, base_commit, candidate_commit, request_hash,"
                 " CASE WHEN length(CAST(request_json AS BLOB)) > :cap THEN NULL"
