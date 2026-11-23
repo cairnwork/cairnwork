@@ -219,3 +219,28 @@ def test_a_real_good_directory_is_read_even_through_an_aliased_ancestor(tmp_path
     assert real is not None
     assert _res(real).source != "default"
     assert _res(alias / "d" / "policy.json").source != "default"
+
+
+def test_an_ancestor_swapped_after_the_check_is_not_followed(tmp_path, monkeypatch):
+    """Swap a middle directory for a symlink to another directory holding the same relative file
+    just before the first open: the held-handle walk must refuse it."""
+    op = tmp_path / "op"
+    (op / "anc").mkdir(parents=True)
+    good = _write(op / "anc" / "d", GOOD)
+    (tmp_path / "evil").mkdir()
+    _write(tmp_path / "evil" / "d", GOOD)
+    real_open = os.open
+    swapped: list[bool] = []
+
+    def swap_before_open(*args, **kw):
+        if not swapped:
+            swapped.append(True)
+            (op / "anc").rename(op / "anc_moved")
+            (op / "anc").symlink_to(tmp_path / "evil")
+        return real_open(*args, **kw)
+
+    monkeypatch.setattr(os, "open", swap_before_open)
+    assert _res(good).source == "default"
+    assert swapped
+    monkeypatch.undo()
+    assert _res(_write(tmp_path / "ok", GOOD)).source != "default"  # control: no swap, read
