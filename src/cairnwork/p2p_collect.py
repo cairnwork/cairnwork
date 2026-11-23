@@ -24,6 +24,10 @@ sides; a test the AST reader cannot see stays a P2P test (at worst a wrong refus
 wrong acceptance). The removed tests join ``changed``: both are left to the author's verifiers.
 AST classification has a 10-second process limit; timeout or child failure is refused
 (``TEST_COMMIT_ANALYSIS_LIMIT``).
+
+The classifier runs in a child under a 10 s wall-clock limit and a 1 GiB resident-memory limit
+(#1246; the memory limit is sampled, see ``child_run.run_child``); a hit is refused with
+``TEST_COMMIT_ANALYSIS_LIMIT``, never verified.
 """
 
 from __future__ import annotations

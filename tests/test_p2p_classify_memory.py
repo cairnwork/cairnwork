@@ -51,16 +51,16 @@ def test_a_hog_child_is_refused_before_the_time_limit(monkeypatch):
     assert time.monotonic() - started < 20
 
 
-def test_ordinary_classification_is_unchanged_under_the_limit():
-    side = p2p_collect.classify(
-        {"t.py::test_gone", "t.py::test_kept"},
-        {"t.py::test_kept"},
-        {"t.py"},
-        lambda _: "def test_kept(): pass\n",
-        lambda _: "def test_gone(): pass\ndef test_kept(): pass\n",
-        exposed=(),
-    )
-    assert side.removed == {"t.py::test_gone"} and not side.dropped
+def test_the_limit_reaches_the_child_runner(monkeypatch):
+    seen: dict = {}
+
+    def fake(argv, payload, **kw):
+        seen.update(kw)
+        return b'{"removed":[],"dropped":["t.py::a"]}', False, 0
+
+    monkeypatch.setattr(p2p_collect, "run_child", fake)
+    p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
+    assert seen["memory_limit"] == p2p_collect.CLASSIFY_MEMORY_LIMIT
 
 
 @pytest.mark.sandbox

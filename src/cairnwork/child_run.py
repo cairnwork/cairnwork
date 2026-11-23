@@ -27,10 +27,12 @@ def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
     other exit returns the child's own return code as is. The whole process group is killed and
     reaped on every exit path.
 
-    ``memory_limit`` (bytes, #1246): the resident memory of the child's process group is polled
-    while it runs; going over it, or a reading that cannot be taken, kills the group and gives
-    ``(b"", False, 1)``, a refusal like the output cap. (``RLIMIT_AS`` is not enforced on macOS,
-    so the parent measures.)"""
+    ``memory_limit`` (bytes, #1246) is a sampled soft limit: the resident memory of the child's
+    process group is read every 50 ms while it runs, so a spike shorter than a sample can pass,
+    and a process that leaves the group (its own session) is not counted. Going over the limit,
+    or a reading that cannot be taken while the group is still alive, kills the group and gives
+    ``(b"", False, 1)``, a refusal like the output cap. A reading that runs out of the time limit
+    counts as a timeout. (``RLIMIT_AS`` is not enforced on macOS, so the parent measures.)"""
     output: list[bytes] = []
     size = 0
     process = None
@@ -94,30 +96,45 @@ def _wait(process, timeout, memory_limit):
             return False, False
         except subprocess.TimeoutExpired:
             pass
-        if _group_rss_bytes(process.pid) > memory_limit:
+        used = _group_rss_bytes(process.pid, max(deadline - time.monotonic(), 0.01))
+        if used is None or used > memory_limit:
             _kill_child_group(process.pid)
-            return False, True
+            ran_out = used is None and time.monotonic() >= deadline
+            return ran_out, not ran_out
 
 
-def _group_rss_bytes(group):
-    """Resident memory of every process in ``group``; a failed reading counts as over any limit."""
+def _group_rss_bytes(group, budget):
+    """Resident bytes of every process in ``group``, or None when it cannot be read.
+
+    The reading gets at most ``budget`` seconds (the time the child has left). No row for the
+    group is an exited group (0) only when ``killpg(group, 0)`` says it is gone; a group that is
+    still alive but missing from the table is a reading that failed."""
     try:
         done = subprocess.run(
             [_PS, "-axo", "pgid=,rss="],
             capture_output=True,
             env={},
-            timeout=5,
+            timeout=min(5, budget),
             check=True,
             text=True,
         )
-        total = 0
+        total, seen = 0, False
         for line in done.stdout.splitlines():
             fields = line.split()
             if len(fields) == 2 and int(fields[0]) == group:
                 total += int(fields[1]) * 1024
-        return total
+                seen = True
     except (OSError, ValueError, subprocess.SubprocessError):
-        return 1 << 62
+        return None
+    if seen:
+        return total
+    try:
+        os.killpg(group, 0)
+    except ProcessLookupError:
+        return 0
+    except PermissionError:
+        return None
+    return None
 
 
 def _write_input(stream, payload):

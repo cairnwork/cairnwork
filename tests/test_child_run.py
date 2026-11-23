@@ -115,3 +115,34 @@ def test_an_unreadable_memory_gauge_fails_closed(monkeypatch):
     started = time.monotonic()
     got = run_child(_py(code), b"", timeout=60, output_cap=100, memory_limit=1 << 30)
     assert got == (b"", False, 1) and time.monotonic() - started < 10
+
+
+def test_a_gauge_that_hangs_does_not_outlast_the_time_limit(monkeypatch, tmp_path):
+    ps = tmp_path / "ps"
+    ps.write_text("#!/bin/sh\nexec sleep 60\n")
+    ps.chmod(0o755)
+    monkeypatch.setattr("cairnwork.child_run._PS", str(ps))
+    started = time.monotonic()
+    out, timed_out, rc = run_child(
+        _py("import time; time.sleep(60)"), b"", timeout=1, output_cap=100, memory_limit=1 << 30
+    )
+    assert out == b"" and timed_out
+    assert time.monotonic() - started < 6
+
+
+def test_a_live_group_missing_from_the_gauge_fails_closed(monkeypatch, tmp_path):
+    ps = tmp_path / "ps"
+    ps.write_text("#!/bin/sh\necho '1 100'\n")  # a table without the child's group
+    ps.chmod(0o755)
+    monkeypatch.setattr("cairnwork.child_run._PS", str(ps))
+    started = time.monotonic()
+    got = run_child(
+        _py("import time; time.sleep(60)"), b"", timeout=60, output_cap=100, memory_limit=1 << 30
+    )
+    assert got == (b"", False, 1) and time.monotonic() - started < 10
+
+
+def test_a_gone_group_reads_as_zero():
+    from cairnwork.child_run import _group_rss_bytes
+
+    assert _group_rss_bytes(2**22 + 12345, 5) == 0
