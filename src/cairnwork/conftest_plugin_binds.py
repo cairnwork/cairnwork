@@ -12,10 +12,6 @@ import ast
 from collections.abc import Sequence
 
 _NAME = "pytest_plugins"
-_DYNAMIC = frozenset(
-    {"builtins", "__builtins__", "globals", "vars", "setattr", "eval", "exec", "__import__"}
-)
-_BUILTINS = frozenset({"list", "tuple", "set", "frozenset", "sorted", "str"})
 
 
 def imported_plugins(tree: ast.Module) -> bool:
@@ -35,64 +31,19 @@ def imported_plugins(tree: ast.Module) -> bool:
     return False
 
 
-def unreadable(node: ast.AST, values: Sequence[ast.AST | None], tree: ast.Module) -> bool:
+def unreadable(node: ast.AST, values: Sequence[ast.AST | None]) -> bool:
     """The statement ``node`` feeds ``values`` into ``pytest_plugins`` in a way the reach check
     cannot read: a ``with`` whose value it could not see through or that is a bare name, attribute
-    or item, or a call anywhere in a value other than a plain builtin conversion
-    (``f(['safe'])``). A name in an assignment, loop or ``match`` subject stays as it was: a
-    run-time list is not followed (#1014 r2)."""
-    if isinstance(node, ast.With | ast.AsyncWith) and None in values:
+    or item, or a call anywhere in a value (``f(['safe'])``, ``list(...)``: any call may run code
+    or be rebound, so none is trusted). A name in an assignment, loop or ``match`` subject stays
+    as it was: a run-time list is not followed (#1014 r2)."""
+    with_ = isinstance(node, ast.With | ast.AsyncWith)
+    if with_ and None in values:
         return True
     real = [value for value in values if value is not None]
-    bound = _bound(tree)
-    if any(_call(n, bound) for value in real for n in ast.walk(value)):
+    if any(isinstance(n, ast.Call) for value in real for n in ast.walk(value)):
         return True
-    return isinstance(node, ast.With | ast.AsyncWith) and any(_opaque(v) for v in real)
-
-
-def _call(node: ast.AST, bound: set[str]) -> bool:
-    """A call other than a conversion by a builtin name that the module never rebinds."""
-    if not isinstance(node, ast.Call):
-        return False
-    return not (isinstance(node.func, ast.Name) and node.func.id in _BUILTINS - bound)
-
-
-def _bound(tree: ast.Module) -> set[str]:
-    """Every name the module binds at module level (also inside ``if``, ``try``, ``with`` and
-    ``for``): def, class, assignment, import, loop, ``with`` or walrus target. A builtin name in
-    it may be anything (``list = lambda x: ...``). A parameter or a name bound inside a def,
-    class or lambda is local and does not count,
-    unless a ``global`` statement at any depth names it."""
-    out: set[str] = {x for n in ast.walk(tree) if isinstance(n, ast.Global) for x in n.names}
-    if _dynamic(tree):
-        return out | _BUILTINS
-    todo: list[ast.AST] = [tree]
-    while todo:
-        n = todo.pop()
-        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            out.add(n.name)
-        elif isinstance(n, ast.Lambda):
-            continue
-        else:
-            if isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load):
-                out.add(n.id)
-            elif isinstance(n, ast.alias):
-                out.add(n.asname or n.name.split(".")[0])
-            todo += ast.iter_child_nodes(n)
-    return out
-
-
-def _dynamic(tree: ast.Module) -> bool:
-    """The module names a way to rebind a builtin at run time (``builtins.list = ...``,
-    ``setattr(builtins, ...)``, ``globals()['list'] = ...``): no conversion is trusted then."""
-    for n in ast.walk(tree):
-        if isinstance(n, ast.Name) and n.id in _DYNAMIC:
-            return True
-        if isinstance(n, ast.Attribute) and n.attr in _DYNAMIC:
-            return True
-        if isinstance(n, ast.alias) and n.name.split(".")[0] in _DYNAMIC:
-            return True
-    return False
+    return with_ and any(_opaque(value) for value in real)
 
 
 def _opaque(value: ast.AST) -> bool:

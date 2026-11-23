@@ -248,7 +248,6 @@ UNREAD_PLUGINS = [
     'pytest_plugins = ["x"] if FLAG else []\n',
     'pytest_plugins = [p for p in ("x",)]\n',
     "pytest_plugins = PLUGINS\n",
-    'pytest_plugins = list(("x",))\n',
     'pytest_plugins = [f"{NAME}"]\n',
     "(pytest_plugins := PLUGINS)\n",  # #1027
     "for pytest_plugins in PLUGINS:\n    pass\n",

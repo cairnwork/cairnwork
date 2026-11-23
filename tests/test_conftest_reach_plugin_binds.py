@@ -41,6 +41,23 @@ def _reach(text):
             id="with_call",
         ),
         pytest.param("pytest_plugins.append(f())\n", id="method_call_arg"),
+        pytest.param("pytest_plugins = list(('safe',))\n", id="builtin_conversion"),
+        pytest.param("pytest_plugins = sorted(['safe'])\n", id="builtin_sorted"),
+        pytest.param(
+            "import importlib\nimportlib.import_module('builtins').list = lambda x: ['evil']\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_via_import_module",
+        ),
+        pytest.param(
+            "import sys\nsys.modules['builtins'].list = lambda x: ['evil']\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_via_sys_modules",
+        ),
+        pytest.param(
+            "import sys\nsys._getframe().f_globals['list'] = lambda x: ['evil']\n"
+            "pytest_plugins = list(['safe'])\n",
+            id="builtin_via_frame",
+        ),
         pytest.param(
             "import builtins\nbuiltins.list = lambda x: ['evil']\n"
             "pytest_plugins = list(['safe'])\n",
@@ -96,12 +113,8 @@ def test_unreadable_binding_is_refused(text):
         "for pytest_plugins in ['safe']:\n    pass\n",
         "pytest_plugins = ['safe', x]\n",
         "match x:\n    case ['safe'] as pytest_plugins:\n        pass\n",
-        "pytest_plugins = list(('safe',))\n",
         "pytest_plugins = PLUGINS\n",
         "def h():\n    import pytest_plugins\n",
-        "def h(list):\n    return list\npytest_plugins = list(('safe',))\n",
-        "def h():\n    list = 1\npytest_plugins = list(('safe',))\n",
-        "class K:\n    list = 1\npytest_plugins = list(('safe',))\n",
         "class K:\n    from plist import pytest_plugins\n",
         "import plist\n",
         "from plist import P\n",
