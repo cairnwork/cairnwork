@@ -1,17 +1,20 @@
 """Parent side of the descriptor hand-over to the report-guard plugin (see report_guard.py).
 
-``open_channel`` makes the two descriptors the child inherits through ``pass_fds``: a pipe that
-already holds the nonce (write end closed, so the plugin reads to EOF) and an anonymous file the
-plugin writes its record into. Neither has a name in the filesystem and neither number is secret
-on its own; what the child learns from the environment is only ``CAIRNWORK_GUARD_FDS``, which
-the plugin removes at import. The parent reads the record from its own descriptor.
+``open_channel`` makes the three descriptors the child inherits through ``pass_fds``: a pipe that
+already holds the nonce (write end closed, so the plugin reads to EOF) and two anonymous files:
+one the plugin writes its final record into, one for its collection record (#1671). None has a
+name in the filesystem and no number is secret on its own; what the child learns from the
+environment is only ``CAIRNWORK_GUARD_FDS``, which the plugin removes at import. The parent reads
+the records from its own descriptors. Every run gets the same hand-over, a quiet collect run (the
+#974 collected-set check) included: the child holds no bit that says it will be ended after
+collection; the parent ends it when it reads the collection record (collect_stop.py).
 
 Higher hurdle, not a boundary: code in the pytest process can still scan its open descriptors.
 
 Raising the bar (this module, ``report_channel`` and ``tamper_scan``): when the verifier runs as
 the owner (no verifier account) the nonce and the report destination no longer sit in the
-environment. The parent hands the child two inherited file descriptors (``pass_fds``): a pipe
-holding the nonce and an anonymous (already unlinked) file for the record; only their numbers
+environment. The parent hands the child three inherited file descriptors (``pass_fds``): a pipe
+holding the nonce and two anonymous (already unlinked) files for the records; only their numbers
 travel in ``CAIRNWORK_GUARD_FDS``. The plugin reads the nonce, closes that pipe and removes every
 guard variable from ``os.environ`` when its module is imported, which is before any conftest or
 test module (interpreter start-up hooks such as ``sitecustomize.py`` and ``.pth`` files run
@@ -52,17 +55,22 @@ class GuardChannel:
     nonce: str
     _report: IO[bytes]
     _nonce_read: int  # the parent's copy of the pipe's read end; -1 once closed
+    _collected: IO[bytes]  # #1671: the collection record's file, read for a quiet collect run
 
     @property
-    def pass_fds(self) -> tuple[int, int]:
-        return (self._nonce_read, self._report.fileno())
+    def pass_fds(self) -> tuple[int, int, int]:
+        return (self._nonce_read, self._report.fileno(), self._collected.fileno())
 
     def env(self) -> dict[str, str]:
-        nonce_fd, report_fd = self.pass_fds
-        return {report_guard.FDS_ENV: f"{nonce_fd},{report_fd}"}
+        nonce_fd, report_fd, collected_fd = self.pass_fds
+        return {report_guard.FDS_ENV: f"{nonce_fd},{report_fd},{collected_fd}"}
 
     def read(self) -> report_guard.Verdict:
         return report_guard.read_verdict_fd(self._report.fileno(), self.nonce)
+
+    def read_collected(self) -> report_guard.Verdict:
+        """The collection record (``stage: "collected"``), or an unusable verdict."""
+        return report_guard.read_verdict_fd(self._collected.fileno(), self.nonce, collected=True)
 
     def close(self) -> None:
         nonce_read, self._nonce_read = self._nonce_read, -1  # never retry a close
@@ -70,11 +78,16 @@ class GuardChannel:
             if nonce_read >= 0:
                 os.close(nonce_read)
         finally:  # #1364: a raising close above must not leave the report open
-            self._report.close()
+            try:
+                self._report.close()
+            finally:
+                self._collected.close()
 
 
 def open_channel(private: Path) -> GuardChannel:
-    """A fresh channel with a new nonce; ``private`` holds the (immediately unlinked) report."""
+    """A fresh channel with a new nonce; ``private`` holds the (immediately unlinked) report
+    and collection files. The hand-over is the same for every run (#1671): whether the parent
+    ends a run after collection is decided on its side only."""
     nonce = secrets.token_hex(16)
     read_end, write_end = os.pipe()
     try:
@@ -89,4 +102,10 @@ def open_channel(private: Path) -> GuardChannel:
     except BaseException:
         os.close(read_end)
         raise
-    return GuardChannel(nonce, report, read_end)
+    try:
+        collected = tempfile.TemporaryFile(dir=private)  # noqa: SIM115 - closed by close()
+    except BaseException:
+        os.close(read_end)
+        report.close()
+        raise
+    return GuardChannel(nonce, report, read_end, collected)

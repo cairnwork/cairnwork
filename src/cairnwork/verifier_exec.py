@@ -11,11 +11,24 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import stat
 from functools import partial
 from pathlib import Path
 
 from cairnwork import confined, deny_channel, mask_recheck
+from cairnwork.run_tags import OPAQUE_TAG
+from cairnwork.workspace import ATTEMPT_ID
+
+
+def opaque_clone_id(attempt_id: str) -> str:
+    """The directory name of one verifier run (#1698). The code under test sees it in its cwd,
+    HOME and TMPDIR, so it must not say which run this is (a collect run, a base run, the run
+    that judges the candidate): the attempt id, which every one of them shares and recovery
+    needs to find the directory, one fixed tag, and a random number. The run's own id lives only
+    in the parent's records."""
+    stem = attempt_id if ATTEMPT_ID.fullmatch(attempt_id or "") else "a" + secrets.token_hex(8)
+    return f"{stem}-{OPAQUE_TAG}-v{secrets.randbelow(10**16):016d}"
 
 
 def _same_directory(path: Path, before: os.stat_result) -> bool:
@@ -27,7 +40,9 @@ def _same_directory(path: Path, before: os.stat_result) -> bool:
     return same and stat.S_ISDIR(after.st_mode)
 
 
-def _execute(argv, profile_path, checkout, env, timeout, log_path, account, backend, pass_fds=()):
+def _execute(
+    argv, profile_path, checkout, env, timeout, log_path, account, backend, pass_fds=(), stop=None
+):
     """Run argv under the sandbox profile, as the verifier account when one is given.
     As if the verifier's venv were activated, its bin directory (argv[0] is its Python)
     leads PATH: tests that spawn plain ``python`` get the same interpreter as pytest."""
@@ -36,9 +51,16 @@ def _execute(argv, profile_path, checkout, env, timeout, log_path, account, back
     # checkout, nothing wider (under the account it is the account's own copy since #240).
     env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="safe.directory")
     env["GIT_CONFIG_VALUE_0"] = os.path.realpath(checkout)
+    ending = {} if stop is None else {"stop": stop}  # #1671: a quiet collect run's watcher
     if account is None:
         return confined.execute(
-            backend.wrap(argv, profile_path), checkout, env, timeout, log_path, pass_fds=pass_fds
+            backend.wrap(argv, profile_path),
+            checkout,
+            env,
+            timeout,
+            log_path,
+            pass_fds=pass_fds,
+            **ending,
         )  # under an account sudo would close the descriptors: that path passes none
     os.chmod(profile_path, 0o640)
     returncode, timed_out, survivors = confined.execute(
@@ -48,14 +70,15 @@ def _execute(argv, profile_path, checkout, env, timeout, log_path, account, back
         timeout,
         log_path,
         reap=account.reap,
+        **ending,
     )
     return returncode, timed_out, survivors
 
 
 def _run_confined(deny, profile, python, argv, profile_path, checkout, env, *rest):
     """Write the profile (tagged for a base run's deny channel, #797) and ``_execute`` under it;
-    ``rest`` is _execute's (timeout, log_path, account, backend, pass_fds). Returns the profile
-    used, _execute's three values and the deny evidence (None when not recorded)."""
+    ``rest`` is _execute's (timeout, log_path, account, backend, pass_fds[, stop]). Returns the
+    profile used, _execute's three values and the deny evidence (None when not recorded)."""
     backend = rest[3]
     original = profile  # the untagged policy still carries its build inputs for the mask re-check
     profile, tag = deny_channel.tagged(profile, backend.name, deny)

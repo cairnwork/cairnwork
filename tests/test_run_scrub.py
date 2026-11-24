@@ -16,6 +16,7 @@ import cairnwork.verifiers as verifiers
 from cairnwork.pytest_config import PytestSettings
 from cairnwork.run_scrub import close_private, stale_run_error
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verify_context import VerifyContext
 
 
@@ -150,7 +151,7 @@ def test_a_raised_verifier_still_drops_its_run_dir(tmp_path, monkeypatch):
         VerifyContext(nothing, nothing), sys.executable, nothing, nothing, PytestSettings(), nothing
     )
     with pytest.raises(RuntimeError, match="before verdict"):
-        verifiers._run_one(batch, None, _Checkout(tmp_path))
+        verifiers._run_one(batch, VerifierSpec("scrub", ()), _Checkout(tmp_path))
     private = made["private"]
     assert not (private / "run").exists()
     assert (private / "verifier.log").read_text() == "kept"

@@ -5,7 +5,10 @@ reached through an alias, attribute or subscript, a default ``runTest``, a docte
 settings turn on) and a visible new test sits beside it, the hidden one was never required to run:
 a false green. This check asks pytest itself. One collect-only run on the base and one on the test
 commit (same sandbox, ini and guard as every verifier run, collect_reader.py) over the test
-commit's Python files: an id collected only on the test commit, parametrisation stripped, that
+commit's Python files (#1671: without ``--collect-only`` in the arguments, and with the same
+hand-over as a real run; the parent ends the run when it reads the guard's collection record, so a
+test that reads its arguments or its surroundings is collected as it will be run): an id
+collected only on the test commit, parametrisation stripped, that
 ``new_tests`` did not return is refused, DEFERRED_TESTS_UNREADABLE.
 
 It only adds refusals. A collector error in a file leaves that file to the static rule. A test
@@ -99,7 +102,7 @@ def _collect_all(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Colle
 def _collect(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected | None:
     """The collected ids on ``commit``, or None when the run cannot be read (any fault)."""
     try:
-        spec = VerifierSpec("collected-974", files, collect_only=True)
+        spec = VerifierSpec("collected-974", files, collect_only=True, announce=False)  # #1671
         runs = run_verifiers(ctx, commit, (spec,), run_id)
     except Exception:  # noqa: BLE001 - a fault leaves the static rule alone
         return None

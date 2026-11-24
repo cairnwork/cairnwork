@@ -32,6 +32,11 @@ boundary.
 
 The owner-mode hand-over details are documented in ``report_channel``.
 
+When collection returns, every run also writes a collection record (the same fields plus ``stage:
+"collected"``, no outcomes) to its own destination (#1671). Only the parent reads it, and only for
+a quiet collect run (collect_stop.py): it ends that run's process group on seeing it. The child
+holds no bit saying so, and the final record never carries a ``stage``.
+
 The record also carries pytest's own exit status and failure count (#276): a run passes only
 when both are 0 and the process exits with status 0 too, so a process whose exit status
 disagrees with what pytest recorded fails. The functions the hooks call on the record path
@@ -68,6 +73,7 @@ FDS_ENV = "CAIRNWORK_GUARD_FDS"
 PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 MODULE = "_cairnwork_report_guard"
+COLLECTED_SUFFIX = ".collected"  # #1671: beside the account path's report: the collection record
 
 _PLUGIN_SOURCE = (
     '''\
@@ -83,6 +89,7 @@ import pytest
 _FDS_ENV = "CAIRNWORK_GUARD_FDS"
 _PATH_ENV = "CAIRNWORK_VERDICT_PATH"
 _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
+_COLLECTED_SUFFIX = ".collected"  # report_guard.COLLECTED_SUFFIX (a test pins the two equal)
 '''
     + PARTS_SOURCE
     + EXPOSED_SOURCE.replace("_MAX_REPORT_BYTES = 0", f"_MAX_REPORT_BYTES = {MAX_REPORT_BYTES}")
@@ -90,13 +97,14 @@ _NONCE_ENV = "CAIRNWORK_VERDICT_NONCE"
 
 def _take():
     """Read the hand-over once and scrub it from os.environ. Runs at import: pytest loads
-    this module (-p) before any conftest or test module."""
+    this module (-p) before any conftest or test module. Every run gets the same bytes (#1671):
+    nothing here says whether the parent will end the run after collection."""
     spec = os.environ.pop(_FDS_ENV, None)
     path = os.environ.pop(_PATH_ENV, None)
     nonce = os.environ.pop(_NONCE_ENV, None)
     if spec:
         try:
-            nonce_fd, report_fd = (int(part) for part in spec.split(","))
+            nonce_fd, report_fd, collected_fd = (int(part) for part in spec.split(","))
             chunks = []
             while True:
                 data = os.read(nonce_fd, 4096)
@@ -104,10 +112,10 @@ def _take():
                     break
                 chunks.append(data)
             os.close(nonce_fd)
-            return None, report_fd, b"".join(chunks).decode()
+            return (None, report_fd, b"".join(chunks).decode(), collected_fd)
         except (OSError, ValueError):
             return None
-    return (path, None, nonce) if path and nonce else None
+    return (path, None, nonce, None) if path and nonce else None
 
 
 _HANDOVER = _take()
@@ -115,14 +123,26 @@ _HANDOVER = _take()
 
 '''
     + ENV_SOURCE
-    + '''class _Reporter:
+    + '''def _collected_status(session):
+    """The exit status pytest itself would end with once collection returned (#1671): a run
+    stopped here and a run that goes on to the tests agree on it."""
+    if session.testsfailed:
+        return 1 if session.config.option.continue_on_collection_errors else 2
+    return 0 if session.items else 5
+
+
+class _Reporter:
     # the hooks call their helpers and the json/os functions through default arguments bound at
     # import: rebinding a class or module attribute later does not change what is recorded
 
-    def __init__(self, path, report_fd, nonce):
+    def __init__(self, path, report_fd, nonce, collected_fd=None):
         self._path = path
         self._fd = report_fd
         self._nonce = nonce
+        # #1671: where the collection record goes: its own descriptor (owner run) or a name
+        # beside the report (account run); written in every run, read only for a quiet one
+        self._cfd = collected_fd
+        self._cpath = path + _COLLECTED_SUFFIX if path else None
         self._collected = []
         self._outcomes, self._skips = {}, {}
         self._sources = {}  # id(item) -> (item, node id, file) when collected
@@ -141,6 +161,58 @@ _HANDOVER = _take()
         self._setup_denied = {}  # #962 step 2a: node -> [path, origin, line] of a setup denial
         self._finished = False  # #793: collection ran to its end (not stopped part way)
         self._uncollected_exposed = None
+
+    _IO = (  # what the record is written with, bound at import (data_exec_hook wraps the first two)
+        json.dumps, json.dump, os.ftruncate, os.pwrite, os.open, os.fdopen, os.chmod,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+    )
+
+    def _payload(self, exitstatus, testsfailed, stage=None):
+        """The record as a dict; ``stage`` (#1671) marks the collection record, which carries
+        no outcomes yet. The final record has no ``stage`` key at all."""
+        kind = {n: "env" for n, ok in self._env_ok.items() if ok}
+        kind.update(dict.fromkeys(self._setup_failed, "setup"))
+        kind.update({n: "plugin:" + m for n, m in self._plugin_missing.items()})
+        payload = {"nonce": self._nonce, "fail_kind": kind,
+                   "denied": {n: p for n, p in self._denied.items() if p and n in kind},
+                   "setup_denied": {n: d for n, d in self._setup_denied.items()
+                                    if d and kind.get(n) == "setup"},
+                   "collected": self._collected, "outcomes": self._outcomes,
+                   "files": self._files, "file_of": self._file_of,
+                   "renamed": list(dict.fromkeys(self._renamed)),
+                   "collect_errors": self._collect_errors,
+                   "collect_skipped": self._collect_skipped,
+                   **self._hints,  # #796: collect_import_errors, collect_missing_submodules
+                   "collect_skipped_deps": self._skipped_deps,
+                   "teardown_errors": self._teardown_errors,
+                   "collection_finished": self._finished, "skips": self._skips,
+                   # pytest's own status: the parent requires it and the process's to agree
+                   "exitstatus": _exit_status(exitstatus),
+                   "testsfailed": _tests_failed(testsfailed)}
+        if stage:
+            payload["stage"] = stage
+        if self._uncollected_exposed is not None:
+            payload["uncollected_exposed"] = self._uncollected_exposed
+        return payload
+
+    def _write(self, payload, fd, path, _io):
+        """Write ``payload`` to the anonymous report ``fd`` or, without one, to a new file."""
+        dumps, _dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
+        data = dumps(payload).encode()  # the optional fact never makes the record too big
+        if len(data) > _MAX_REPORT_BYTES and payload.pop("uncollected_exposed", None) is not None:
+            data = dumps(payload).encode()
+        if fd is not None:
+            ftruncate(fd, 0)
+            written = 0
+            while written < len(data):
+                step = pwrite(fd, data[written:], written)
+                if step <= 0:  # no progress: leave a short record, which the parent refuses
+                    break
+                written += step
+        elif path is not None:
+            with fdopen(open_(path, flags, 0o600), "wb") as handle:
+                handle.write(data)
+            chmod(path, 0o644)  # the owner reads it (a different user under the account)
 
     def pytest_collectreport(self, report): _collect(self, report)
 
@@ -170,11 +242,17 @@ _HANDOVER = _take()
         self._sources[id(item)] = (item, item.nodeid, _source(item))
 
     @pytest.hookimpl(wrapper=True)
-    def pytest_collection(self, session):
+    def pytest_collection(self, session, _status=_collected_status, _payload=_payload,
+                          _write=_write, _io=_IO):
         # #793: pytest calls collection_finish even when collection is interrupted; only a
         # collection that returned (no exception) ran to its end
         result = yield
         self._finished = True
+        try:  # #1671: the collection record, in every run; a failed write leaves none
+            record = _payload(self, _status(session), session.testsfailed, "collected")
+            _write(self, record, self._cfd, self._cpath, _io)
+        except OSError:
+            pass
         return result
 
     def pytest_collection_finish(self, session, _original=_original):
@@ -221,48 +299,8 @@ _HANDOVER = _take()
             self._teardown_errors.append(nodeid)
         return report
 
-    def pytest_sessionfinish(self, session, exitstatus, _io=(
-        json.dumps, json.dump, os.ftruncate, os.pwrite, os.open, os.fdopen, os.chmod,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-    )):
-        dumps, dump, ftruncate, pwrite, open_, fdopen, chmod, flags = _io
-        kind = {n: "env" for n, ok in self._env_ok.items() if ok}
-        kind.update(dict.fromkeys(self._setup_failed, "setup"))
-        kind.update({n: "plugin:" + m for n, m in self._plugin_missing.items()})
-        payload = {"nonce": self._nonce, "fail_kind": kind,
-                   "denied": {n: p for n, p in self._denied.items() if p and n in kind},
-                   "setup_denied": {n: d for n, d in self._setup_denied.items()
-                                    if d and kind.get(n) == "setup"},
-                   "collected": self._collected, "outcomes": self._outcomes,
-                   "files": self._files, "file_of": self._file_of,
-                   "renamed": list(dict.fromkeys(self._renamed)),
-                   "collect_errors": self._collect_errors,
-                   "collect_skipped": self._collect_skipped,
-                   **self._hints,  # #796: collect_import_errors, collect_missing_submodules
-                   "collect_skipped_deps": self._skipped_deps,
-                   "teardown_errors": self._teardown_errors,
-                   "collection_finished": self._finished, "skips": self._skips,
-                   # pytest's own status: the parent requires it and the process's to agree
-                   "exitstatus": _exit_status(exitstatus),
-                   "testsfailed": _tests_failed(session.testsfailed)}
-        if self._uncollected_exposed is not None:
-            payload["uncollected_exposed"] = self._uncollected_exposed
-        data = dumps(payload).encode()  # the optional fact never makes the record too big
-        if len(data) > _MAX_REPORT_BYTES and payload.pop("uncollected_exposed", None) is not None:
-            data = dumps(payload).encode()
-        if self._fd is not None:
-            ftruncate(self._fd, 0)
-            written = 0
-            while written < len(data):
-                step = pwrite(self._fd, data[written:], written)
-                if step <= 0:  # no progress: leave a short record, which the parent refuses
-                    break
-                written += step
-            return
-        fd = open_(self._path, flags, 0o600)
-        with fdopen(fd, "w") as handle:
-            dump(payload, handle)
-        chmod(self._path, 0o644)  # the owner reads it (a different user under the account)
+    def pytest_sessionfinish(self, session, exitstatus, _io=_IO, _payload=_payload, _write=_write):
+        _write(self, _payload(self, exitstatus, session.testsfailed), self._fd, self._path, _io)
 
 
 def pytest_configure(config):
@@ -270,6 +308,7 @@ def pytest_configure(config):
     if _HANDOVER:
         config.pluginmanager.register(_Reporter(*_HANDOVER), "cairnwork_report_guard")
         _HANDOVER = None
+
 '''
 )
 
@@ -287,9 +326,9 @@ def install_plugin(directory: Path, data_paths=()) -> None:
     os.chmod(path, 0o640)  # not the umask-masked open() mode: the verifier account reads by group
 
 
-def read_verdict(path: Path, nonce: str) -> Verdict:
+def read_verdict(path: Path, nonce: str, collected: bool = False) -> Verdict:
     """Read the plugin's record from a path (the verifier-account hand-over). See
-    ``parse_verdict`` for what makes ``ran`` true."""
+    ``parse_verdict`` for what makes ``ran`` true and for ``collected``."""
     try:
         # a candidate controls this path in run_dir: no symlink, and O_NONBLOCK + a regular-file
         # check so a FIFO planted in its place cannot hang the parent open().
@@ -301,10 +340,10 @@ def read_verdict(path: Path, nonce: str) -> Verdict:
             raw = handle.read(MAX_REPORT_BYTES + 1)  # cap the read
     except OSError:
         return Verdict(False, {})
-    return parse_verdict(raw, nonce)
+    return parse_verdict(raw, nonce, collected)
 
 
-def read_verdict_fd(fd: int, nonce: str) -> Verdict:
+def read_verdict_fd(fd: int, nonce: str, collected: bool = False) -> Verdict:
     """Read the record from the parent's own descriptor of the anonymous report file."""
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -312,10 +351,10 @@ def read_verdict_fd(fd: int, nonce: str) -> Verdict:
         raw = os.pread(fd, MAX_REPORT_BYTES + 1, 0)
     except OSError:
         return Verdict(False, {})
-    return parse_verdict(raw, nonce)
+    return parse_verdict(raw, nonce, collected)
 
 
-def parse_verdict(raw: bytes, nonce: str) -> Verdict:
+def parse_verdict(raw: bytes, nonce: str, collected: bool = False) -> Verdict:
     """``ran`` is true only when sessionfinish wrote the record, it matches the nonce, at least
     one test was collected, every collected test produced a result, all results are ``passed``,
     pytest's own exit status and failure count are 0, no collector failed or was skipped, no
@@ -324,7 +363,10 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     ``recorded`` and the collector and teardown lists are returned whenever the nonce matches
     (even when not all passed) so base_comparison can see a test that failed. A record over
     MAX_REPORT_BYTES (a suite too large for one report, #184) is ``too_big`` so the caller can
-    say why nothing was read."""
+    say why nothing was read. ``collected`` (#1671) reads the collection record instead: the one
+    that carries ``stage: "collected"`` and no outcome. Each read takes only its own kind, so a
+    collection record is never taken for the final one (a run killed after collection has no
+    final record) and the reverse."""
     if len(raw) > MAX_REPORT_BYTES:
         return Verdict(False, {}, too_big=True)
     try:
@@ -332,5 +374,10 @@ def parse_verdict(raw: bytes, nonce: str) -> Verdict:
     except (json.JSONDecodeError, ValueError, RecursionError):
         return Verdict(False, {})
     if not isinstance(data, dict) or data.get("nonce") != nonce:
+        return Verdict(False, {})
+    if collected:
+        if data.get("stage") != "collected" or data.get("outcomes") != {}:
+            return Verdict(False, {})
+    elif "stage" in data:  # a collection record is never the final one
         return Verdict(False, {})
     return build_verdict(data)
