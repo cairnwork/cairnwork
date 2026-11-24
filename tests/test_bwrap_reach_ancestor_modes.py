@@ -28,12 +28,13 @@ def world():
             (base / "out" / "d").chmod(0o755)
 
 
-def _owner_stat_denied_below(monkeypatch, parent):
-    """Make the owner's lstat of anything below ``parent`` fail EACCES, as on Linux."""
+def _owner_stat_denied_below(monkeypatch, parent, exact=False):
+    """Make the owner's lstat of anything below ``parent`` (or ``parent`` itself, ``exact``) fail
+    EACCES, as on Linux."""
     real = os.lstat
 
     def lstat(path, *a, **kw):
-        if str(path).startswith(str(parent) + os.sep):
+        if str(path) == str(parent) if exact else str(path).startswith(str(parent) + os.sep):
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
         return real(path, *a, **kw)
 
@@ -71,3 +72,13 @@ def test_an_ancestor_closed_to_everyone_stays_unreachable_and_is_skipped(world):
         (world / "other",), (), home=world / "home", mask_home_credentials=False
     )
     assert not [ln for ln in policy.text.split("\n") if ln.startswith(str(world / "out"))]
+
+
+def test_a_denied_first_part_has_no_enterable_parent_before_it(world, monkeypatch):
+    """Nothing was shown enterable above the first part, so a denial there is not reachable."""
+    d = (world / "out" / "d").resolve()
+    _owner_stat_denied_below(monkeypatch, "/", exact=True)
+    assert bwrap_reach.account_may_traverse(str(d / "sub")) is False
+    monkeypatch.chdir(world)
+    _owner_stat_denied_below(monkeypatch, "out", exact=True)
+    assert bwrap_reach.account_may_traverse("out/d/sub") is False

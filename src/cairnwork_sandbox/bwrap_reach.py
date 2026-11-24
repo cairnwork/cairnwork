@@ -32,7 +32,7 @@ def account_may_traverse(directory: str) -> bool:
         try:
             info = os.lstat(current)
         except PermissionError:  # the owner's bits shut it out below an enterable parent: unknown
-            return current != "/"
+            return current != part
         except OSError:
             return False
         if not stat.S_ISDIR(info.st_mode) or not _may_enter(current, info):
