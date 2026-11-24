@@ -38,7 +38,13 @@ def summarize(xml_path: Path) -> tuple[dict[str, dict[str, float]], dict[str, fl
 
 def _cell(text: str) -> str:
     """A file name safe inside a markdown table cell and a code span."""
-    return text.replace("|", "\\|").replace("`", "'").replace("\n", " ")
+    return (
+        text.replace("\\", "/")
+        .replace("|", "\\|")
+        .replace("`", "'")
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
 
 
 def render(xml_path: Path, title: str, top: int) -> str:

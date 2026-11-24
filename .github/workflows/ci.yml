@@ -251,7 +251,7 @@ jobs:
             -m verifier_account --ignore=tests/test_1039_1353_witnesses.py
       # The time of every test file of this shard, for the job summary (not a check: never fails).
       - name: Per-file time in the job summary
-        if: always() && steps.shard_tests.outcome != 'skipped'
+        if: ${{ (success() || failure()) && steps.shard_tests.outcome != 'skipped' }}
         continue-on-error: true
         run: |
           for xml in "$RUNNER_TEMP"/macos-*.xml; do
@@ -354,6 +354,7 @@ jobs:
   # #1353 gate (the gate is on `test` and on macOS shard 1): a pull_request job with read-only
   # permissions and no secrets, and not a required check.
   test-linux-sandbox-probe:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
@@ -379,7 +380,7 @@ jobs:
             --junitxml="$RUNNER_TEMP/probe.xml" -n auto --dist loadgroup \
             -m "sandbox and not verifier_account" --ignore=tests/test_1039_1353_witnesses.py
       - name: Per-file result and time in the job summary
-        if: always() && steps.probe_tests.outcome != 'skipped'
+        if: ${{ (success() || failure()) && steps.probe_tests.outcome != 'skipped' }}
         continue-on-error: true
         run: |
           python3 -I scripts/ci_junit_summary.py "$RUNNER_TEMP/probe.xml" \
