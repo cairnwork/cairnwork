@@ -1,9 +1,10 @@
 """Summarise the rows of tests/measure_986_ac8.py against the #986 AC8 thresholds.
 
-Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N] [--expect-n N]. Prints a markdown table and
-exits 0; exits 1 and prints INVALID when the rows cannot support the numbers (no rows, a missing
-or repeated case, fewer than --min-n pairs, default 20). Time is taken from the good candidate
-only (a bad candidate refused early is cheaper by design) and pair 0 is a warm-up, left out."""
+Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N] [--expect-n N].
+Prints a markdown table and exits 0; exits 1 and prints INVALID when the rows cannot support the
+numbers (no rows, a missing or repeated case, a pair count other than --expect-n, fewer than
+--min-n pairs, default 20). Time is taken from the good candidate only, and only from pairs that
+completed in both arms; pair 0 is a warm-up, left out."""
 
 from __future__ import annotations
 
