@@ -32,6 +32,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     OVERLAY_RULE,
     TestCommitRejected,
     TestFiles,
+    author_reason,
     deleted_of,
     overlay_tree,
 )

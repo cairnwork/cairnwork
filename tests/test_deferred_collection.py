@@ -105,9 +105,9 @@ def test_worker_path_needs_a_target_for_each_collected_node_id(project, tmp_path
                  verifiers=_argv(*targets))  # fmt: skip
     assert result.status == status, result.reason
     if status == "FAILED":
-        assert result.reason.startswith("DEFERRED_TESTS_NOT_TARGETED: 1 test file(s);"), (
-            result.reason
-        )
+        assert result.reason.startswith(
+            "DEFERRED_TESTS_NOT_TARGETED: 1 refusal (detail withheld)"
+        ), result.reason
 
 
 @sandbox
@@ -117,7 +117,7 @@ def test_worker_path_refuses_a_new_test_pytest_does_not_collect(project, tmp_pat
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
     assert result.reason.startswith("DEFERRED_TESTS_NOT_COLLECTED"), result.reason
-    assert "1 new test" in result.reason and "TestK" not in result.reason  # #1186: a count
+    assert "detail withheld" in result.reason and "TestK" not in result.reason  # #1186: a count
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # refused before a base run
 
 
@@ -128,7 +128,7 @@ def test_worker_path_refuses_a_new_test_the_base_run_did_not_run(project, tmp_pa
                  verifiers=_argv("tests/test_regression.py"))  # fmt: skip
     assert result.status == "FAILED"
     assert result.reason.startswith("DEFERRED_TESTS_NOT_RUN:"), result.reason
-    assert "ran 1" in result.reason and "TestK" not in result.reason  # #1186: a count
+    assert "detail withheld" in result.reason and "TestK" not in result.reason  # #1186: a count
 
 
 @sandbox
@@ -139,7 +139,7 @@ def test_verify_refuses_a_new_test_the_base_run_did_not_run(project, state):
     code, out = verify(state, project, base, cand, "--test-commit", test_commit, tests=(command,))
     assert code == 2 and out["status"] == "REFUSED" and out["verified"] is False
     assert out["reason"].startswith("DEFERRED_TESTS_NOT_RUN"), out
-    assert "ran 1" in out["reason"] and "TestK" not in out["reason"]  # #1186: a count
+    assert "detail withheld" in out["reason"] and "TestK" not in out["reason"]  # #1186: a count
 
 
 # #697: the verification run's record must hold every new test too. TestK is collected on the base
