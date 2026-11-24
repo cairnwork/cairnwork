@@ -112,6 +112,10 @@ def test_every_import_time_path_to_a_changed_definition_stays_dropped(code):
 
 HELPER = "import pytest\ndef is_ci(): return False\n"
 HONEST = [
+    (
+        "import unittest\nclass TestN(unittest.TestCase):\n    def test_new(self): assert True\n",
+        "",
+    ),
     ("import threading\nLOCK = threading.Lock()\ndef test_new(): assert True\n", ""),
     (
         "class Helper:\n    def run(self): return 1\ndef test_new(): assert Helper().run() == 1\n",
@@ -144,3 +148,14 @@ HONEST = [
 @pytest.mark.parametrize("code, extra", HONEST, ids=range(len(HONEST)))
 def test_honest_changes_stay_removed(code, extra):
     assert _verdict(code, extra) == "removed"
+
+
+NESTED = (
+    "import threading\ndef f():\n    class Th(threading.Thread):\n"
+    "        def run(self): pass\n    Th().start()\n"
+)
+
+
+def test_external_base_class_defined_inside_a_reached_function_exposes_its_methods():
+    """The library may call ``Th.run``, so a changed ``run`` elsewhere cannot be ruled out."""
+    assert _verdict(NESTED + "def run(): assert True\nf()\n", NESTED) == "dropped"
