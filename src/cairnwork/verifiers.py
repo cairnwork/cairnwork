@@ -255,8 +255,6 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     plugins = pytest_config.installed_plugins(python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
-    if batch.keep_log:
-        (private / EVIDENCE_MARK).touch()
     channel = report_channel.open_channel(private) if account is None else None
     # close the channel, then drop private/run even if that close raises
     with unless_interrupted(partial(close_private, private, account)):
@@ -265,6 +263,10 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
             names = fixture_probe.finish(spec, ctx, batch.candidate_commit, private, ini_text, run)
             return replace(run, fixture_names=names)
         finally:
+            # After the child has ended (or the run failed): code under test must not see the mark
+            # at Path(HOME).parents[1] (#1698). An interrupt still gets it before recovery looks.
+            if batch.keep_log:
+                (private / EVIDENCE_MARK).touch()
             if channel is not None:
                 channel.close()
 

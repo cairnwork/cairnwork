@@ -66,8 +66,7 @@ def execute(
             running = stop is not None and not timed_out and _running(process.pid)
             # Another account's processes: the owner cannot signal them; reap() kills them
             # all and says how many were running (the main one, if it timed out, included).
-            escaped = reap() if reap is not None else 0
-            escaped = max(escaped - 1, 0) if running and reap is not None else escaped
+            escaped = (reap(1) if running else reap()) if reap is not None else 0
             finished = True
         finally:
             _kill_group(process.pid)
