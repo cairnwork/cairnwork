@@ -25,12 +25,14 @@ _ACL = "system.posix_acl_access"
 
 def account_may_traverse(directory: str) -> bool:
     """Every directory from ``/`` down to ``directory`` is a real directory the account may enter.
-    ``lstat``: a symlinked component or a stat error counts as not traversable (fail closed)."""
+    ``lstat``: a symlink or a stat error (bar a refusal below an enterable parent) is no."""
     current = ""
     for part in Path(directory).parts:
         current = os.path.join(current, part) if current else part
         try:
             info = os.lstat(current)
+        except PermissionError:  # the owner's bits shut it out below an enterable parent: unknown
+            return current != part
         except OSError:
             return False
         if not stat.S_ISDIR(info.st_mode) or not _may_enter(current, info):
