@@ -33,10 +33,12 @@ PS_TIMEOUT_SECONDS = 60
 
 
 def execute(
-    argv, cwd, env, timeout, log_path, reap=None, pass_fds=()
+    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None
 ) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
-    never holds the log's file descriptor); kill the group afterwards."""
+    never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671, a
+    callable polled with the wait, collect_stop.py) ends the wait early: the run is then killed
+    like any other and the early end is not a timeout."""
     token = env.get(RUN_TOKEN_VAR)
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
@@ -59,10 +61,13 @@ def execute(
         try:  # the group is killed on any way out after the start, an interrupt included (#537)
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
-            timed_out = not _wait_unreaped(process.pid, timeout)
+            timed_out = not _wait_unreaped(process.pid, timeout, stop)
+            # a run ended early by ``stop`` still has its main process, which reap() would count
+            running = stop is not None and not timed_out and _running(process.pid)
             # Another account's processes: the owner cannot signal them; reap() kills them
             # all and says how many were running (the main one, if it timed out, included).
             escaped = reap() if reap is not None else 0
+            escaped = max(escaped - 1, 0) if running and reap is not None else escaped
             finished = True
         finally:
             _kill_group(process.pid)
@@ -84,12 +89,17 @@ def execute(
     return (None if timed_out else process.returncode), timed_out, survivors
 
 
-def _wait_unreaped(pid: int, timeout: float | None) -> bool:
-    """True if the leader exited within timeout. It is left unreaped (a zombie), so its process
-    group id stays reserved until the group has been signalled (#1163)."""
+def _running(pid: int) -> bool:
+    return os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is None
+
+
+def _wait_unreaped(pid: int, timeout: float | None, stop=None) -> bool:
+    """True if the leader exited within timeout, or ``stop()`` said to end the run first. It is
+    left unreaped (a zombie), so its process group id stays reserved until the group has been
+    signalled (#1163)."""
     deadline = None if timeout is None else time.monotonic() + timeout
     while True:
-        if os.waitid(os.P_PID, pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None:
+        if not _running(pid) or (stop is not None and stop()):
             return True
         if deadline is not None and time.monotonic() >= deadline:
             return False

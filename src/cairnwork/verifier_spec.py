@@ -57,8 +57,9 @@ class VerifierSpec:
     # #796: base runs only; a collect error ends that file, not the session (exit 1, not 2)
     continue_on_collect_errors: bool = False
     record_fixtures: bool = False  # #986: owner runs also record fixture names (fixture_probe.py)
-    # #1671: False on a collect_only spec = the argv of a real run; the guard stops it after
-    # collection (report_guard.QUIET_SOURCE), so a test cannot tell it from the run that executes it
+    # #1671: False on a collect_only spec = the argv and hand-over of a real run; the parent ends
+    # it when it reads the guard's collection record (collect_stop.py), so a test cannot tell it
+    # from the run that executes it
     announce: bool = True
 
     def flags(self) -> tuple[str, ...]:

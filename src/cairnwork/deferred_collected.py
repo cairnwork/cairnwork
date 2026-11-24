@@ -5,8 +5,9 @@ reached through an alias, attribute or subscript, a default ``runTest``, a docte
 settings turn on) and a visible new test sits beside it, the hidden one was never required to run:
 a false green. This check asks pytest itself. One collect-only run on the base and one on the test
 commit (same sandbox, ini and guard as every verifier run, collect_reader.py) over the test
-commit's Python files (#1671: without ``--collect-only`` in the arguments, the guard stops the run
-after collection, so a test that reads its arguments is collected as it will be run): an id
+commit's Python files (#1671: without ``--collect-only`` in the arguments, and with the same
+hand-over as a real run; the parent ends the run when it reads the guard's collection record, so a
+test that reads its arguments or its surroundings is collected as it will be run): an id
 collected only on the test commit, parametrisation stripped, that
 ``new_tests`` did not return is refused, DEFERRED_TESTS_UNREADABLE.
 
