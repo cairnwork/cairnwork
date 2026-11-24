@@ -135,7 +135,10 @@ def _probe(task, files, result, ctx: VerifyContext, budget, tag="p"):
         reason = "base-probe-incomplete"
     try:  # #331: the operator sees why the probe was unusable
         if reason is not None:
-            tail = probe_log_tail(run.log_path)
+            # #1727: with a test commit the run is hidden; the base output can carry its text
+            tail = (
+                "(tail withheld, hidden run)" if task.test_commit else probe_log_tail(run.log_path)
+            )
             result.logs.append(f"p2p base probe {tag}: {reason}, rc={run.returncode}: {tail}")
     finally:
         for r in runs:  # base evidence is not for Core
