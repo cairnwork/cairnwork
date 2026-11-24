@@ -49,6 +49,8 @@ import ast
 from collections.abc import Iterable, Iterator, Sequence
 from posixpath import dirname, join
 
+from cairnwork.conftest_plugin_binds import imported_plugins, unreadable
+
 MAX_FILES = 500  # unchanged modules followed per conftest before the walk refuses
 MODULE_SUFFIXES = (".py", ".pyc", ".so", ".pyd")  # files an import statement can load (r6)
 _DYNAMIC = frozenset({"setattr", "delattr", "exec", "eval", "globals", "locals", "vars"})
@@ -77,7 +79,7 @@ def reached_change(
     by_name = _names(files)
     while queue:
         here, parsed = queue.pop(0)
-        if (targets := _targets(here, parsed, files, by_name)) is None:
+        if (targets := _targets(here, parsed, files, by_name)) is None or imported_plugins(parsed):
             return "has an unreadable pytest_plugins with-binding"
         for target in sorted(targets):
             if target in changed:
@@ -173,7 +175,7 @@ def _imports(tree: ast.Module, *, stdlib: bool = True) -> Iterator[tuple[int, It
             if dots:
                 yield dots, [n.lstrip(".") for n in names]
         elif values := _plugin_values(node, tree if stdlib else None):
-            if isinstance(node, ast.With | ast.AsyncWith) and None in values:
+            if unreadable(node, values):
                 yield -1, ()
             else:
                 yield 0, _strings(values)
