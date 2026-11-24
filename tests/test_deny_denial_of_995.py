@@ -40,3 +40,21 @@ def test_the_answer_is_one_of_two_words_and_the_summary_is_unchanged():
     assert answers == {"DENIED", "UNKNOWN"}
     assert str(judge(stream(line(OWN)), window())).startswith("DENIED: file-read-data /private/")
     assert deny_channel.Evidence is Evidence
+
+
+def test_a_denial_beyond_the_summary_limit_is_still_denied():
+    many = [
+        line(f"Sandbox: python3.13(7) deny(1) file-read-data /noise/{n}")
+        for n in range(deny_channel.MAX_LISTED + 2)
+    ]
+    evidence = judge(stream(*many), window())
+    last = ("file-read-data", f"/noise/{deny_channel.MAX_LISTED + 1}")
+    assert "/noise/9" not in evidence.detail  # the summary names only MAX_LISTED of them
+    assert evidence.denial_of(*last) == "DENIED"
+
+
+def test_the_match_is_exact_so_another_case_or_path_is_unknown():
+    evidence = judge(stream(line(OWN)), window())
+    assert evidence.denial_of("FILE-READ-DATA", TARGET[1]) == "UNKNOWN"
+    assert evidence.denial_of(TARGET[0], TARGET[1].upper()) == "UNKNOWN"
+    assert evidence.denial_of(TARGET[0], TARGET[1] + "/") == "UNKNOWN"
