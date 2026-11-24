@@ -261,7 +261,7 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
         try:
             run = _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
             got = fixture_probe.finish_record(
-                spec, ctx, batch.candidate_commit, private, ini_text, run
+                spec, ctx, batch.candidate_commit, private, ini_text, run, checkout
             )
             return replace(
                 run, fixture_names=None if got is None else got.names, collect_record=got

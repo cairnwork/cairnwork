@@ -26,6 +26,9 @@ class CollectedRecord:
     plugins: tuple[tuple[str, str | None], ...]
     sys_path: tuple[str, ...]
     sys_path_finish: tuple[str, ...]
+    root: str = (
+        ""  # the run's checkout, realpath: set by the caller that ran it, not read from disk
+    )
 
 
 def collected_names(

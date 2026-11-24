@@ -39,7 +39,7 @@ def _calls(monkeypatch, result=None, error=None):
         calls.append((commit, specs, run_id, kwargs))
         if error:
             raise error
-        return (SimpleNamespace(fixture_names=result),)
+        return (SimpleNamespace(fixture_names=result, collect_record=None),)
 
     monkeypatch.setattr(bfn, "run_verifiers", fake)
     return calls
@@ -74,7 +74,7 @@ def test_an_account_run_does_not_collect(task, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "paths", [("tests/test_a.py",), ("tests/conftest.py", "tests/test_new.py")]
+    "paths", [("tests/test_new.py",), ("tests/conftest.py", "tests/test_new.py")]
 )
 def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
     calls = _calls(monkeypatch, frozenset({"shared"}))
@@ -86,7 +86,7 @@ def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
     ("account", "paths", "kind", "error", "reason", "level"),
     [
         (object(), PATHS, "ok", None, "ACCOUNT_RUN", "INFO"),
-        (None, ("tests/test_a.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
+        (None, ("tests/test_new.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
         (None, ("tests/conftest.py", "tests/test_new.py"), "ok", None, "NO_BASE_TARGET", "INFO"),
         (None, PATHS, "ok", RuntimeError("x"), "RUN_FAULT", "WARNING"),
         (None, PATHS, "none", None, "NO_NAMES_RECORDED", "WARNING"),
@@ -173,3 +173,27 @@ def test_a_log_handler_that_raises_does_not_change_the_result(task, monkeypatch,
     finally:
         bfn.LOG.removeHandler(handler)
     assert seen == {"collected": None}
+
+
+def test_a_conftest_free_commit_that_changes_a_base_file_now_gets_the_run(task, monkeypatch):
+    calls = _calls(monkeypatch, frozenset({"shared"}))  # #1769: plugin and sys.path reach
+    assert bfn.collect(SimpleNamespace(account=None), task, ("tests/test_a.py",), "r-f")
+    [(commit, [spec], _, _)] = calls
+    assert commit == task.base_commit and spec.targets == ("tests/test_a.py",)
+
+
+def test_a_changed_non_python_base_file_runs_against_one_base_test_file(task, monkeypatch):
+    (task.repo / "data.bin").write_bytes(b"x")
+    import subprocess
+
+    subprocess.run(["git", "-C", str(task.repo), "add", "-A"], check=True)
+    subprocess.run(
+        ["git", "-C", str(task.repo), "-c", "user.name=x", "-c", "user.email=x@x",
+         "commit", "-qm", "d"], check=True)  # fmt: skip
+    task.base_commit = subprocess.run(
+        ["git", "-C", str(task.repo), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+    calls = _calls(monkeypatch, frozenset({"shared"}))
+    assert bfn.collect(SimpleNamespace(account=None), task, ("data.bin",), "r-f")
+    [(_, [spec], _, _)] = calls
+    assert spec.targets == ("tests/test_a.py",)
