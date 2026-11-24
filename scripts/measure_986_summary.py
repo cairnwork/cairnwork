@@ -4,7 +4,8 @@ Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N] [--expect-n 
 Prints a markdown table and exits 0; exits 1 and prints INVALID when the rows cannot support the
 numbers (no rows, a missing or repeated case, a pair count other than --expect-n, fewer than
 --min-n pairs, default 20). Time is taken from the good candidate only, and only from pairs that
-completed in both arms; pair 0 is a warm-up, left out."""
+completed in both arms; pair 0 is a warm-up, left out
+(with a single pair it is kept: a one-pair run is a dry run, not an AC8 number)."""
 
 from __future__ import annotations
 
@@ -15,7 +16,7 @@ from collections import Counter
 from pathlib import Path
 
 MIN_N = 20
-MIN_TIMED_FRACTION = 0.4  # of the good pairs after the warm-up that must have a usable time
+MIN_TIMED_FRACTION = 0.9  # of the good pairs after the warm-up that must have a usable time
 
 
 def _p95(values: list[float]) -> float:
@@ -38,7 +39,10 @@ def _invalid(rows: list[dict], min_n: int, expect_n: int | None) -> list[str]:
         reasons.append(f"{len(want - set(keys))} of {len(want)} expected cases missing")
     if any(v > 1 for v in keys.values()):
         reasons.append("a case appears more than once")
-    if any(not math.isfinite(r["seconds"]) or r["seconds"] <= 0 for r in rows):
+    if any(
+        isinstance(r["seconds"], bool) or not math.isfinite(r["seconds"]) or r["seconds"] <= 0
+        for r in rows
+    ):
         reasons.append("a time is not a finite positive number")
     return reasons
 
@@ -104,6 +108,7 @@ def table(s: dict) -> str:
         ("End-to-end increase (good candidate)", s["end_to_end_increase"], "<= 0.20"),
         ("New false passes", s["new_false_passes"], "0"),
         ("False blocks (step on)", s["false_blocks_on"], "0"),
+        ("False blocks (step off)", s["false_blocks_off"], "0"),
         ("Added max (s)", s["added_max_s"], "-"),
         ("Error rows", s["errors"], "0"),
     ]
