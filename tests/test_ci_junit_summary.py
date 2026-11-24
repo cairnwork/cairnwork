@@ -11,6 +11,7 @@ XML = """<testsuites><testsuite>
 <testcase classname="tests.test_a" name="t2" file="tests/test_a.py" time="1.5"><failure/></testcase>
 <testcase classname="tests.test_b" name="t3" file="tests/test_b.py" time="10"/>
 <testcase classname="tests.test_b" name="t4" file="tests/test_b.py" time="0"><skipped/></testcase>
+<testcase classname="tests.test_d" name="t6" file="tests/test_d.py" time="1"><error/></testcase>
 <testcase classname="tests.test_c.TestX" name="t5" time="1"/>
 </testsuite></testsuites>"""
 
@@ -22,7 +23,8 @@ def test_per_file_time_outcomes_and_totals(tmp_path: Path):
     assert files["tests/test_a.py"] == {"seconds": 4.0, "passed": 1, "failed": 1, "skipped": 0}
     assert files["tests/test_b.py"] == {"seconds": 10.0, "passed": 1, "failed": 0, "skipped": 1}
     assert "tests/test_c/TestX.py" in files  # no file attribute: derived from the classname
-    assert (totals["passed"], totals["failed"], totals["skipped"]) == (3, 1, 1)
+    assert (totals["passed"], totals["failed"], totals["skipped"]) == (3, 2, 1)
+    assert files["tests/test_d.py"]["failed"] == 1  # an <error/> (setup, teardown) counts as failed
 
 
 def test_the_table_lists_the_slowest_file_first_and_names_the_failing_files(tmp_path: Path):
@@ -58,3 +60,11 @@ def test_an_unknown_xml_encoding_declaration_is_one_line_not_an_exception(tmp_pa
     path = tmp_path / "j.xml"
     path.write_text('<?xml version="1.0" encoding="no-such-codec"?><testsuites/>')
     assert "no JUnit summary" in summary.render(path, "probe", 5)
+
+
+def test_a_backslash_before_a_pipe_cannot_unescape_the_pipe(tmp_path: Path):
+    path = tmp_path / "j.xml"
+    case = '<testcase name="t" file="tests/a\\|b.py" time="1"/>'
+    path.write_text(f"<testsuites><testsuite>{case}</testsuite></testsuites>")
+    row = [line for line in summary.render(path, "probe", 5).splitlines() if "b.py" in line][-1]
+    assert "tests/a/\\|b.py" in row and row.count("|") == 7
