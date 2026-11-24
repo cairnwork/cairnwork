@@ -58,7 +58,7 @@ def _is_test_name(name, functions):
 
 
 def _origin_module(value):
-    while True:
+    for _ in range(64):
         if type(value) in (staticmethod, classmethod):
             value = type(value).__dict__["__func__"].__get__(value, type(value))
         elif type(value) is types.MethodType:
@@ -67,6 +67,8 @@ def _origin_module(value):
             value = functools.partial.func.__get__(value, functools.partial)
         else:
             break
+    else:
+        return None
     if type(value) is types.FunctionType:
         namespace = types.FunctionType.__dict__["__globals__"].__get__(value, types.FunctionType)
         return namespace.get("__name__")
