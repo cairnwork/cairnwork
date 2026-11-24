@@ -32,25 +32,25 @@ jobs:
           bwrap --version
           git --version
           uv run python -c "from cairnwork_sandbox import bwrap; assert bwrap.available() is True"
+      # bash steps run with -e -o pipefail: a failing pytest or an INVALID summary (exit 1) fails the job.
       - name: Measure (base collect on and off, real bwrap)
-        shell: bash  # bash -e -o pipefail: a failing pytest fails the step despite the pipe
+        shell: bash
         env:
           CAIRNWORK_REQUIRE_SANDBOX: "1"
           CW986_N: ${{ inputs.runs }}
-          CW986_OUT: ${{ runner.temp }}/rows.jsonl
-        run: uv run pytest -q -p no:cacheprovider tests/measure_986_ac8.py 2>&1 | tee "$RUNNER_TEMP/pytest.log" | tail -n 40
+          CW986_OUT: ${{ runner.temp }}/m986/rows.jsonl
+        run: |
+          mkdir -p "$RUNNER_TEMP/m986"
+          uv run pytest -q -p no:cacheprovider tests/measure_986_ac8.py 2>&1 | tee "$RUNNER_TEMP/m986/pytest.log" | tail -n 40
       - name: Summary
         if: always()
-        shell: bash  # pipefail: an INVALID exit 1 must reach the job status
+        shell: bash
         env:
           CW986_N: ${{ inputs.runs }}
         run: |
-          uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/rows.jsonl" "$RUNNER_TEMP/summary.json" --expect-n "$CW986_N" | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/m986/rows.jsonl" "$RUNNER_TEMP/m986/summary.json" --expect-n "$CW986_N" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
           name: measure-986
-          path: |
-            ${{ runner.temp }}/rows.jsonl
-            ${{ runner.temp }}/summary.json
-            ${{ runner.temp }}/pytest.log
+          path: ${{ runner.temp }}/m986
