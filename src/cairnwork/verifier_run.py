@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cairnwork.collected_names import CollectedRecord
 from cairnwork.core_request import VerifierObservation
 from cairnwork.verifier_spec import VerifierSpec
 
@@ -50,3 +51,4 @@ class VerifierRun:
     renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
     uncollected_exposed: tuple[str, ...] | None = None
     fixture_names: frozenset[str] | None = None  # #986: the recorder's names; None unless verified
+    collect_record: CollectedRecord | None = None  # #1769: that record whole; not hashed

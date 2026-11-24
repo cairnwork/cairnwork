@@ -2,11 +2,14 @@
 
 Returns the set of fixture names the base requests, or None meaning "use the #916 rule
 exactly as on main". Any doubt returns None: this reader never yields fewer names than main.
+``collected_record`` (#1769) returns the same validated record whole: its names, plugin modules
+and sys.path lists, under the same checks.
 """
 
 import json
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +18,28 @@ _MAX_BYTES = 4 * 1024 * 1024
 _STAGES = frozenset({"itemcollected", "modifyitems_before", "modifyitems_after", "finish"})
 
 
+@dataclass(frozen=True)
+class CollectedRecord:
+    """A validated record: the names, the plugin modules (name, file) and both sys.path lists."""
+
+    names: frozenset[str]
+    plugins: tuple[tuple[str, str | None], ...]
+    sys_path: tuple[str, ...]
+    sys_path_finish: tuple[str, ...]
+
+
 def collected_names(
     run_dir: Path, *, exit_code: object, settings_digest: str, base_sha: str
 ) -> frozenset[str] | None:
+    record = collected_record(
+        run_dir, exit_code=exit_code, settings_digest=settings_digest, base_sha=base_sha
+    )
+    return None if record is None else record.names
+
+
+def collected_record(
+    run_dir: Path, *, exit_code: object, settings_digest: str, base_sha: str
+) -> CollectedRecord | None:
     if type(exit_code) is not int or exit_code not in _OK_EXIT_CODES:
         return None
     if type(settings_digest) is not str or type(base_sha) is not str:
@@ -27,7 +49,12 @@ def collected_names(
     record = _load(run_dir / "record.json")
     if not _valid(record, settings_digest, base_sha):
         return None
-    return frozenset(record["names"])
+    return CollectedRecord(
+        names=frozenset(record["names"]),
+        plugins=tuple((plugin["name"], plugin["file"]) for plugin in record["plugin_modules"]),
+        sys_path=tuple(record["sys_path"]),
+        sys_path_finish=tuple(record["sys_path_finish"]),
+    )
 
 
 def _load(path: Path) -> Any:
