@@ -48,6 +48,7 @@ jobs:
         env:
           CW986_N: ${{ inputs.runs }}
         run: |
+          mkdir -p "$RUNNER_TEMP/m986"
           uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/m986/rows.jsonl" "$RUNNER_TEMP/m986/summary.json" --expect-n "$CW986_N" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
