@@ -106,7 +106,7 @@ def _findings(tree, rel):
         elif isinstance(node, ast.ImportFrom):
             modules = [node.module or "", *[a.name for a in node.names]]
         if any(p.startswith("deny_") for m in modules for p in m.split(".")) and rel not in IMPORTS:
-            found.append(f"{rel}:{node.lineno} imports a deny module")
+            found.append(f"{rel}:{getattr(node, 'lineno', 0)} imports a deny module")
     return found
 
 
