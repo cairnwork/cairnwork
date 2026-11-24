@@ -189,6 +189,16 @@ def test_a_candidate_that_leaves_the_import_crash_is_uncomparable(project, state
     assert out["core_status"] == ""
 
 
+@sandbox
+def test_a_failed_base_check_without_deferred_tests_keeps_the_real_tail(project, state):
+    """#1727: only a run with a test commit withholds the probe tail; a plain verify keeps it."""
+    canary = "BASE-PROBE-CANARY-1727"
+    base = commit_change(project, {"src/calc.py": f"raise RuntimeError('{canary}')\n"})
+    out = in_process(project, state, base, candidate(project, base, {"src/calc.py": WRONG}))
+    lines = [line for line in out["logs"] if line.startswith("p2p base probe e")]
+    assert len(lines) == 1 and canary in lines[0] and "withheld" not in lines[0]
+
+
 VERIFY_TASK = replace(KEY_TASK, test_commit="")  # a verify call without deferred tests
 SOURCE = Path("/nonexistent/mirror")
 

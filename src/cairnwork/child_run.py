@@ -15,6 +15,7 @@ import time
 
 _PS = "/bin/ps"
 _POLL_SECONDS = 0.05
+GAUGE_FAILED = 1000  # return code: the memory gauge could not be read (not a real exit status)
 
 
 def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
@@ -29,10 +30,11 @@ def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
 
     ``memory_limit`` (bytes, #1246) is a sampled soft limit: the resident memory of the child's
     process group is read every 50 ms while it runs, so a spike shorter than a sample can pass,
-    and a process that leaves the group (its own session) is not counted. Going over the limit,
-    or a reading that cannot be taken while the group is still alive, kills the group and gives
-    ``(b"", False, 1)``, a refusal like the output cap. A reading that runs out of the time limit
-    counts as a timeout. (``RLIMIT_AS`` is not enforced on macOS, so the parent measures.)"""
+    and a process that leaves the group (its own session) is not counted. Going over the limit
+    kills the group and gives ``(b"", False, 1)``; a reading that cannot be taken while the group
+    is still alive kills it too and gives ``(b"", False, GAUGE_FAILED)`` (a host problem, not the
+    child's, #1700). Both are refusals like the output cap. A reading that runs out of the time
+    limit counts as a timeout. (``RLIMIT_AS`` is not enforced on macOS, so the parent measures.)"""
     output: list[bytes] = []
     size = 0
     process = None
@@ -60,11 +62,13 @@ def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
         writer = threading.Thread(target=_write_input, args=(process.stdin, payload), daemon=True)
         reader.start()
         writer.start()
-        timed_out, over_memory = _wait(process, timeout, memory_limit)
+        timed_out, over_memory, gauge_failed = _wait(process, timeout, memory_limit)
         _kill_child_group(process.pid)
         process.wait()
         writer.join(timeout=1)
         reader.join(timeout=1)
+        if gauge_failed:
+            return b"", False, GAUGE_FAILED
         if reader.is_alive() or writer.is_alive() or size >= output_cap or over_memory:
             return b"", timed_out, 1
         return b"".join(output), timed_out, process.returncode
@@ -77,30 +81,32 @@ def run_child(argv, payload, *, timeout, output_cap, memory_limit=None):
 
 
 def _wait(process, timeout, memory_limit):
-    """Wait for the child; return ``(timed_out, over_memory)``. Both end with the group killed."""
+    """Wait for the child; return ``(timed_out, over_memory, gauge_failed)``.
+
+    Each of the three ends with the group killed."""
     if memory_limit is None:
         try:
             process.wait(timeout=timeout)
-            return False, False
+            return False, False, False
         except subprocess.TimeoutExpired:
             _kill_child_group(process.pid)
-            return True, False
+            return True, False, False
     deadline = time.monotonic() + timeout
     while True:
         left = deadline - time.monotonic()
         if left <= 0:
             _kill_child_group(process.pid)
-            return True, False
+            return True, False, False
         try:
             process.wait(timeout=min(_POLL_SECONDS, left))
-            return False, False
+            return False, False, False
         except subprocess.TimeoutExpired:
             pass
         used = _group_rss_bytes(process.pid, max(deadline - time.monotonic(), 0.01))
         if used is None or used > memory_limit:
             _kill_child_group(process.pid)
             ran_out = used is None and time.monotonic() >= deadline
-            return ran_out, not ran_out
+            return ran_out, used is not None, used is None and not ran_out
 
 
 def _group_rss_bytes(group, budget):

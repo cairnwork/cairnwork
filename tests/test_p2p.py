@@ -276,8 +276,10 @@ def test_a_suite_too_large_for_one_report_degrades_or_refuses_and_says_so(
         assert "base-probe-report-over-cap" in result.reason and result.candidate_commit is None
 
 
-def test_unusable_base_probe_logs_tail_including_failure_marker(project, tmp_path):
-    failing = "raise RuntimeError('PROBE-TAIL-MARKER')\n"
+def test_unusable_base_probe_in_a_hidden_run_withholds_the_log_tail(project, tmp_path):
+    """#1727: a run with a test commit shows the probe's reason and exit code, never its output."""
+    canary = "PROBE-TAIL-CANARY-1727"
+    failing = f"raise RuntimeError('{canary}')\n"
     result = run(
         project,
         tmp_path,
@@ -288,30 +290,10 @@ def test_unusable_base_probe_logs_tail_including_failure_marker(project, tmp_pat
     probe_logs = [log for log in result.logs if log.startswith("p2p base probe")]
     assert len(probe_logs) == 1
     log = probe_logs[0]
-    assert "base-probe-failed" in log
-    assert "rc=" in log
-    assert "PROBE-TAIL-MARKER" in log
-
-
-def test_unusable_base_probe_log_tail_is_bounded_to_2048_characters(project, tmp_path):
-    msg = "Z" * 5000
-    failing = f"raise RuntimeError('{msg}')\n"
-    result = run(
-        project,
-        tmp_path,
-        {"src/calc.py": FIX_ADD},
-        mode="module-dir",
-        extra={"tests/test_fail.py": failing},
-    )
-    probe_logs = [log for log in result.logs if log.startswith("p2p base probe")]
-    assert len(probe_logs) == 1
-    log = probe_logs[0]
-    assert ", rc=" in log
-    _, _, tail = log.partition(", rc=")
-    _, colon_sep, tail_content = tail.partition(": ")
-    assert colon_sep
-    assert len(tail_content) <= 2048
-    assert "Z" * 50 in tail_content
+    assert "base-probe-failed" in log and "rc=" in log
+    assert "tail withheld" in log
+    assert not any(canary in line for line in result.logs)
+    assert canary not in result.reason
 
 
 TESTS_PY = "from calc import neg\ndef test_neg():\n    assert neg(2) == -2\n"

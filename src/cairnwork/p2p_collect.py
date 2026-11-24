@@ -40,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
-from cairnwork.child_run import run_child
+from cairnwork.child_run import GAUGE_FAILED, run_child
 from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
@@ -198,6 +198,9 @@ def _run_classification(base_ids, test_ids, edited, sources, exposed=None, chang
     output, timed_out, returncode = _run_child(_classify_argv(), payload)
     if timed_out:
         _analysis_failure("time limit exceeded")
+    if returncode == GAUGE_FAILED:  # #1700: the host could not measure; nothing about the candidate
+        detail = "the memory gauge of the classifier child could not be read"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_CLASSIFY_ENV_UNUSABLE", detail))
     if returncode != 0:
         _analysis_failure("child process failed")
     removed_set: set[str] = set()

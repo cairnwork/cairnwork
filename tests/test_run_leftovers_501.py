@@ -24,6 +24,7 @@ def test_module_dir_fallback_uses_a_distinct_probe_tag(monkeypatch, tmp_path):
         import_paths=(),
         allowed_files=("src/calc.py",),
         p2p_budget=30,
+        test_commit="",
     )
     result = SimpleNamespace(attempt_id="a0123456789abcdef", logs=[])
     files = ("tests/a/test_calc.py", "tests/z/test_misc.py")
