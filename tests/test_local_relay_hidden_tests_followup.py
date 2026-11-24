@@ -11,8 +11,13 @@ from typing import Any
 
 import pytest
 
-from experimental.local_relay import runtime
-from experimental.local_relay.hidden_tests import HiddenVerify, build_bundle, load_hidden
+from experimental.local_relay import hidden_tests, runtime
+from experimental.local_relay.hidden_tests import (
+    HiddenVerify,
+    _refuse_symlink_components,
+    build_bundle,
+    load_hidden,
+)
 from experimental.pause.core_judge import CoreJudge
 
 
@@ -63,6 +68,14 @@ def test_private_hidden_dir_above_the_repo_is_refused(tmp_path):
         load_hidden({"hidden_tests_dir": str(outer)}, repo)
 
 
+def test_hidden_dir_that_is_the_repo_root_is_refused(tmp_path):
+    repo, _base = _repo(tmp_path)
+    repo.chmod(0o700)
+    assert repo.lstat().st_mode & 0o077 == 0
+    with pytest.raises(ValueError, match="outside the fixture repository"):
+        load_hidden({"hidden_tests_dir": str(repo)}, repo)
+
+
 def test_build_run_once_wires_hidden_verify_and_verifier_python(tmp_path, monkeypatch):
     hidden_dir = _private_dir(tmp_path / "private")
     fixture = {
@@ -87,7 +100,15 @@ def test_build_run_once_wires_hidden_verify_and_verifier_python(tmp_path, monkey
     assert judge.intake.config()["verifier_python"] == sys.executable
 
 
-def test_commits_built_in_the_same_second_are_all_distinct(tmp_path):
+def test_commits_built_with_identical_timestamps_are_all_distinct(tmp_path, monkeypatch):
+    real_run = subprocess.run
+
+    def fixed_clock(cmd: Any, *args: Any, **kwargs: Any) -> Any:
+        env = {**kwargs["env"], "GIT_AUTHOR_DATE": "1700000000 +0000"}
+        env["GIT_COMMITTER_DATE"] = "1700000000 +0000"
+        return real_run(cmd, *args, **{**kwargs, "env": env})
+
+    monkeypatch.setattr(hidden_tests, "subprocess", SimpleNamespace(run=fixed_clock))
     repo, base = _repo(tmp_path)
     hidden = load_hidden({"hidden_tests_dir": str(_private_dir(tmp_path / "private"))}, repo)
     assert hidden is not None
@@ -97,12 +118,11 @@ def test_commits_built_in_the_same_second_are_all_distinct(tmp_path):
         out.mkdir()
         shas.append(build_bundle(repo, base, hidden, out))
         times.append(_git(out / "work", "show", "-s", "--format=%ct", shas[-1]))
+    assert times == ["1700000000"] * 3  # the clock is pinned: nothing but the message differs
     assert len(set(shas)) == 3  # a repeated sha would be a used test commit the store refuses
-    assert len(set(times)) < 3  # at least two were built in the same second
 
 
 # --- path-component symlink check (#1533 follow-up, #1743) ---------------------------------
-from experimental.local_relay.hidden_tests import _refuse_symlink_components  # noqa: E402
 
 
 def test_relative_link_target_is_resolved_against_the_links_own_directory(tmp_path):
