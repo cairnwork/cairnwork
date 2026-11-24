@@ -84,3 +84,23 @@ def test_pipeline_memory_hit_is_refused_without_verification(monkeypatch, repo, 
     assert result.status == "FAILED" and not result.verified
     assert "TEST_COMMIT_ANALYSIS_LIMIT" in result.reason
     assert MARK not in result.reason
+
+
+def test_an_unreadable_gauge_is_an_environment_reason_not_an_analysis_limit(monkeypatch):
+    """#1700: a host-side measuring failure says nothing about the candidate: UNCOMPARABLE."""
+    from cairnwork.child_run import GAUGE_FAILED
+    from cairnwork.deferred_tests import BaseUncomparable
+
+    monkeypatch.setattr(p2p_collect, "run_child", lambda *a, **k: (b"", False, GAUGE_FAILED))
+    with pytest.raises(BaseUncomparable) as caught:
+        p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
+    assert caught.value.comparison.code == "P2P_CLASSIFY_ENV_UNUSABLE"
+    assert caught.value.comparison.kind == "UNCOMPARABLE"
+
+
+def test_a_real_limit_hit_and_a_plain_child_failure_stay_analysis_limits(monkeypatch):
+    for rc in (1, 2, -9):
+        monkeypatch.setattr(p2p_collect, "run_child", lambda *a, rc=rc, **k: (b"", False, rc))
+        with pytest.raises(Rejected) as caught:
+            p2p_collect.classify({"t.py::a"}, set(), set(), lambda _: "", lambda _: "", exposed=())
+        assert caught.value.code == "TEST_COMMIT_ANALYSIS_LIMIT"

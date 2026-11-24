@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from cairnwork.child_run import run_child
+from cairnwork.child_run import GAUGE_FAILED, run_child
 
 pytestmark = pytest.mark.sandbox
 
@@ -114,7 +114,7 @@ def test_an_unreadable_memory_gauge_fails_closed(monkeypatch):
     code = "import time; time.sleep(60)"
     started = time.monotonic()
     got = run_child(_py(code), b"", timeout=60, output_cap=100, memory_limit=1 << 30)
-    assert got == (b"", False, 1) and time.monotonic() - started < 10
+    assert got == (b"", False, GAUGE_FAILED) and time.monotonic() - started < 10
 
 
 def test_a_gauge_that_hangs_does_not_outlast_the_time_limit(monkeypatch, tmp_path):
@@ -139,7 +139,7 @@ def test_a_live_group_missing_from_the_gauge_fails_closed(monkeypatch, tmp_path)
     got = run_child(
         _py("import time; time.sleep(60)"), b"", timeout=60, output_cap=100, memory_limit=1 << 30
     )
-    assert got == (b"", False, 1) and time.monotonic() - started < 10
+    assert got == (b"", False, GAUGE_FAILED) and time.monotonic() - started < 10
 
 
 def test_a_gone_group_reads_as_zero():
