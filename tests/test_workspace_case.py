@@ -1,7 +1,9 @@
 """#428: a base tree with paths that differ only in case, on a case-insensitive filesystem,
 is refused with that reason rather than the generic "not a clean checkout"."""
 
+import itertools
 import os
+import unicodedata
 
 import pytest
 from conftest import git
@@ -104,6 +106,39 @@ def test_case_collisions_group_files_and_directories():
     names = ["Docs/a.html", "docs/b.html", "lib/X.py", "lib/x.py", "y.py"]
     assert _case_collisions(names) == [["Docs", "docs"], ["lib/X.py", "lib/x.py"]]
     assert _case_collisions(["a/X", "b/x", "c"]) == []
+
+
+def test_case_collisions_group_nfc_and_nfd_spellings_too():
+    # one name on APFS (#1714): an NFC and an NFD spelling, with or without a case difference
+    nfc, nfd = "caf\u00e9.py", "cafe\u0301.py"
+    assert _case_collisions([f"d/{nfc}", f"d/{nfd}"]) == [sorted([f"d/{nfc}", f"d/{nfd}"])]
+    assert _case_collisions(["D\u00c9.py", "de\u0301.py"]) == [["D\u00c9.py", "de\u0301.py"]]
+    assert _case_collisions(["\u00e9/x.py", "e\u0301/y.py"]) == [["e\u0301", "\u00e9"]]
+
+
+def test_case_collisions_keep_different_names_apart():
+    assert _case_collisions(["cafe.py", "caf\u00e9.py"]) == []  # cafe is not café
+    assert _case_collisions(["\uff21.py", "A.py"]) == []  # NFKC pairs are different names
+    assert _case_collisions(["\u2460.py", "1.py"]) == []
+
+
+def _nfc_key(name):
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
+
+
+def test_case_collisions_match_on_either_key():
+    # U+0345 with unordered combining marks: equal by case fold, not by the NFC key alone
+    marks = ["\u0345", "\u0301", "\u0323", "\u0307"]
+    names = {"a" + "".join(order) for order in itertools.permutations(marks)}
+    names |= {n.replace("\u0345", "\u03b9") for n in list(names)}
+    pairs = [
+        (one, two)
+        for one, two in itertools.combinations(sorted(names), 2)
+        if one.casefold() == two.casefold() and _nfc_key(one) != _nfc_key(two)
+    ]
+    assert pairs  # the shape exists
+    for one, two in pairs[:6]:
+        assert _case_collisions([one, two]) == [sorted([one, two])]
 
 
 def test_the_detail_caps_groups_and_lists_every_kind_of_difference():
