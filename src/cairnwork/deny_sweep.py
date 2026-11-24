@@ -41,14 +41,14 @@ def sweep_stale(
     target_dir = Path(tempfile.gettempdir() if temp_dir is None else temp_dir)
     current_time = time.time() if now is None else now
     current_uid = os.getuid() if hasattr(os, "getuid") else None
-    removed = 0
+    removed = attempts = 0
     try:
         entries = os.scandir(target_dir)
     except OSError:
         return 0
     with entries:
         for entry in entries:
-            if removed >= max_remove:
+            if attempts >= max_remove:  # tries, so a directory that will not go cannot loop on
                 break
             if not entry.name.startswith(SWEEP_PREFIX):
                 continue
@@ -82,8 +82,10 @@ def sweep_stale(
                             continue
                 except (OSError, ValueError):
                     pass
+                attempts += 1
                 shutil.rmtree(entry.path, ignore_errors=True)
-                removed += 1
+                if not os.path.lexists(entry.path):  # only a directory that is gone counts
+                    removed += 1
             except OSError:
                 pass
     return removed
