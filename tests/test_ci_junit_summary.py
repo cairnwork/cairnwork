@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts import ci_junit_summary as summary
 
 XML = """<testsuites><testsuite>
@@ -68,3 +70,40 @@ def test_a_backslash_before_a_pipe_cannot_unescape_the_pipe(tmp_path: Path):
     path.write_text(f"<testsuites><testsuite>{case}</testsuite></testsuites>")
     row = [line for line in summary.render(path, "probe", 5).splitlines() if "b.py" in line][-1]
     assert "tests/a/\\|b.py" in row and row.count("|") == 7
+
+
+def _render_name(tmp_path: Path, name: str) -> str:
+    path = tmp_path / "j.xml"
+    case = f'<testcase name="t" file="{name}" time="1"><failure/></testcase>'
+    path.write_text(f"<testsuites><testsuite>{case}</testsuite></testsuites>")
+    return summary.render(path, "probe", 5)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["tests/a&#13;b.py", "tests/a&#13;&#10;b.py", "tests/a&#10;b.py", "tests/a&#13;| x |.py"],
+)
+def test_a_line_ending_in_a_file_name_cannot_split_a_row_or_the_failure_line(
+    tmp_path: Path, name: str
+):
+    text = _render_name(tmp_path, name)
+    assert "\r" not in text
+    lines = text.splitlines()
+    assert (
+        len(lines) == 9
+    )  # title, counts, failures, table header and separator, one row (+ blanks)
+    row = lines[-1]
+    assert row.startswith("| 1 | `tests/a") and row.endswith("| 0 | 1 | 0 |")
+    assert row.replace("\\|", "").count("|") == 6
+    assert lines[4].startswith("Files with failures: `tests/a") and lines[4].endswith("`")
+
+
+@pytest.mark.parametrize(
+    "name", ["tests/a&#9;b.py", "tests/&lt;x&gt;&amp;.py", "tests/a b.py", "tests/a\u0085b.py"]
+)
+def test_ordinary_odd_characters_in_a_file_name_pass_unchanged(tmp_path: Path, name: str):
+    import html
+
+    shown = html.unescape(name)
+    text = _render_name(tmp_path, name.replace("\u0085", "&#133;"))
+    assert f"`{shown}`" in text
