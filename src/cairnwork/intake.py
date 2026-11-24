@@ -65,6 +65,7 @@ from cairnwork.pipeline import TaskSpec, check_task
 from cairnwork.taskpaths import check_submitted_paths
 from cairnwork.textclean import shown
 from cairnwork.verifier_account import VerifierAccount
+from cairnwork.verifier_root import trusted_account
 from cairnwork.workers.agy_dispatch import valid_run_as_user
 from cairnwork_protocol.http import CoreHttpError, check_core_url, http_core_verify
 
@@ -139,8 +140,9 @@ class Intake:
                 raise IntakeRefused("BAD_CONFIG", str(exc)) from exc
             if not has_token(loaded.get("core_token_file")):
                 raise IntakeRefused("BAD_CONFIG", "core_url needs a readable, non-empty token file")
-        if not isinstance(loaded.get("require_base_on_main", True), bool):
-            raise IntakeRefused("BAD_CONFIG", "require_base_on_main must be true or false")
+        for key, default in DEFAULT_CONFIG.items():  # a truthy string must not switch a mode on
+            if isinstance(default, bool) and not isinstance(loaded.get(key, default), bool):
+                raise IntakeRefused("BAD_CONFIG", f"{key} must be true or false")
         if loaded.get("test_source", "auto") not in ("auto", "bundle"):
             raise IntakeRefused("BAD_CONFIG", 'test_source must be "auto" or "bundle"')
         try:
@@ -182,7 +184,9 @@ class Intake:
         return DeferredStore.for_state(self.state, self.config().get("test_source"))
 
     def verifier_account(self) -> VerifierAccount | None:
-        return VerifierAccount() if self.config()["verifier_account"] else None
+        if not self.config()["verifier_account"]:
+            return None
+        return trusted_account(VerifierAccount())  # as select_account does (#1382)
 
     def accepting(self) -> bool:
         return (self.state / "ACCEPTING").exists()
