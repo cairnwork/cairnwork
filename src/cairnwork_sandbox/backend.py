@@ -40,7 +40,6 @@ class Policy:
 
 class Backend(Protocol):
     name: str
-    # Paths under the launching user's home that the policy masks for the run.
     masked_home_paths: tuple[str, ...]
 
     def available(self) -> bool:
