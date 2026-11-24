@@ -48,7 +48,8 @@ from cairnwork.candidate_alias import (
 from cairnwork.candidate_shadow import find_shadow_file
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES
 from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
@@ -190,12 +191,12 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
     """Read and scan one committed blob: "" (none), _REDIRECT (a path or program launch, which
     needs a shadow file) or _MACHINERY (an added or removed statement reaches machinery).
     Unreadable or unparseable candidate source fails closed."""
-    data = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+    data = read_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     signal = scan_sys_path_blob(data)
     if signal is None:
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
     added = changed[path] == "ADD"
-    old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
+    old = None if added else read_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
     try:
         alias = alias_machinery_changed(old, data)
     except ValueError:

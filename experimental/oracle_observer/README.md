@@ -31,3 +31,29 @@ experimental directory (14 days).
 - The nonce reaches the runner through a file that the runner reads and deletes before the probe
   starts: it is in no argv entry (`sys.orig_argv` included) and no environment variable. An exception
   class is named in the document and the chain only when that name resolves back to the same class.
+
+## Who observes, what is recorded, which shapes it defeats (Issue #1039 design v3)
+
+- **Observer**: the runner process, outside the sandbox. It alone holds the expected values and
+  alone compares. The probe's output file is untrusted data, read after every process of the run
+  is gone.
+- **Recorded**: only the probe's JSON observations (return values, exception class names) and one
+  reason code per run. Nothing else leaves the runner (see above).
+- **Shape classes it defeats, for oracle targets only** (the static scan and the same-process
+  verdict stay in front of pytest-form targets, unchanged). Each is pinned twice in
+  `tests/test_oracle_observer_e2e.py`: a wrong implementation plus the technique is a mismatch
+  (`test_a_wrong_implementation_with_in_process_patching_is_a_mismatch`), a correct one still
+  passes (`test_a_correct_implementation_with_the_same_patching_still_passes`).
+
+  | Class | Issue | Case in `CHEATS` |
+  | --- | --- | --- |
+  | bytecode location and planted bytecode | #276 | `bytecode` |
+  | replacing or patching pytest modules | #571 | `pytest modules` |
+  | rewriting pytest class attributes | #643 | `pytest class attributes` |
+  | import hook or edit of pytest itself or a plugin | #800 | `import hook`; `test_a_candidate_that_edits_pytest_itself_with_correct_values_passes` |
+
+  Early exit gives `ORACLE_NO_OUTPUT` (`test_a_wrong_implementation_that_ends_the_process_early_gets_no_output`).
+  #611 was never reproduced and is not claimed.
+- **Sample basis**: by the layer1 ruling of 2026-11-23, subprocess output and written files are
+  not observations. The step 0 recount on the same sample therefore does not apply; the target
+  sample is as in `docs/results/2026-11-22-oracle-target-sample.md`.

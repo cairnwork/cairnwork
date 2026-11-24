@@ -18,7 +18,7 @@ from pathlib import PurePosixPath
 
 from cairnwork.account_prelude import after_candidate_ran, busy_once_more
 from cairnwork.deferred_tests import BASE_COMPARE_RULE, BaseUncomparable, Comparison
-from cairnwork.gitcmd import run_git_bytes
+from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.verifiers import DEFAULT_TIMEOUT_SECONDS, run_verifiers
 
 RULE = "candidate-env-v1"
@@ -136,7 +136,7 @@ def _literal_test_writer(task, commit: str, record: tuple[str, str, int]) -> boo
     if origin in allowed or not _test_origin(origin, task.test_roots):
         return False
     try:
-        source = run_git_bytes(task.repo, "show", f"{commit}:{origin}").decode("utf-8")
+        source = read_git_bytes(task.repo, "show", f"{commit}:{origin}").decode("utf-8")
         tree = ast.parse(source)
     except Exception:  # noqa: BLE001 - malformed or unreadable control source fails closed.
         return False

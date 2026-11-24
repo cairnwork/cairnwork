@@ -23,15 +23,46 @@ _SECRET_PATTERNS = (
         r"\.[A-Za-z0-9_-]+)\b"
     ),
 )
+# Absolute filesystem paths (#1701): they name the user, the host layout and private checkouts.
+# Masked in text that is printed or stored for others; the mode-0600 debug log keeps them on
+# purpose (it records invocation paths). A path is not preceded by a word char, dot, slash, colon
+# or tilde, so URLs and relative paths stay. Paths under well-known roots may contain spaces, so
+# they are masked up to the next ": ", " (", quote or line end (the error reason after the colon
+# survives). file: URLs are masked to the next space. Known limits: a sentence-final period after
+# a path goes with it, and text after a spaced path with no such stop goes with it too. A path
+# with spaces under a root NOT in _ROOTS, and a file: URL with raw spaces, are masked only to the
+# first space (the rest stays).
+_ROOTS = "Users|home|Volumes|private|var|tmp|Library|opt|srv|mnt|root|Applications"
+_ABS_PATHS = (
+    re.compile(r"(?i)\bfile:/+[^\s\"'<>]*"),
+    re.compile(rf"(?<![\w./:~-])/(?:{_ROOTS})/[^\n\"'<>]*?(?=:\s|\s\(|[\n\"'<>]|$)"),
+    re.compile(r"(?<![\w./:~-])/(?:[\w.@+~-]+/)*[\w.@+~-]+"),
+)
 
 
-def _scrub(value: str) -> str:
+def _scrub(value: str, paths: bool = True) -> str:
     result = value
-    for pattern in _SECRET_PATTERNS:
+    for pattern in (*_SECRET_PATTERNS, *(_ABS_PATHS if paths else ())):
         result = pattern.sub(
             lambda match: f"{match.group(1) if match.lastindex else ''}[REDACTED]", result
         )
     return result
+
+
+def redact_deep(value: Any) -> Any:
+    """Scrub (credentials and paths, no length cap) every string, dict keys included, inside
+    nested dicts and lists: the one choke point for output that is printed or stored.
+
+    Redaction is applied at ``cli._emit`` and ``JsonlLedger.append``, not inside ``RelayResult``:
+    a library caller that prints a ``RelayResult`` directly bypasses it. ``--dry-route`` success
+    output is not redacted on purpose (it shows the operator's own configured paths)."""
+    if isinstance(value, str):
+        return _scrub(value)
+    if isinstance(value, dict):
+        return {redact_deep(key): redact_deep(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_deep(item) for item in value]
+    return value
 
 
 def redact(value: str) -> str:
@@ -93,7 +124,7 @@ def append_debug(path: Path | None, event: dict[str, Any]) -> None:
 
 def _redact_event(value: Any) -> Any:
     if isinstance(value, str):
-        return redact(value)
+        return _scrub(value, paths=False)[:MAX_STDERR_CHARS]
     if isinstance(value, list):
         result = []
         redact_next = False

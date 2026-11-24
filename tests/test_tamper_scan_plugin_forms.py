@@ -104,13 +104,13 @@ def test_a_patch_already_over_budget_runs_no_file_rules(repo, monkeypatch):
 
 def test_blobs_of_many_files_are_read_by_one_cat_file(repo, monkeypatch):
     calls = []
-    real = tamper_scan.file_rules.__globals__["run_git_bytes"]
+    real = tamper_scan.file_rules.__globals__["read_git_bytes"]
 
     def spy(repo_, *args, **kw):
         calls.append(args[0:2])
         return real(repo_, *args, **kw)
 
-    monkeypatch.setitem(tamper_scan.file_rules.__globals__, "run_git_bytes", spy)
+    monkeypatch.setitem(tamper_scan.file_rules.__globals__, "read_git_bytes", spy)
     base = git(repo, "rev-parse", "HEAD")
     head = commit_change(repo, {f"src/m{i}.py": f"x{i} = {i}\n" for i in range(30)})
     assert scan_patch(repo, base, head, python=sys.executable) == []
