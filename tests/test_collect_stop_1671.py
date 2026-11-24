@@ -160,9 +160,12 @@ def test_the_watcher_takes_only_a_collection_record_with_its_own_nonce(tmp_path)
         os.pwrite(fd, mine[:50], 0)
         assert not watcher()  # still being written
         os.pwrite(fd, mine, 0)
-        assert watcher() and watcher.record().exitstatus == 0
+        assert watcher()
+        first = watcher.record()
+        assert first is not None and first.exitstatus == 0
         os.ftruncate(fd, 0)  # whatever the child does later, the verdict keeps the first read
-        assert watcher() and watcher.record().recorded
+        again = watcher.record()
+        assert watcher() and again is not None and again.recorded
     finally:
         channel.close()
 
