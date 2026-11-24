@@ -253,3 +253,52 @@ def test_a_failing_sweep_does_not_stop_the_recording(monkeypatch):
     monkeypatch.setattr(deny_channel, "_start", lambda path, window: None)
     with deny_channel.recording(TAG, lambda argv, log: "") as box:
         assert box is not None
+
+
+def _aged(path, mtime, pid=None):
+    path.mkdir()
+    if pid is not None:
+        (path / "owner.pid").write_text(f"{pid}\n")
+        os.utime(path / "owner.pid", (mtime, mtime))
+    os.utime(path, (mtime, mtime))
+
+
+def test_the_default_limit_removes_fifty_and_leaves_the_rest(tmp_path):
+    assert deny_sweep.SWEEP_MAX_REMOVE == 50
+    for i in range(52):
+        _make_stale(tmp_path / f"cairnwork-deny.n{i}")
+    assert deny_sweep.sweep_stale(tmp_path, time.time()) == 50
+    assert len(list(tmp_path.glob("cairnwork-deny.*"))) == 2
+
+
+@pytest.mark.parametrize("age, removed", [(3600.0, 0), (3600.01, 1)])
+def test_a_directory_exactly_one_hour_old_is_kept(tmp_path, age, removed):
+    now = 200_000.0
+    _aged(tmp_path / "cairnwork-deny.edge", now - age, pid=_dead_pid())
+    assert deny_sweep.sweep_stale(tmp_path, now) == removed
+    assert (tmp_path / "cairnwork-deny.edge").exists() == (removed == 0)
+
+
+@pytest.mark.parametrize("error", [OverflowError, OSError])
+def test_a_pid_that_cannot_be_signalled_is_not_live(monkeypatch, error):
+    def fail(pid, sig):
+        raise error
+
+    monkeypatch.setattr(deny_sweep.os, "kill", fail)
+    assert deny_sweep._is_live_pid(5) is False
+
+
+def test_an_owner_pid_that_is_not_a_number_does_not_protect_the_directory(tmp_path):
+    stale = tmp_path / "cairnwork-deny.garbage"
+    _aged(stale, time.time() - 7200, pid="not-a-number")
+    assert deny_sweep.sweep_stale(tmp_path, time.time()) == 1
+    assert not stale.exists()
+
+
+def test_a_plain_file_with_the_prefix_is_left_alone(tmp_path):
+    plain = tmp_path / "cairnwork-deny.file"
+    plain.write_text("keep")
+    old = time.time() - 7200
+    os.utime(plain, (old, old))
+    assert deny_sweep.sweep_stale(tmp_path, time.time()) == 0
+    assert plain.read_text() == "keep"
