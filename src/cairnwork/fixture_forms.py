@@ -68,20 +68,24 @@ def registered(tree: ast.Module, extra: set[str] | None = None) -> set[str]:
 
 
 def _forwarded(tree: ast.Module) -> dict[int, set[str]]:
-    """In a module that defines ``fixture``: each call inside a function, with the parameters of
-    the functions around it (a wrapper forwarding its own ``name``)."""
-    if not any(getattr(n, "name", None) == "fixture" for n in module_level(tree.body)):
-        return {}
+    """Whitelist (#1604): the only forwarded ``name=`` that is exempt is a bare parameter of the
+    module's own top-level ``def fixture`` (pytest's factory), on a call whose nearest enclosing
+    function is ``fixture`` itself. Any other wrapper, nested function or lambda is not exempt, so
+    its non-literal ``name=`` is refused: its call sites are never read."""
     out: dict[int, set[str]] = {}
-    for d in ast.walk(tree):
-        if isinstance(d, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-            a = d.args
-            params = {
-                x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x
-            }
-            for c in ast.walk(d):
-                if isinstance(c, ast.Call):
-                    out.setdefault(id(c), set()).update(params)
+    for d in module_level(tree.body):
+        if not (isinstance(d, ast.FunctionDef | ast.AsyncFunctionDef) and d.name == "fixture"):
+            continue
+        a = d.args
+        params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs, a.vararg, a.kwarg) if x}
+        stack: list[ast.AST] = list(d.body)
+        while stack:
+            n = stack.pop()
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef):
+                continue  # a nested scope is not `fixture` itself
+            if isinstance(n, ast.Call):
+                out.setdefault(id(n), set()).update(params)
+            stack.extend(ast.iter_child_nodes(n))
     return out
 
 
