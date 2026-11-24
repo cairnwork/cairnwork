@@ -9,7 +9,7 @@ import sys
 import warnings
 
 import pytest
-from conftest import commit_change
+from conftest import commit_change, git
 from test_uncomparable_paths import FIX_DOUBLE, run_cli
 
 from cairnwork.verifier_account import VerifierAccount
@@ -85,7 +85,13 @@ def _caught_denial(project, state, repo, tmp_path, test):
     denial must not pass."""
     for again in ("", "# retry\n"):
         (line,) = _verified(project, state, test + again)
-        run = _run_evidence(repo, tmp_path, test.replace("test_regression", "test_d") + again)
+        # #1227: the evidence run commits into the repo it is given; in the project itself that moves
+        # HEAD past the origin the next make_test_commit clones from. Run it in a clone instead.
+        scratch = tmp_path / f"evidence-{len(list(tmp_path.glob('evidence-*')))}"
+        git(tmp_path, "clone", "-q", str(repo), str(scratch))
+        git(scratch, "config", "user.email", "test@example.invalid")
+        git(scratch, "config", "user.name", "test")
+        run = _run_evidence(scratch, tmp_path, test.replace("test_regression", "test_d") + again)
         if ": DENIED: " in line and HIT in run.deny_denials:
             return
     assert ": DENIED: " in line, line
