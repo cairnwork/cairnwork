@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       runs:
-        description: "Pairs per scenario and arm (N >= 20 for the AC8 table)"
+        description: "Pairs per scenario and arm (20 to 40; N >= 20 for the AC8 table)"
         default: "20"
         type: string
 
@@ -16,7 +16,7 @@ permissions:
 jobs:
   measure:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
@@ -41,8 +41,11 @@ jobs:
         run: uv run pytest -q -p no:cacheprovider tests/measure_986_ac8.py 2>&1 | tee "$RUNNER_TEMP/pytest.log" | tail -n 40
       - name: Summary
         if: always()
+        shell: bash  # pipefail: an INVALID exit 1 must reach the job status
+        env:
+          CW986_N: ${{ inputs.runs }}
         run: |
-          uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/rows.jsonl" "$RUNNER_TEMP/summary.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/rows.jsonl" "$RUNNER_TEMP/summary.json" --expect-n "$CW986_N" | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:

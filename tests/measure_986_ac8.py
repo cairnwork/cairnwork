@@ -21,8 +21,8 @@ from cairnwork import base_fixture_names
 pytestmark = pytest.mark.sandbox
 
 N = int(os.environ.get("CW986_N", "20"))
-if not 1 <= N <= 200:
-    raise ValueError("CW986_N must be between 1 and 200")
+if not 1 <= N <= 40:  # about 100 s a pair on a hosted runner: 40 fits the 150 minute timeout
+    raise ValueError("CW986_N must be between 1 and 40")
 SCENARIOS = {"bad": PLUGIN, "good": "# no plugin here\n"}
 CASES = [
     (i, arm, name)

@@ -112,3 +112,40 @@ def test_the_cold_first_pair_is_a_warm_up_and_left_out_of_the_time():
     rows[3] = _row(0, "on", "good", 90.0, "COMPLETED", probe="OK")  # pair 0 starts cold
     s = summary.summarise(rows)
     assert s["added_max_s"] == 3.8 and s["end_to_end_increase"] == 0.1564
+
+
+def test_the_requested_pair_count_decides_validity_not_what_was_seen():
+    rows = _good_rows(20)
+    assert summary.summarise(rows, expect_n=20)["invalid"] == []
+    assert summary.summarise(rows, expect_n=40)["invalid"]  # cancelled after 20 of 40 pairs
+    assert summary.summarise(rows, expect_n=19)["invalid"]  # more than asked for
+
+
+def test_a_repeated_case_is_invalid():
+    rows = _good_rows()
+    assert summary.summarise([*rows, rows[5]])["invalid"]
+
+
+def test_a_good_candidate_that_errored_in_either_arm_is_not_timed_but_is_counted():
+    rows = _good_rows()
+    for k, r in enumerate(rows):
+        if r["scenario"] == "good" and r["arm"] == "on" and 1 <= r["i"] <= 10:
+            rows[k] = _row(r["i"], "on", "good", 1.0, "ERROR", probe="OK")
+    s = summary.summarise(rows, expect_n=20)
+    assert s["end_to_end_increase"] == 0.1564 and s["timed_pairs"] == 9
+    assert s["errors"] == 10 and s["false_blocks_on"] == 10 and s["invalid"] == []
+
+
+def test_p95_and_max_of_varying_pair_differences_with_negatives():
+    diffs = {0: 90.0, 1: -3.0, 2: -1.0, **{i: i / 2 for i in range(3, 21)}}  # pair 0 is cold
+    rows = []
+    for i in range(21):
+        rows += [
+            _row(i, "off", "bad", 25.0, "COMPLETED"),
+            _row(i, "on", "bad", 5.0, "FAILED", refused=True, probe="OK"),
+            _row(i, "off", "good", 24.0, "COMPLETED"),
+            _row(i, "on", "good", 24.0 + diffs[i], "COMPLETED", probe="OK"),
+        ]
+    s = summary.summarise(rows, expect_n=21)
+    assert s["timed_pairs"] == 20
+    assert s["added_p95_s"] == 9.5 and s["added_max_s"] == 10.0  # 19th of 20, then the largest

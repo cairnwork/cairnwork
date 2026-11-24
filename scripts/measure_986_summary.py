@@ -1,6 +1,6 @@
 """Summarise the rows of tests/measure_986_ac8.py against the #986 AC8 thresholds.
 
-Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N]. Prints a markdown table and
+Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N] [--expect-n N]. Prints a markdown table and
 exits 0; exits 1 and prints INVALID when the rows cannot support the numbers (no rows, a missing
 or repeated case, fewer than --min-n pairs, default 20). Time is taken from the good candidate
 only (a bad candidate refused early is cheaper by design) and pair 0 is a warm-up, left out."""
@@ -21,10 +21,10 @@ def _p95(values: list[float]) -> float:
     return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)] if ordered else 0.0
 
 
-def _invalid(rows: list[dict], min_n: int) -> list[str]:
+def _invalid(rows: list[dict], min_n: int, expect_n: int | None) -> list[str]:
     if not rows:
         return ["no rows"]
-    n = max(r["i"] for r in rows) + 1
+    n = expect_n or max(r["i"] for r in rows) + 1
     want = {(i, a, s) for i in range(n) for a in ("on", "off") for s in ("bad", "good")}
     keys = Counter((r["i"], r["arm"], r["scenario"]) for r in rows)
     reasons = []
@@ -37,12 +37,18 @@ def _invalid(rows: list[dict], min_n: int) -> list[str]:
     return reasons
 
 
-def summarise(rows: list[dict], min_n: int = MIN_N) -> dict:
-    invalid = _invalid(rows, min_n)
+def summarise(rows: list[dict], min_n: int = MIN_N, expect_n: int | None = None) -> dict:
+    invalid = _invalid(rows, min_n, expect_n)
     on = {(r["i"], r["scenario"]): r for r in rows if r["arm"] == "on"}
     off = {(r["i"], r["scenario"]): r for r in rows if r["arm"] == "off"}
     both = sorted(on.keys() & off.keys())
-    timed = [k for k in both if k[1] == "good" and (k[0] > 0 or len(both) <= 2)]
+    timed = [
+        k
+        for k in both
+        if k[1] == "good"
+        and on[k]["status"] == off[k]["status"] == "COMPLETED"  # an early end is not a time
+        and (k[0] > 0 or len(both) <= 2)
+    ]
     added = [on[k]["seconds"] - off[k]["seconds"] for k in timed]
     total_on = sum(on[k]["seconds"] for k in timed)
     total_off = sum(off[k]["seconds"] for k in timed)
@@ -104,10 +110,15 @@ def main(argv: list[str]) -> int:
         at = args.index("--min-n")
         min_n = int(args[at + 1])
         del args[at : at + 2]
+    expect_n = None
+    if "--expect-n" in args:
+        at = args.index("--expect-n")
+        expect_n = int(args[at + 1])
+        del args[at : at + 2]
     path = Path(args[0]) if args else None
     text = path.read_text() if path is not None and path.exists() else ""
     rows = [json.loads(x) for x in text.splitlines() if x.strip()]
-    result = summarise(rows, min_n)
+    result = summarise(rows, min_n, expect_n)
     if len(args) > 1:
         Path(args[1]).write_text(json.dumps(result, indent=2) + "\n")
     print(table(result))
