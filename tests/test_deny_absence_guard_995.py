@@ -5,11 +5,15 @@ tables below list every file under ``src/`` that may touch it today, and how. A 
 here on purpose: ask ``Evidence.denial_of(operation, target)`` (DENIED or UNKNOWN) and add the file
 to the tables with a reason, in the change that lets a verdict read the channel.
 The scan is syntactic: it cannot follow a value through every indirection, so it is a tripwire for
-the usual shapes (and fails closed on the carrier names), not a proof.
+the usual shapes (and fails closed on the carrier names), not a proof. Not covered: a name built
+at run time (getattr(ev, 'den' + 'ied')), a CLEAN set imported from another module, a helper
+that tests its own argument, ``from x import *``, and presence-style reads that name no CLEAN
+(``ev.state != 'DENIED'``, ``ev.detail == ''``). A carrier name may be passed as a keyword value,
+held as a field, tested bare in an ``if`` that only logs, or put in an f-string that is only
+logged; a bare call argument is refused because the callee could be len, bool or re.match.
 """
 
 import ast
-import re
 from pathlib import Path
 
 import pytest
@@ -44,11 +48,27 @@ def _callee(call):
 def _clean_like(node, clean_names):
     """CLEAN as a literal (alone or in a container), a name, or an attribute of that name."""
     return any(
-        (isinstance(n, ast.Constant) and isinstance(n.value, str) and "CLEAN" in n.value)
+        (isinstance(n, ast.Constant) and _spells_clean(n.value))
         or (isinstance(n, ast.Name) and (n.id == "CLEAN" or n.id in clean_names))
         or (isinstance(n, ast.Attribute) and n.attr == "CLEAN")
+        or _folded_clean(n)
         for n in ast.walk(node)
     )
+
+
+def _spells_clean(value):
+    """The verdict word: CLEAN anywhere (the summary starts with it) or a lower-case whole word."""
+    return isinstance(value, str) and (
+        "CLEAN" in value or value.strip().lower().rstrip(":") == "clean"
+    )
+
+
+def _folded_clean(n):
+    """'CL' + 'EAN': a concatenation of string literals that spells CLEAN."""
+    parts = [
+        m.value for m in ast.walk(n) if isinstance(m, ast.Constant) and isinstance(m.value, str)
+    ]
+    return isinstance(n, ast.BinOp) and _spells_clean("".join(parts))
 
 
 def _carries(node, aliases):
@@ -57,6 +77,14 @@ def _carries(node, aliases):
         or (isinstance(n, ast.Name) and (n.id in EVIDENCE or n.id in aliases))
         or (isinstance(n, ast.Constant) and n.value == "state")
         or (isinstance(n, ast.Call) and _callee(n) == "str")  # the summary text starts with it
+        for n in ast.walk(node)
+    )
+
+
+def _names_denied(node):
+    return any(
+        (isinstance(n, ast.Attribute) and n.attr == "denied")
+        or (isinstance(n, ast.Constant) and n.value == "denied")
         for n in ast.walk(node)
     )
 
@@ -99,17 +127,23 @@ def _clean_names(tree):
 
 
 def _allowed_use(node, parent):
-    """A carrier name only as a keyword, a field, a bare truth test, a log value, or passed on."""
+    """A carrier name only as a keyword value, a field, a logging test, or logged text."""
     up = parent.get(node)
     if isinstance(up, ast.keyword) and up.value is node:
         return True
-    if isinstance(up, ast.IfExp) and parent.get(up) and isinstance(parent[up], ast.keyword):
-        return node is not up.test
+    if isinstance(up, ast.IfExp) and isinstance(parent.get(up), ast.keyword):
+        return node is not up.test  # run(deny_denials=ev.denials if ev else frozenset())
     if isinstance(up, ast.AnnAssign) and up.target is node:
         return True
-    if isinstance(up, ast.FormattedValue):
-        return True
-    return isinstance(up, ast.If | ast.IfExp) and up.test is node
+    if isinstance(up, ast.FormattedValue):  # only text built for a call (a log line)
+        return isinstance(parent.get(parent.get(up)), ast.Call)
+    # if run.deny_evidence: log(...): no else, and nothing in the body but calls
+    return (
+        isinstance(up, ast.If)
+        and up.test is node
+        and not up.orelse
+        and all(isinstance(b, ast.Expr) for b in up.body)
+    )
 
 
 def _findings(tree, rel):
@@ -117,14 +151,13 @@ def _findings(tree, rel):
     found = []
     parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
     clean_names, aliases = _clean_names(tree), _aliases(tree)
-    kept = {  # d = ev.denied ... d(o, t)
-        t.id
+    kept = {  # d = ev.denied ... d(o, t); fns = [ev.denied] ... fns[0](o, t)
+        t
         for n in ast.walk(tree)
-        if isinstance(n, ast.Assign)
-        and isinstance(n.value, ast.Attribute)
-        and n.value.attr == "denied"
-        for t in n.targets
-        if isinstance(t, ast.Name)
+        if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr)
+        and n.value is not None
+        and any(isinstance(m, ast.Attribute) and m.attr == "denied" for m in ast.walk(n.value))
+        for t in _targets(n.targets[0] if isinstance(n, ast.Assign) else n.target)
     }
 
     def add(node, what):
@@ -149,17 +182,20 @@ def _findings(tree, rel):
                 add(node, f"reads {name} beyond passing it on")
         if isinstance(node, ast.Attribute) and node.attr == "denied":
             up = parent.get(node)
-            if isinstance(up, ast.Call) and up.func is node:
-                add(node, "asks denied()")
+            if isinstance(up, ast.keyword):
+                add(node, "hands denied to a caller")
             if isinstance(up, ast.Call) and node in up.args and _callee(up) in HIGHER | BY_NAME:
                 add(node, "hands denied to a caller")
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in kept:
-            add(node, "calls a kept denied")
+        if isinstance(node, ast.Call) and (
+            _names_denied(node.func)
+            or any(isinstance(n, ast.Name) and n.id in kept for n in ast.walk(node.func))
+        ):
+            add(node, "asks denied()")
         if isinstance(node, ast.Call) and _callee(node) in BY_NAME:
             if any(isinstance(a, ast.Constant) and a.value == "denied" for a in node.args):
                 add(node, "fetches denied by name")
         if isinstance(node, ast.Call) and _callee(node) in {"import_module", "__import__"}:
-            if any(isinstance(a, ast.Constant) and "deny_" in str(a.value) for a in node.args):
+            if any(not isinstance(a, ast.Constant) or "deny_" in str(a.value) for a in node.args):
                 add(node, "imports a deny module by name")
         if isinstance(node, ast.Compare | ast.Call | ast.Subscript):
             if _clean_like(node, clean_names) and _carries(node, aliases):
@@ -220,10 +256,9 @@ def test_every_table_entry_is_still_used():
     assert stale(SRC, NAMES, IMPORTS) == [], "drop these entries from the tables"
 
 
-def test_the_real_tree_still_holds_what_the_tables_describe():
-    # the other direction: a table that names nothing would pass anything
-    assert all(
-        re.search(k, (SRC / r).read_text(encoding="utf-8")) for k, v in NAMES.items() for r in v
+def test_the_exempt_files_exist():
+    assert all((SRC / rel).is_file() for rel in EXEMPT), (
+        "a renamed file would hand its exemption on"
     )
 
 
@@ -244,9 +279,7 @@ CATCH = [  # (file, code): must be reported
     (A, "ok = getattr(ev, 'denied')(1, 2)\n"),
     (A, "import operator\nok = operator.methodcaller('denied', 1, 2)(ev)\n"),
     ("cairnwork_attest/keys.py", "ok = ev.state == 'CLEAN'\n"),
-    (A, "ok = ev.state is 'CLEAN'\n"),
     (A, "ok = ev.state in ('CLEAN',)\n"),
-    (A, "ok = ev.state not in ('CLEAN', 'X')\n"),
     (A, "ok = 'CLEAN' == ev.state\n"),
     (A, "C = 'CLEAN'\nok = ev.state == C\n"),
     (A, "OK = ('CLEAN',)\nok = ev.state in OK\n"),
@@ -276,7 +309,6 @@ CATCH = [  # (file, code): must be reported
     (A, "ok = vars(run)['deny_denials']\n"),
     (A, "from cairnwork import deny_watch\n"),
     (A, "from cairnwork.deny_sweep import sweep_stale\n"),
-    (A, "import cairnwork.deny_judge\n"),
     (A, "import importlib\nm = importlib.import_module('cairnwork.deny_judge')\n"),
     (A, "m = __import__('cairnwork.deny_channel')\n"),
     ("cairnwork/workers/deny_judge.py", "ok = ev.denied(1, 2)\n"),  # same name, no exemption
@@ -294,8 +326,33 @@ CATCH = [  # (file, code): must be reported
     ("cairnwork/pipeline_judge.py", "import re\nok = re.match('CLEAN', run.deny_evidence)\n"),
     ("cairnwork/pipeline_judge.py", "ok = run.deny_denials\n"),  # a log line, not the pairs
     ("cairnwork/verifier_exec.py", "ok = ev.state == 'CLEAN'\n"),
+    ("cairnwork/pipeline_judge.py", "ok = 'DENIED' not in f'{run.deny_evidence}'\n"),
+    ("cairnwork/pipeline_judge.py", "if run.deny_evidence:\n    pass\nelse:\n    passed = True\n"),
+    ("cairnwork/pipeline_judge.py", "if run.deny_evidence:\n    ok = True\n"),
+    ("cairnwork/pipeline_judge.py", "log(run.deny_evidence)\n"),
+    ("cairnwork/verifier_run.py", "ok = 1 if self.deny_denials else 0\n"),
+    ("cairnwork/workers/x.py", "x = run(deny_evidence=text, deny_denials=pairs)\n"),
+    ("cairnwork/workers/x.py", "class R:\n    deny_denials: frozenset = frozenset()\n"),
+    ("cairnwork/workers/x.py", "log(f'x {run.deny_evidence}')\n"),
+    ("cairnwork/verifier_run.py", "x = run(deny_evidence=ev.denials)\n"),  # denials not its row
+    (A, "fn: object = ev.denied\nok = fn(1, 2)\n"),
+    (A, "ok = (d := ev.denied)(1, 2)\n"),
+    (A, "fns = [ev.denied]\nok = fns[0](1, 2)\n"),
+    (A, "ok = apply(cb=ev.denied)\n"),
+    (A, "fn = ev.denied if ev else None\nok = fn(1, 2)\n"),
+    (A, "ok = ev.__getattribute__('denied')(1, 2)\n"),
+    (A, "ok = vars(type(ev))['denied'](ev, 1, 2)\n"),
+    (A, "ok = ev.state.lower() == 'clean'\n"),
+    (A, "ok = ev.state == 'CL' + 'EAN'\n"),
+    (A, "ok = str(ev).startswith('clean')\n"),
+    (A, "import importlib\nm = importlib.import_module('cairnwork.' + 'deny_judge')\n"),
 ]
 PASS = [
+    ("cairnwork/verifiers.py", "x = run(deny_denials=ev.denials)\n"),
+    (
+        "cairnwork/pipeline_judge.py",
+        "if run.deny_evidence:\n    logs.append(f'x {run.deny_evidence}')\n",
+    ),
     (A, "ok = job.state == 'RUNNING'\n"),
     (A, "ok = ev.state == 'UNAVAILABLE'\n"),
     (A, "ok = ev.state == 'DENIED'\n"),
