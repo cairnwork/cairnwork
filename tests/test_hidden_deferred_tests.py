@@ -295,7 +295,7 @@ def test_verify_refuses_an_unrun_copy_of_a_test_whose_base_class_skip_was_remove
     assert out["status"] == status, out
     if status == "REFUSED":
         assert out["reason"].startswith("DEFERRED_TESTS_NOT_TARGETED"), out
-        assert "請點名整個檔案" in out["reason"], out
+        assert "detail withheld" in out["reason"], out
 
 
 @pytest.mark.parametrize("shadow", ["tests/unittest.py", "tests/lib/deep/unittest/__init__.py"])
