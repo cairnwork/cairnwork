@@ -27,6 +27,7 @@ from cairnwork.deferred_store import DeferredStore
 from cairnwork.deferred_tests import (
     BaseUncomparable,
     TestCommitRejected,
+    author_reason,
     check_roots_on_base,
     lay_tests_over,
 )
@@ -287,7 +288,8 @@ def _execute(
         _attempt(task, specs, record.request_digest, notary, worker, result, steps, ctx)
     except Exception as exc:  # noqa: BLE001 - an infrastructure failure, never success
         result.verified, result.uncomparable = False, ""
-        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {shown(exc)}"
+        why = author_reason(exc, bool(task.test_commit))
+        result.reason = f"INFRA_ERROR: {type(exc).__name__}: {shown(why)}"
     # Anything else (KeyboardInterrupt, SystemExit) leaves it DISPATCHED: recovery fences it (#244)
     result.status = "COMPLETED" if result.verified else "FAILED"
     steps.reach("FINISHED", result.status, "" if result.verified else result.uncomparable)
@@ -324,7 +326,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         tests_unused(task, claim=False)  # single use, shared with verify runs
         check_roots_on_base(task.repo, task.base_commit, task.test_roots)
     except TestCommitRejected as exc:
-        result.reason = str(exc)
+        result.reason = author_reason(exc, bool(task.test_commit))
         return
     try:  # before the worker: no worker quota spent, no test exposed (#234)
         precheck(ctx.account, ctx.python)
@@ -376,7 +378,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                     )
                     plan = p2p_for(task, specs, test_files, result, ctx)
             except TestCommitRejected as exc:
-                result.reason = str(exc)
+                result.reason = author_reason(exc, True)
                 return
             except BaseUncomparable as exc:  # FAILED either way; only the reason says which
                 isolated = worker.isolated  # another uid (agy_run_as_user)

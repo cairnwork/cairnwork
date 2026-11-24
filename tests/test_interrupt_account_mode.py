@@ -38,7 +38,9 @@ def _execute(monkeypatch, tmp_path, stop, reap):
     monkeypatch.setattr(confined.subprocess, "Popen", lambda *a, **k: StubProcess(stop, waits))
     monkeypatch.setattr(confined, "_kill_group", killed.append)
 
-    def interrupted_wait(_pid, timeout):  # the timed wait for the leader, interrupted (#537)
+    def interrupted_wait(
+        _pid, timeout, _stop=None
+    ):  # the timed wait for the leader, interrupted (#537)
         waits.append(timeout)
         raise stop
 
@@ -101,9 +103,9 @@ def test_an_interrupt_still_removes_the_account_verifier_checkout(monkeypatch, t
     spec = SimpleNamespace(verifier_id="v")
     with pytest.raises(type(stop)):
         verifiers._run_all(batch, (spec,), "a1-v")
-    work = ctx.run_root / "a1-v-v0.work"
-    assert ctx.account.removed == [work]
-    assert not work.exists()
+    (work,) = ctx.account.removed  # #1671: the directory name no longer carries the run id
+    assert work.parent == ctx.run_root and work.name.endswith("-v0.work") is False
+    assert work.name.endswith(".work") and not work.exists()
 
 
 @pytest.mark.parametrize("stop", STOPS, ids=type)

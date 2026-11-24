@@ -17,6 +17,7 @@ FIXED_PATHS = {
     "tests/pra1353_gate.py",
     "tests/pra1353_seal.py",
     ".github/workflows/ci.yml",
+    "scripts/ci_macos_shard.py",  # decides which test files the macOS shards run
     ".github/workflows/pin-guard-trusted.yml",
     "scripts/ci/pin_guard.py",
     "scripts/ci/pin_guard_status.py",

@@ -1,6 +1,4 @@
-"""#173: the hidden-test run directories do not survive a crash, and a failed cleanup is loud.
-Real processes are SIGKILLed during P2P; failed cleanup is reported, never counted as clean.
-"""
+"""#173: hidden-test run directories do not survive a SIGKILL in P2P; a failed cleanup is loud."""
 
 import json
 import os
@@ -31,7 +29,7 @@ from cairnwork.verifier_account import VerifierAccount
 DRIVER = Path(__file__).with_name("p2p_crash_driver.py")
 SLOW = "import time, calc\ndef test_slow():\n    if calc.SLOW:\n        time.sleep(120)\n"
 CALC = "SLOW = False\ndef add(a, b):\n    return a + b + 1\n"
-HIDDEN_TAGS = ("p", "q", "r", "v", "b")
+HIDDEN_TAGS = ("p", "q", "r", "v", "b", "x")  # x: the one tag of a run directory (#1698)
 
 
 @pytest.fixture
@@ -60,7 +58,8 @@ def _hidden(root: Path, attempt: str = "*") -> list[Path]:
     found = []
     for tag in HIDDEN_TAGS:
         for path in root.glob(f"{attempt}-{tag}-v*"):
-            if tag == "v" and "." in path.name and path.suffix != ".work":
+            kept = tag == "v" or (path / ".evidence").exists()  # the Core run's marked log dir
+            if kept and "." in path.name and path.suffix != ".work":
                 path = path / "run"
                 if not path.exists():
                     continue
@@ -84,7 +83,7 @@ def _kill_in_p2p(p2p_project, state, step, run_root, *account):
     deadline = time.monotonic() + 240
     while True:
         attempt = own_attempt(state)
-        if attempt and run_root.is_dir() and any(run_root.glob(f"{attempt}-{step}-v*")):
+        if attempt and (state / "inflight").exists() and any(run_root.glob(f"{attempt}-x-v*.work")):
             break
         assert proc.poll() is None, (state / "driver.err").read_text()[-2000:]
         assert time.monotonic() < deadline
@@ -104,7 +103,8 @@ def _recover(state, account=None):
 def _assert_clean_and_logs_kept(root: Path, attempt: str):
     assert _hidden(root, attempt) == []
     assert _leftover_names(root, attempt) == []
-    assert list(root.glob(f"{attempt}-v-v*.*/verifier.log")), "the verify log must survive"
+    logs = root.glob(f"{attempt}-x-v*.*/verifier.log")
+    assert [p for p in logs if (p.parent / ".evidence").exists()], "the verify log must survive"
 
 
 @pytest.mark.sandbox
@@ -116,7 +116,7 @@ def test_a_normal_run_leaves_nothing_but_the_logs(p2p_project, tmp_path):
     # only the private log dirs (verify and P2P evidence) are kept: no clone, checkout or scratch
     assert names and all("." in n and not n.endswith(".work") for n in names)
     assert not list(runs.glob("*.work")) and not list(runs.glob("*/tests"))
-    assert list(runs.glob("*-v-v*.*/verifier.log"))
+    assert list(runs.glob("*-x-v*.*/.evidence"))  # the Core run's marked log
 
 
 @pytest.mark.sandbox

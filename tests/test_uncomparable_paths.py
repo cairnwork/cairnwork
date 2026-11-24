@@ -41,6 +41,7 @@ BASE_ROWS = [  # (base run, code): one per row of the mapping table
     pytest.param(TEETH | {"survivors": 1}, "BASE_SURVIVORS", id="survivors"),
     pytest.param(TEETH | {"forged": ("x.pyc",)}, "BASE_FORGED_BYTECODE", id="forged"),
     pytest.param(TEETH | {"log_too_big": True}, "BASE_LOG_OVER_CAP", id="log-over-cap"),
+    pytest.param(TEETH | {"mutated": ("x.txt",)}, "BASE_MUTATED", id="mutated"),  # #577
 ]
 ENV_OK = {"rc": 1, "outcomes": {"tests/test_calc.py::test_add": "failed"}}  # base env check
 PROBE_ROWS = [  # a failed P2P base probe (the base run itself has teeth)
@@ -58,7 +59,7 @@ def _run(spec, run_root, run_id, rc=1, outcomes=None, recorded=True, **flags):
     seen = VerifierObservation(spec.verifier_id, "x/verifier.log", "sha256:" + "0" * 64, False)
     outcomes = (outcomes or {}) if recorded else {}  # no record: the guard saw nothing
     return verifiers.VerifierRun(
-        spec, rc, flags.get("timed_out", False), (), log, seen, outcomes,
+        spec, rc, flags.get("timed_out", False), flags.get("mutated", ()), log, seen, outcomes,
         recorded=recorded, report_too_big=flags.get("report_too_big", False),
         collect_errors=flags.get("collect_errors", ()), survivors=flags.get("survivors", 0),
         forged=flags.get("forged", ()), log_too_big=flags.get("log_too_big", False),
@@ -191,8 +192,9 @@ def test_a_fix_introduced_module_import_of_a_new_top_level_module_is_uncomparabl
     code, out = run_cli(project, state, tests, {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
     assert out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
-    detail = out["uncomparable"]["detail"]  # B2: the guard's record names the file
-    assert "tests/test_regression.py" in detail and "inside the test function" in detail
+    detail = out["uncomparable"]["detail"]  # #1186: a hidden test file is counted, not named
+    assert "collection errors 1" in detail and "inside the test function" in detail
+    assert "test_regression" not in detail
     assert out["core_status"] == "" and out["binding"] is None
 
 

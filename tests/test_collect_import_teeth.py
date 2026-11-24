@@ -226,7 +226,8 @@ def test_other_collect_errors_stay_uncomparable(project, state, name):
     code, out = run_cli(project, state, UNCOMPARABLE_FILES[name], {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
     assert out["uncomparable"]["code"] == "BASE_COLLECTION_ERROR"
-    assert FILE in out["uncomparable"]["detail"] and out["core_status"] == ""
+    assert "collection errors 1" in out["uncomparable"]["detail"]  # #1186: a count
+    assert FILE not in out["uncomparable"]["detail"] and out["core_status"] == ""
 
 
 @pytest.mark.sandbox

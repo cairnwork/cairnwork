@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
-from experimental.local_relay.diagnostics import episode_failure
+from experimental.local_relay.diagnostics import episode_failure, redact, redacted_tail
 from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
@@ -107,9 +107,20 @@ class CoreAcceptance:
                     ),
                 )
         verdict = self.judge(candidate)
-        raw = json.dumps(
-            {"status": verdict.status, "tree_sha256": verdict.tree_sha256}, sort_keys=True
-        )
+        evidence: dict[str, Any] = {
+            "status": verdict.status,
+            "tree_sha256": verdict.tree_sha256,
+        }
+        reason = getattr(verdict, "reason", None)
+        if type(reason) is str:
+            evidence["reason"] = reason
+        pytest_exit_code = getattr(verdict, "pytest_exit_code", None)
+        if type(pytest_exit_code) is int:
+            evidence["pytest_exit_code"] = pytest_exit_code
+        pytest_output = getattr(verdict, "pytest_output", None)
+        if type(pytest_output) is str:
+            evidence["pytest_output_tail"] = redacted_tail(pytest_output, 40, 600)
+        raw = json.dumps(evidence, sort_keys=False)
         return Acceptance(verdict.status == "VERIFIED", raw)
 
 
@@ -121,7 +132,9 @@ def _changed_paths(result: RunResult, source: Path | None) -> set[str]:
     try:
         return changed_paths(source, Path(result.checkout), result.base_sha)
     except PlanIncomplete as exc:
-        raise RuntimeError(f"cannot compare candidate paths with its base: {exc}") from exc
+        raise RuntimeError(
+            f"cannot compare candidate paths with its base: {redact(str(exc))}"
+        ) from exc
 
 
 class _UsageTransport:
@@ -183,9 +196,10 @@ class CostGate:
             reply.model_id,
             reply.effort,
             reply.reason,
-            input_tokens,
-            output_tokens,
-            usd,
+            diagnostics=reply.diagnostics,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            usd=usd,
         )
 
 
@@ -246,7 +260,7 @@ class HaikuProxyFallback:
             try:
                 result = self.run_attempt(65536, self.endpoint_url)
             except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable) as exc:
-                raise LocalAttemptFailed(f"Haiku local-worker failed: {exc}") from exc
+                raise LocalAttemptFailed(f"Haiku local-worker failed: {redact(str(exc))}") from exc
         finally:
             _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": "idle"})
         if (
@@ -328,7 +342,7 @@ def _proxy_call(request, method: str, url: str, body: dict | None) -> dict:
     except LocalAttemptFailed:
         raise
     except (OSError, http.client.HTTPException, RuntimeError, ValueError) as exc:
-        raise LocalAttemptFailed(f"Haiku proxy {method} failed: {exc}") from exc
+        raise LocalAttemptFailed(f"Haiku proxy {method} failed: {redact(str(exc))}") from exc
 
 
 def _int_field(value: dict, key: str, alternative: str) -> int:

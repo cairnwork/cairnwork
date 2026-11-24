@@ -45,13 +45,24 @@ def _file_digest(path: str) -> bytes:
 
 
 def _path_entries(roots: list[str]) -> list[str]:
-    """Return in-prefix sys.path entries outside the recorded roots."""
-    prefixes = (os.path.abspath(sys.base_prefix), os.path.abspath(sys.base_exec_prefix))
-    recorded = [os.path.abspath(root) for root in roots]
+    """Return in-prefix sys.path entries outside the recorded roots.
+
+    "In the prefix" compares the lexical and the resolved form of the entry with both forms of the
+    prefixes, so a symlinked prefix does not hide an entry that spells the real path. "In the
+    roots" compares only the entry's lexical form (roots are taken in both spellings): an entry
+    that is itself a symlink standing outside the roots but pointing into them is recorded, as the
+    roots' digest hashes the tree it points at, not the link."""
+    prefixes = {
+        form(p)
+        for p in (sys.base_prefix, sys.base_exec_prefix)
+        for form in (os.path.abspath, os.path.realpath)
+    }
+    recorded = {form(r) for r in roots for form in (os.path.abspath, os.path.realpath)}
     entries = set()
     for entry in sys.path:
         path = os.path.abspath(entry)
-        under_prefix = any(path == p or path.startswith(p + os.sep) for p in prefixes)
+        forms = {path, os.path.realpath(entry)}
+        under_prefix = any(f == p or f.startswith(p + os.sep) for f in forms for p in prefixes)
         in_roots = any(path == r or path.startswith(r + os.sep) for r in recorded)
         if under_prefix and not in_roots:
             entries.add(path)
@@ -97,7 +108,7 @@ def _link_target(path: str, roots: list[str]) -> bytes:
     if stat.S_ISDIR(info.st_mode):
         if not any(real == r or real.startswith(r + os.sep) for r in roots):
             raise OSError(f"symlink to a directory outside the trees: {path}")  # fail closed
-        return b"dir-inside"
+        return b"dir-inside" + real.encode()  # the resolved target too: a hop may be retargeted
     raise OSError(f"symlink to something that is not a file or directory: {path}")
 
 

@@ -56,3 +56,7 @@ targets may name files that exist only there. Each Core judgment builds a fresh 
 holding only those files on top of the base, imports it into the intake test store and calls
 `verify_candidate(test_commit=...)`; a test commit is single-use, so every stage builds its own.
 The worker checkout and the worker's task file never contain the hidden files.
+
+## Secret-scan summary (experiment only)
+
+`RELAY_MASK_SECRET_LINES=1` (default off; behaviour is exactly as before when off). Just before a gate review the whole plan is scanned (the PAUSE secret scanner, plus any PEM-looking `-----BEGIN` marker). A clean plan is sent unchanged. If anything matches, the plan is **not** sent at all: the gate gets a short summary that holds no original text, only the matched rule category names and counts (files, diff lines, tests passed/failed); no file or test names either. If even that summary matches, or the scanner itself fails, nothing is sent and the review fails closed (`PAUSE_SECRET_BLOCKED`, `gate_called=False`). The gate's ACCEPT of a withheld plan is recorded as `MASKED_ACCEPT` and does not count as ACCEPT (fail closed) (layer2 ruling 2026-11-20 18:52, no override flag). Stage and ledger rows record `plan_withheld` and `scan_categories`, never text. Experiment-only, agreed by James on 2026-11-20; PAUSE scan rules and production code are unchanged.

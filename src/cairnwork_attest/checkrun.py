@@ -23,6 +23,8 @@ from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
 from cairnwork.protection import verdict_text
 from cairnwork_attest.bundle import BundleError, read_bundle
 from cairnwork_attest.checkrun_gh import gh_http, gh_problem
@@ -115,7 +117,10 @@ def _shown(value: object, pattern: re.Pattern[str], missing: str) -> str:
 
 
 def _offline_result(
-    facts: dict[str, Any], public_key: Path | None, repo: Path | None, key: Any = None
+    facts: dict[str, Any],
+    public_key: Path | Ed25519PublicKey | None,
+    repo: Path | None,
+    key: Any = None,
 ) -> tuple[str, dict[str, str] | None]:
     """Return (VERIFIED, assurance), a failure code, or signature not checked."""
     if public_key is None:
@@ -123,10 +128,11 @@ def _offline_result(
     if repo is not None:
         result = _verify_loaded(
             Path(facts["bundle"]),
-            public_key_pem=public_key,
+            public_key_pem=public_key if isinstance(public_key, Path) else Path("<loaded key>"),
             public_key=key,  # loaded from public_key above: the file is read once
             repo=repo,
             expected_candidate=facts["candidate"],
+            envelope=facts["envelope"],
         )
         if result.ok:
             level = (result.assurance or {}).get("protection") or ""
@@ -200,7 +206,7 @@ def _check_args(
     repo_slug: str,
     details_url: str | None,
     token: str | None,
-    public_key: Path | None,
+    public_key: Path | Ed25519PublicKey | None,
     repo: Path | None,
     gh: Path | None = None,
 ) -> str | None:
@@ -234,7 +240,7 @@ def post_check_run(
     bundle_path: Path,
     repo_slug: str,
     *,
-    public_key: Path | None = None,
+    public_key: Path | Ed25519PublicKey | None = None,
     repo: Path | None = None,
     name: str = "cairnwork attestation",
     details_url: str | None = None,
@@ -245,7 +251,8 @@ def post_check_run(
     """Post a neutral Check Run on the bundle's candidate commit.
 
     Never raises for bad input. With ``public_key`` the signature is checked
-    offline (full ``verify_bundle`` when ``repo`` is also given). The token is
+    offline (full ``verify_bundle`` when ``repo`` is also given). ``public_key`` is a PEM
+    file or an already loaded key (then nothing is read from disk, #1683). The token is
     only placed in the Authorization header, never in any result. With ``gh``
     (a ``gh``-compatible CLI that authenticates itself) no token is used at all.
     """
@@ -255,7 +262,9 @@ def post_check_run(
     try:
         facts = _facts(Path(bundle_path))
         key = None
-        if public_key is not None:
+        if isinstance(public_key, Ed25519PublicKey):
+            key = public_key  # the caller already holds the key: nothing is read (#1683)
+        elif public_key is not None:
             key = load_public_key_pem(
                 public_key.read_bytes()
             )  # an operator key problem never reads as a forgery

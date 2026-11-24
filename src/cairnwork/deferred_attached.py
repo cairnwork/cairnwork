@@ -62,8 +62,8 @@ def refuse_attached(path: str, tree: ast.Module, old: ast.Module) -> None:
         raise TestCommitRejected(
             "DEFERRED_TESTS_UNREADABLE",
             f"{path}: a test attached outside a class body (an attribute, setattr or namespace"
-            " store, or a class decorator or metaclass) changed or cannot be read; Cairnwork"
-            " cannot tell which tests it adds, so it cannot check they ran",
+            " store, or a class decorator or metaclass) changed or cannot be read; Cairnwork cannot"
+            " tell which tests it adds. Define it as def test_… in a class body or at top level",
         )
 
 

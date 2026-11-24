@@ -51,7 +51,10 @@ def _is_verified(
 ) -> bool:
     if http_status != 200 or status != "VERIFIED" or integrity != "VALID":
         return False
-    if _digest(request) != request_hash:
+    try:
+        if _digest(request) != request_hash:
+            return False
+    except (ValueError, RecursionError):  # #923: parses as JSON but cannot be re-serialised
         return False
     echoed = response.get("hashes")
     expected = _request_hashes(request)

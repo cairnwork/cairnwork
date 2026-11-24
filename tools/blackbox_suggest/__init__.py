@@ -16,11 +16,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import pytest_config
+from .config import import_dirs, pytest_config, recursion_skips, strict_ids
+from .ids import distinct_ids
 from .literals import Refused
+from .loaders import as_imports, by_name
+from .modstore import rebinds_modules
 from .obligations import Scope, collect
-from .resolve import Imports, Project, module_env
+from .resolve import Imports, Project, _absolute, binds_module_hook, module_env
 from .scope import import_time
+from .shadows import clashes, stdlib_shadows, walk
 from .shapes import drafts_for
 
 KINDS_NOW = frozenset({"function"})  # what cairnwork.blackbox declares at this version
@@ -85,6 +89,22 @@ def conftests_for(test_file: Path, project: Path, name: str = "conftest.py") -> 
 def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Module]) -> Scope:
     """What the configuration and every module imported around the test file decide."""
     reason, known, usefixtures = pytest_config(test_file.parent, root)
+    walked = walk(root, recursion_skips(test_file.parent, root))
+    dirs = None
+    if walked is not None:
+        dirs = [*import_dirs(test_file.parent, root), *project.roots, *walked.base_dirs]
+    shadows = None if dirs is None else stdlib_shadows(dirs)
+    twice = None if dirs is None else clashes(dirs)
+    if shadows is None or twice is None:
+        reason = (
+            reason or "a directory pytest may collect or import from cannot be read or is a link"
+        )
+    elif shadows:
+        reason = reason or "a file on pytest's import path takes a standard-library module name"
+    elif twice:  # which one an import loads depends on the path order (#370)
+        reason = reason or "a module name is defined in two places pytest may import from"
+    if walked is not None and walked.doctests:
+        reason = reason or "pytest collects a text file as doctests, which run unread code"
     tests_top = test_file.resolve().parent
 
     def is_project(name: str) -> bool:
@@ -96,10 +116,13 @@ def _scope(test_file: Path, root: Path, project: Project, modules: list[ast.Modu
 
     imported: set[str] = set()
     for module in modules:
-        verdict = import_time(module, is_project)
-        reason = reason or verdict.reason
-        known = known and verdict.known
-        imported |= verdict.imports
+        named, why = by_name(module)  # a literal name imports as an import statement does (#370)
+        reason = reason or why
+        for read in (module, as_imports(named, lambda n: project.module_file(n) is not None)):
+            verdict = import_time(read, is_project)
+            reason = reason or verdict.reason
+            known = known and verdict.known
+            imported |= verdict.imports
     return Scope(reason, known, usefixtures, imported)
 
 
@@ -110,6 +133,51 @@ def _unimported(cases: list[dict[str, Any]], scope: Scope, project: Project) -> 
     if scope.imports - project.import_closure(drafted):
         return "the tests import a project module the blackbox would not import"
     return None
+
+
+def _module_hooks(cases: list[dict[str, Any]], project: Project) -> str | None:
+    """Refusal when a project module that the drafted targets import binds a module
+    ``__getattr__`` or ``__dir__``: a lookup of a name it lacks (``from pkg import core``, or
+    pytest probing the objects in a test module) runs that module's code. Called after
+    ``_unimported``, so this also covers every project module pytest imports for the test. Any
+    import statement is followed, and a module with no single readable source refuses."""
+    drafted = {case["target"]["module"] for case in cases}
+    closure = project.import_closure(drafted, anywhere=True)
+    for module in sorted(closure):
+        tree = project.tree(module)
+        if tree is None or project.files(module) != [project.module_file(module)]:
+            return f"{module} has no single source file this reader can read"
+        if binds_module_hook(tree):
+            return f"{module} binds a module-level __getattr__ or __dir__"
+        why = by_name(tree)[1]
+        if why:
+            return f"{module}: {why}"
+    for module in sorted(closure):
+        why = _rebinds(project.tree(module), module, project)
+        if why:
+            return f"{module}: {why}"
+    return None
+
+
+def _rebinds(tree: ast.Module | None, module: str, project: Project) -> str | None:
+    if tree is None:
+        return None  # refused above: a closure module this reader cannot read
+    package = getattr(project.module_file(module), "name", "") == "__init__.py"
+    return rebinds_modules(
+        tree,
+        lambda node: _absolute(module, node, package),
+        lambda name: _exact_module(project, name),
+    )
+
+
+def _exact_module(project: Project, name: str) -> bool:
+    """A project module by this exact name: a case-blind file system also finds backend.py
+    when asked for Backend.py."""
+    path = project.module_file(name)
+    if path is None:
+        return False
+    entry = path.parent if path.name == "__init__.py" else path
+    return entry.name in {p.name for p in entry.parent.iterdir()}
 
 
 def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) -> list[Obligation]:
@@ -128,14 +196,18 @@ def analyze_file(test_file: Path, project_root: Path, source_roots: list[Path]) 
     project = Project(source_roots)
     scope = _scope(test_file, project_root, project, [*inits, *conftests, tree])
     imports, env = Imports(tree), module_env(tree)
+    ids = None  # pytest stops collecting the file on a repeated id (#370)
+    if strict_ids(test_file.parent, project_root) and not distinct_ids([tree, *conftests]):
+        ids = "pytest config makes a repeated parametrize id an error; ids here may repeat"
     out: list[Obligation] = []
     for item in collect(tree, rel, conftests, scope, inits):
-        refusal, cases = item.refusal, []
+        refusal, cases = item.refusal or ids, []
         if refusal is None:
             try:
                 drafts = drafts_for(item.func, item.bindings, imports, project, env)
                 cases = [d.plain() for d in drafts]
                 refusal = _unimported(cases, scope, project)
+                refusal = refusal or _module_hooks(cases, project)
             except Refused as exc:
                 refusal = str(exc)
             except RecursionError:

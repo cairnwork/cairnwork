@@ -4,6 +4,8 @@ on Linux CI by tests/test_run_isolation_witness.py and tests/test_tmp_isolation_
 host socket there connectable, and a run, with its roots under /tmp in owner mode, still works)."""
 
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -22,7 +24,7 @@ def host(tmp_path, monkeypatch):
     (tmp_path / "varrun").symlink_to(run)
     trees = (str(run), str(tmp_path / "varrun"), str(tmp))
     monkeypatch.setattr(bwrap_private, "TREES", trees)
-    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", str(tmp))
+    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", (str(tmp),))
     monkeypatch.setattr(bwrap_private, "ETC", str(etc))
     return tmp_path
 
@@ -282,3 +284,50 @@ def test_an_etc_entry_that_cannot_be_checked_fails_the_policy(host, monkeypatch)
     )
     with pytest.raises(SandboxError, match="/x"):
         _policy(host)
+
+
+def test_a_root_under_the_real_var_tmp_is_put_back_like_one_under_tmp(tmp_path, monkeypatch):
+    # The same rule as under /tmp, on the real /var/tmp (#471 step 2b): only the tree list and /etc
+    # are fake. A read root comes back read-only, a write root by its --bind, and the tree is
+    # emptied first and made read-only last.
+    if not os.path.isdir("/var/tmp"):
+        pytest.skip("no /var/tmp on this host")
+    (tmp_path / "etc").mkdir()
+    (tmp_path / "home").mkdir()
+    monkeypatch.setattr(bwrap_private, "TREES", ("/var/tmp",))  # HOLDS_ROOTS stays the real one
+    monkeypatch.setattr(bwrap_private, "ETC", str(tmp_path / "etc"))
+    base = Path(tempfile.mkdtemp(prefix="cw471-nit-", dir="/var/tmp")).resolve()
+    try:
+        read, write = base / "r", base / "w"
+        read.mkdir()
+        write.mkdir()
+        lines = _policy(tmp_path, reads=(read,), writes=(write,))
+        tree, rd, wr = _real(Path("/var/tmp")), _real(read), _real(write)
+        assert _at(lines, "--tmpfs", tree) >= 0
+        assert _at(lines, "--tmpfs", tree) < _at(lines, "--ro-bind", rd, rd)
+        assert _at(lines, "--ro-bind", rd, rd) < _at(lines, "--bind", wr, wr) < len(lines) - 2
+        assert lines[-2:] == ["--remount-ro", tree] and _real(base) not in lines
+    finally:
+        shutil.rmtree(base, ignore_errors=True)
+
+
+def test_var_tmp_linked_to_tmp_is_one_tree_not_a_refusal(host, monkeypatch):
+    # /var/tmp -> /tmp (some systems): both names are one real tree. It is listed once, emptied once
+    # and made read-only once, and a root under it is still put back. Only the /tmp -> /run kind of
+    # overlap is refused (test_a_tree_that_resolves_into_another_is_refused).
+    tmp, vartmp = host / "tmp", host / "vartmp"
+    vartmp.symlink_to(tmp)
+    monkeypatch.setattr(bwrap_private, "TREES", (str(tmp), str(vartmp)))
+    monkeypatch.setattr(bwrap_private, "HOLDS_ROOTS", (str(tmp), str(vartmp)))
+    assert bwrap_private.trees() == [_real(tmp)]
+    root = tmp / "w"
+    root.mkdir()
+    lines = _policy(host, writes=(root,))
+    tree = _real(tmp)
+    emptied = [i for i, line in enumerate(lines[:-1]) if line == "--tmpfs" and lines[i + 1] == tree]
+    assert (
+        len(emptied) == 1
+        and lines.count("--remount-ro") == 1
+        and lines[-2:] == ["--remount-ro", tree]
+    )
+    assert _at(lines, "--bind", _real(root), _real(root)) >= 0

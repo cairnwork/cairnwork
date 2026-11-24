@@ -66,7 +66,7 @@ def _run(repo, tmp_path, test, edit, key):
 def test_a_shadowing_candidate_is_refused_once_the_tests_unseal_its_package(repo, tmp_path):
     result = _run(repo, tmp_path, UNSEALING, SHADOW, "shadow-unsealed")
     assert result.status == "FAILED", result.reason
-    assert "TEST_COMMIT_UNSEALS_CANDIDATE: pkg/fractions.py" in result.reason
+    assert result.reason == "TEST_COMMIT_UNSEALS_CANDIDATE: 1 refusal (detail withheld)"
 
 
 def test_an_honest_fix_in_the_package_still_verifies_with_the_unsealing_tests(repo, tmp_path):

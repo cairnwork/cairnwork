@@ -6,6 +6,8 @@ verifier account's checkout: test_interrupt_account_mode.py. Stand-ins only: no 
 started or signalled here."""
 
 import io
+import os
+import select
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +34,14 @@ def _kept(exc: BaseException) -> bool:
 
 
 @pytest.mark.parametrize("stop", STOPS, ids=type)
-def test_an_interrupt_in_the_wait_still_kills_the_process_group(monkeypatch, tmp_path, stop):
+@pytest.mark.parametrize("waitid", ["native", "kqueue"])  # macOS before 3.13: no os.waitid (#1549)
+def test_an_interrupt_in_the_wait_still_kills_the_process_group(
+    monkeypatch, tmp_path, stop, waitid
+):
+    if waitid == "kqueue":
+        if not hasattr(select, "kqueue"):
+            pytest.skip("kqueue hosts only")
+        monkeypatch.delattr(os, "waitid", raising=False)
     killed = []
 
     class Stub:  # Popen whose first wait (the one with the timeout) is interrupted
@@ -120,7 +129,8 @@ def test_verifier_checkout_is_kept_only_on_an_interrupt(monkeypatch, ctx, end):
     monkeypatch.setattr(verifiers, "_run_one", _raise(end))
     with pytest.raises(type(end)):
         verifiers.run_verifiers(context, head, SPEC, "a1-v")
-    assert (context.run_root / "a1-v-v0.work").exists() is _kept(end)
+    works = list(context.run_root.glob("*.work"))  # #1698: the name is opaque, find it by suffix
+    assert bool(works) is _kept(end) and len(works) <= 1
 
 
 @pytest.mark.parametrize("end", ENDS, ids=type)
@@ -129,7 +139,7 @@ def test_verifier_scratch_is_kept_only_on_an_interrupt(monkeypatch, ctx, end):
     monkeypatch.setattr(verifiers, "_run_one_in", _fill_private_then_raise(end))
     with pytest.raises(type(end)):
         verifiers.run_verifiers(context, head, SPEC, "a1-v")
-    (private,) = [p for p in context.run_root.glob("a1-v-v0.*") if p.suffix != ".work"]
+    (private,) = [p for p in context.run_root.glob("*-x-v*.*") if p.suffix != ".work"]
     assert (private / "run").exists() is _kept(end)
 
 

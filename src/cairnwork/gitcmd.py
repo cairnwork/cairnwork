@@ -5,9 +5,8 @@ from pointing a command at another repository or index. Hooks, the fsmonitor
 command, configuration-declared hooks and the untracked cache are disabled and replace refs
 are ignored. Only the file, https and ssh transports are allowed, and configured transport
 programs (upload-pack, receive-pack, git proxy, alternate refs command) are not run (#759).
-These options are a second line of defence: workers never get a checkout that
-shares Cairnwork's repository (see workspace.py), and Cairnwork never runs git
-inside a worker's repository except to fetch its HEAD.
+These options are a second line of defence: workers never get a checkout sharing Cairnwork's
+repository (see workspace.py), and Cairnwork runs git in a worker's repository only to fetch HEAD.
 """
 
 from __future__ import annotations
@@ -20,6 +19,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from cairnwork.gitcmd_capped import capped
 from cairnwork.gitversion import GitVersionError, git_executable, require_no_lazy_fetch
 from cairnwork.textclean import replace_hidden
 
@@ -50,13 +50,11 @@ def marked(var: str, value: str):
         _MARK.reset(token)
 
 
-# Options that config files cannot override: no hooks, filters, fsmonitor command,
-# submodule recursion, external diff, untracked cache, or password prompts; replace
-# refs are ignored so a commit is always what it is. Transports: file, https, ssh only.
-# Programs deliberately kept: credential helper and ssh command (operator configuration).
-# They serve ssh and https remotes (network fetch/push); a local fetch from a path or bundle
-# normally does not call them, but a repo's url.<ssh>.insteadOf can still route one through
-# core.sshCommand. Diff drivers remain disabled per call site.
+# Options that config files cannot override: no hooks, filters, fsmonitor command, submodule
+# recursion, external diff, untracked cache, or password prompts; replace refs are ignored.
+# Transports: file, https, ssh only. Kept on purpose (operator configuration): credential helper
+# and ssh command, for network fetch/push (a repo's url.<ssh>.insteadOf can route a local fetch
+# through core.sshCommand). Textconv is off per subcommand (_no_external_diff).
 _SAFE_OPTIONS = (
     "--no-replace-objects",
     "-c",
@@ -88,16 +86,12 @@ _SAFE_OPTIONS = (
 
 def _safe_transport_args(args: tuple[str, ...]) -> tuple[str, ...]:
     """Pin fetch and push to Git's built-in transport programs."""
-    subcommand = _subcommand(args)
-    if subcommand not in ("fetch", "push"):
+    i = _subcommand_index(args)
+    if i is None or args[i] not in ("fetch", "push"):
         return args
-    index = args.index(subcommand)
-    option = (
-        "--upload-pack=git-upload-pack"
-        if subcommand == "fetch"
-        else "--receive-pack=git-receive-pack"
-    )
-    return (*args[: index + 1], option, *args[index + 1 :])
+    pack = "upload" if args[i] == "fetch" else "receive"
+    option = f"--{pack}-pack=git-{pack}-pack"
+    return (*args[: i + 1], option, *args[i + 1 :])
 
 
 # hook.<friendly-name>.<key> (git 2.54 and later): hooks declared in configuration, which
@@ -113,9 +107,8 @@ def config_execution_off(repo: Path | str, env: dict[str, str]) -> tuple[str, ..
     A name that ``-c`` cannot carry (it holds ``=``) is refused, and so is a listing that does
     not finish (timeout, git not started). The listing is every key, filtered here (a regex in
     git, under a UTF-8 locale, skips a key that is not UTF-8). A non-zero exit means the
-    configuration could not be enumerated, so the command is refused. Names are decoded
-    with surrogateescape, so ``-c`` carries the same bytes back to git (a name that is not UTF-8
-    is still matched). Listing runs no hook, so it needs no _SAFE_OPTIONS.
+    configuration could not be enumerated, so the command is refused. Names are decoded with
+    surrogateescape, so ``-c`` carries the same bytes back. Listing runs no hook.
     """
     try:
         done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
@@ -189,23 +182,29 @@ def stderr_tail(raw: str | bytes | None) -> str:
     return text.replace("\n", " | ")[-STDERR_TAIL_CHARS:]
 
 
-def _subcommand(args: tuple[str, ...]) -> str:
-    """The git subcommand in args, skipping ``-c <name=value>``, ``-C <path>`` and other options."""
-    it = iter(args)
-    for arg in it:
+def _subcommand_index(args: tuple[str, ...]) -> int | None:
+    """Index of the git subcommand, skipping ``-c <name=value>``, ``-C <path>`` and options."""
+    it = enumerate(args)
+    for i, arg in it:
         if arg in ("-c", "-C"):
             next(it, None)
         elif not arg.startswith("-"):
-            return arg
-    return args[0] if args else "command"
+            return i
+    return None
+
+
+def _subcommand(args: tuple[str, ...]) -> str:
+    i = _subcommand_index(args)
+    return args[i] if i is not None else (args[0] if args else "command")
 
 
 def _no_external_diff(args: tuple[str, ...]) -> tuple[str, ...]:
-    """Keep diff.external from running while preserving the normal internal diff output."""
-    if _subcommand(args) != "diff" or "--no-ext-diff" in args:
+    """``diff`` gets --no-ext-diff and --no-textconv; the other patch printers only the latter."""
+    i = _subcommand_index(args)
+    if i is None or args[i] not in ("diff", "show", "log", "format-patch", "blame"):
         return args
-    index = args.index("diff")
-    return (*args[: index + 1], "--no-ext-diff", *args[index + 1 :])
+    flags = ("--no-ext-diff", "--no-textconv") if args[i] == "diff" else ("--no-textconv",)
+    return (*args[: i + 1], *flags, *args[i + 1 :])
 
 
 class GitCommandError(Exception):
@@ -259,19 +258,23 @@ def commit_present(repo: Path, oid: str) -> bool:
 
 
 def run_git_bytes(
-    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None
-) -> bytes:
+    repo: Path, *args: str, timeout: float = GIT_TIMEOUT_SECONDS, stdin: bytes | None = None,
+    max_bytes: int | None = None,
+) -> bytes:  # fmt: skip
     """Like run_git, but stdout is raw bytes: no decoding and no newline translation.
 
     stdin, when given, is git's standard input (``cat-file --batch``).
     A failure's ``CalledProcessError`` (``__cause__``) then carries bytes in ``stdout``.
     """
-    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin)
+    return _exec(repo, args, None, False, timeout, text=False, stdin=stdin, max_bytes=max_bytes)
 
 
 # GIT_ALLOW_PROTOCOL beats every protocol.*.allow setting, so git:// (core.gitProxy) and other
 # <helper>:: remotes never run (#759). Set in _child_env and in cairnwork_attest.publish._git.
 ALLOWED_PROTOCOLS = "file:https:ssh"
+# Subcommands that may reach a remote: ssh runs in BatchMode for them (#759). A credential
+# helper with its own dialog still runs there (operator configuration).
+NETWORK_SUBCOMMANDS = ("fetch", "push", "pull", "clone", "ls-remote")
 
 
 def _child_env() -> dict[str, str]:
@@ -319,23 +322,25 @@ def _exec(
     text: bool,
     stdin: bytes | None = None,
     ok_codes: tuple[int, ...] = (0,),
+    max_bytes: int | None = None,
 ) -> Any:  # str when text, else bytes
     if not timeout or timeout <= 0:
         raise ValueError(f"timeout must be a positive number of seconds, got {timeout!r}")
     env = _child_env()
-    if _subcommand(args) in ("fetch", "push"):  # any of them may reach origin over ssh; a
-        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     mark = _MARK.get()
-    if mark is not None:
+    if mark is not None:  # before ssh_batch_mode: its config read is a git call to mark too
         var, val = mark
         env[var] = val
+    if _subcommand(args) in NETWORK_SUBCOMMANDS:  # any of them may reach origin over ssh; a
+        ssh_batch_mode(env, repo)  # local path or bundle never calls ssh, so this is harmless
     if index_file is not None:
         env["GIT_INDEX_FILE"] = str(index_file)
     if isolate_config:
         env["GIT_CONFIG_GLOBAL"] = os.devnull
         env["GIT_CONFIG_SYSTEM"] = os.devnull
     try:
-        done = subprocess.run(  # noqa: S603 - fixed git argv, no shell
+        run = subprocess.run if max_bytes is None else capped(max_bytes)
+        done = run(  # noqa: S603 - fixed git argv, no shell
             [
                 git_executable(),
                 *_SAFE_OPTIONS,

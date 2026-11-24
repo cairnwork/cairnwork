@@ -184,7 +184,8 @@ def conftest_problem(ctx: Any) -> VerifyResult | None:
     outcomes are unchanged (the differential probe, p2p_conftest.py) is the signer's word; the
     assurance says so."""
     paths, binding = ctx.binding.get("conftest_paths", []), ctx.binding
-    if paths and not ctx.full and (ctx.policy or {}).get("allow_conftest") is not True:
+    allow = (ctx.policy or {}).get("allow_conftest")  # #927: an explicit false binds full mode too
+    if paths and (allow is False or (not ctx.full and allow is not True)):
         return _fail(
             "CONFTEST_NOT_ALLOWED", "the receipt has conftest paths; the policy must allow"
         )

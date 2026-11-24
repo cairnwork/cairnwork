@@ -9,6 +9,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.refusal_types import _shown_detail
 
 _REGULAR = ("100644", "100755")
 MAX_DELETED_TEST_PATHS = (
@@ -20,7 +21,18 @@ OVERLAY_RULE = "overlay-v1"  # how the tests are laid over a candidate (#229); b
 class TestCommitRejected(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
         self.code = code
-        super().__init__(f"{code}: {detail}" if detail else code)
+        self.has_detail = bool(detail)
+        super().__init__(f"{code}: {_shown_detail(detail)}" if detail else code)
+
+
+def author_reason(exc: BaseException, hidden: bool) -> str:
+    """What the author reads for ``exc`` (#1688). A run with non-public tests (``hidden``, the
+    #1186 signal: a test commit) shows a test-commit refusal as its code and a count: the detail
+    (a test path, a message, a git error) is withheld, since it can carry text of the tests. Any
+    other exception, and every visible run, is ``str(exc)`` byte for byte."""
+    if hidden and isinstance(exc, TestCommitRejected) and exc.has_detail:
+        return f"{exc.code}: 1 refusal (detail withheld)"
+    return str(exc)
 
 
 class TestFiles(tuple):  # noqa: SLOT001  (a tuple of the added or changed paths, as before)

@@ -81,7 +81,7 @@ def test_worker_path_runs_deferred_tests_only_when_each_file_is_a_verifier_targe
                  verifiers=_argv(ONE))  # fmt: skip
     assert result.status == "FAILED"
     assert result.reason.startswith("DEFERRED_TESTS_NOT_TARGETED"), result.reason
-    assert "tests/test_extra.py" in result.reason
+    assert "detail withheld" in result.reason and "test_extra" not in result.reason  # #1186
     assert list((tmp_path / "state" / "runs").glob("*-b-v*")) == []  # refused before a base run
 
 

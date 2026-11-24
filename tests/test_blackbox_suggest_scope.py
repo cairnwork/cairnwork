@@ -15,7 +15,6 @@ CORE = (
     "SCALE = 1\ndef f(x):\n    return x * SCALE\n"
     "REG = {}\nclass Registered:\n    def __init_subclass__(cls, **kw):\n"
     "        REG[cls.__name__] = cls\n"
-    "def __getattr__(name):\n    global SCALE\n    SCALE = 10\n    return 1\n"
 )
 PLAIN = "def test_a():\n    assert f(2) == 2\n"
 

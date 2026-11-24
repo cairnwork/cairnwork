@@ -114,7 +114,11 @@ def _intake(args) -> Intake:
     if args.verifier_account is None:
         return Intake(state)
     intake = SelectedIntake(state, select_account(args.verifier_account))
-    if not intake.config()["verifier_account"]:  # never silently ignore an explicit account
+    try:
+        config = intake.config()
+    except OSError as exc:
+        raise IntakeRefused("BAD_CONFIG", f"cannot read state config: {shown(exc)}") from exc
+    if not config["verifier_account"]:  # never silently ignore an explicit account
         raise IntakeRefused(
             "VERIFIER_ACCOUNT_NOT_ENABLED",
             "--verifier-account needs verifier_account: true in the state config.json",

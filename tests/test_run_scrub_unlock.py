@@ -27,6 +27,11 @@ darwin = pytest.mark.skipif(sys.platform != "darwin", reason="macOS flags and AC
 HIDDEN = "everyone deny readsecurity,delete"  # then even the owner's lstat fails
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 def _ok(argv: list[str]) -> None:
     done = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert done.returncode == 0, (argv, done.stderr)
@@ -176,7 +181,7 @@ def test_nested_flags_acls_and_modes_do_not_outlast_the_account_sequence(runs):
     close_private(private, account)
     assert not os.path.lexists(private / "run"), account.ran
     assert [rc for _argv, rc, _err in account.ran] == [0, 0], account.ran
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o700
 
 
@@ -204,13 +209,13 @@ def test_the_printed_recovery_steps_clear_the_same_tree(runs):
     """A and B: the steps an operator is told to run remove it, and each returns 0."""
     private = _private(runs)
     _lock_down(private / "run" / "home")
-    message = stale_run_error(_Refusing(runs))
+    message = stale_run_error(_Refusing(runs), runs.parent / "candidate")
     assert message is not None
     ran = _run_printed(message[message.index("as the verifier account: ") :])
     assert not os.path.lexists(private / "run"), ran
     assert [rc for _argv, rc, _err in ran] == [0] * len(ran), ran
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o700
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
 
 
 @darwin
@@ -281,7 +286,7 @@ def test_at_a_limit_the_rest_stays_and_the_next_run_is_refused(runs, monkeypatch
     assert os.path.lexists(private / "run")
     assert account.ran[0][1] == 1 and "limit reached" in account.ran[0][2], account.ran
     assert stat.S_IMODE(os.lstat(private).st_mode) == 0o750
-    message = stale_run_error(_Refusing(runs))
+    message = stale_run_error(_Refusing(runs), runs.parent / "candidate")
     assert message is not None and "as root, only if" in message
 
 
@@ -289,6 +294,35 @@ def _walk(monkeypatch, run: Path, limits: tuple[int, int]) -> subprocess.Complet
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", limits)
     argv = run_scrub._unlock_argv(sys.executable, os.path.realpath(run))
     return subprocess.run(argv, capture_output=True, text=True, check=False)
+
+
+@darwin
+def test_a_flag_that_lchflags_cannot_clear_is_reported_as_failure(runs):
+    """The real walker must leave an unremovable flag for the caller to refuse, not count the
+    file as completed merely because lchflags was attempted."""
+    assert sys.platform == "darwin"  # chflags exists only there
+    top = runs / "top"
+    top.mkdir()
+    locked = top / "locked"
+    locked.write_text("x")
+    os.chflags(locked, stat.UF_IMMUTABLE)
+    preamble = """\
+import os
+real = os.lchflags
+def denied(path, flags):
+    if path == 'locked':
+        raise PermissionError(1, 'injected flag refusal')
+    return real(path, flags)
+os.lchflags = denied
+"""
+    argv = [sys.executable, "-I", "-c", f"{preamble}\n{run_scrub._UNLOCK}"]
+    done = subprocess.run(
+        [*argv, os.path.realpath(top), *map(str, run_scrub._UNLOCK_LIMITS)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert done.returncode == 1 and "limit reached" in done.stderr, done
 
 
 @darwin

@@ -43,7 +43,7 @@ class _Account:
     def require_idle(self):
         pass
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         pass
 
     def share_run(self, *args):

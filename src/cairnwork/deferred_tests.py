@@ -32,6 +32,7 @@ from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one pl
     OVERLAY_RULE,
     TestCommitRejected,
     TestFiles,
+    author_reason,
     deleted_of,
     overlay_tree,
 )
@@ -196,8 +197,10 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
         if hidden_tests(tree, local) != hidden_tests(old, local):  # #925
             raise TestCommitRejected(
                 "DEFERRED_TESTS_UNREADABLE",
-                f"{path}: a test inside a module-level block or a nested test class changed;"
-                " Cairnwork cannot tell which tests it adds, so it cannot check they ran",
+                f"{path}: a test inside a module-level if/try/with/loop block, a nested test class,"
+                " a star import, a class-level global, a rebound test name or an imported"
+                " TestCase (local, renamed or relative) changed; Cairnwork cannot tell which tests"
+                " it adds. Define it with a top-level def test_* or in a top-level Test* class",
             )
         deferred_attached.refuse_attached(path, tree, old)  # #994
         for node_id, body in after.items():
@@ -205,8 +208,8 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
                 if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
                     raise TestCommitRejected(
                         "DEFERRED_TESTS_NOT_COLLECTED",
-                        f"{path}::{node_id}: pytest does not collect a test class with __init__"
-                        " or __new__, so no verifier runs it",
+                        "1 new test: pytest does not collect a test class with __init__"
+                        " or __new__, so no verifier runs it",  # #1186: no name
                     )
                 found.add(f"{path}::{node_id}")
     return frozenset(found)
@@ -336,12 +339,13 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
     record (collected and run, any outcome), or the receipt would bind tests no verifier ran
     (NOT_RUN, #660; the static target rule, ``untargeted``, cannot see what pytest collects).
     Teeth: one of them failed in the guard's record."""
+    hidden = any(getattr(run, "hidden_tests", False) for run in runs)
     problems = [(run, code) for run in runs if (code := _base_problem(run))]
     if problems:
         files = {file_part(target) for target in targets}
         detail = "; ".join(
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
-            + (f", collection errors {_names(run.collect_errors)}" if run.collect_errors else "")
+            + _collection_error_detail(run, hidden)
             + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
             + skip_hint(run)
             + (COLLECT_HINT if set(run.collect_errors) & files else "")
@@ -349,6 +353,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         )  # fmt: skip
         return Comparison("UNCOMPARABLE", problems[0][1], detail)
     if missing := not_run(runs, targets):  # #660: the receipt would bind a test that never ran
+        missing = str(len(missing)) if hidden else missing
         detail = f"no verifier collected or ran {missing}" + "".join(map(skip_hint, runs))
         return Comparison("NOT_RUN", "DEFERRED_TESTS_NOT_RUN", detail)
     verdict = base_teeth(runs, targets)  # #775: a fixture or OSError failure is not teeth
@@ -356,6 +361,14 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
         return Comparison(*verdict)
     codes = [run.returncode for run in runs]
     return Comparison("NO_TEETH", "TESTS_DO_NOT_FAIL_ON_BASE", f"pytest exit codes {codes}")
+
+
+def _collection_error_detail(run, hidden):
+    errors = run.collect_errors
+    if not errors:
+        return ""
+    shown = str(len(errors)) if hidden else _names(errors)
+    return f", collection errors {shown}"
 
 
 def not_run(runs, targets) -> list[str]:

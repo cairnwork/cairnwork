@@ -14,6 +14,7 @@ from cairnwork.candidate_alias_writes import (
     _is_write_statement,
     _module_aliases,
 )
+from cairnwork.candidate_reach import binds_search_path, is_docstring, references_doc
 
 _BLOCK_FIELDS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
@@ -178,7 +179,10 @@ def _collect_table_names(tree: ast.Module, sys_names: set[str]) -> set[str]:
 
 
 def _is_alias_hot(node: ast.AST, sys_names: set[str], table_names: set[str]) -> bool:
+    called = {id(p.func) for p in ast.walk(node) if isinstance(p, ast.Call)}
     for part in ast.walk(node):
+        if isinstance(part, ast.Attribute) and part.attr == "modules" and id(part) not in called:
+            return True  # any receiver: ``[sys][0].modules``, a parameter, a class attribute
         if (
             isinstance(part, ast.Attribute)
             and part.attr in TABLES
@@ -226,8 +230,68 @@ def alias_machinery_changed(old: bytes | None, new: bytes) -> bool:
     return any(k in new_hot for k in added) or any(k in old_hot for k in removed)
 
 
+# ``sys.path`` is a list: only a name that exists on ``list`` and can change it can edit it, so the
+# judgement is closed by the type (``tests/test_candidate_receiver_forms.py`` checks every name in
+# ``dir(list)``). str, Path and os.path names are not on ``list`` and are never hot.
+_PATH_HOT = frozenset(
+    {
+        "append", "extend", "insert", "remove", "pop", "clear", "sort", "reverse",
+        "__setitem__", "__delitem__", "__iadd__", "__imul__", "__init__",
+    }
+)  # fmt: skip
+
+
+def _foreign_path(node: ast.AST | None) -> bool:
+    """``<expr>.path`` whatever the receiver: no name is trusted (``os.path`` included)."""
+    return isinstance(node, ast.Attribute) and node.attr == "path"
+
+
+def _edits_foreign_path(part: ast.AST) -> bool:
+    """``<expr>.path`` edited, aliased or handed to a call whatever ``<expr>`` is (``os.path``
+    excepted): mutator calls, element or slice assignment, ``del``, a stored alias."""
+    if isinstance(part, ast.Attribute):
+        # any method taken from a ``<x>.path`` receiver, called or not (stored, passed, decorator)
+        return _foreign_path(part.value) and part.attr in _PATH_HOT
+    if isinstance(part, ast.Call):
+        return any(_foreign_path(arg) for arg in (*part.args, *(k.value for k in part.keywords)))
+    targets: list[ast.expr]
+    if isinstance(part, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+        targets = part.targets if isinstance(part, ast.Assign) else [part.target]
+        if _foreign_path(getattr(part, "value", None)):
+            return True  # a stored alias of the search path
+    elif isinstance(part, ast.NamedExpr):
+        return _foreign_path(part.value)  # walrus alias of the search path
+    elif isinstance(part, ast.arguments):  # a default value binds the search path to a parameter
+        return any(_foreign_path(d) for d in (*part.defaults, *part.kw_defaults))
+    elif isinstance(part, ast.MatchValue):
+        return _foreign_path(part.value)  # a pattern naming ``<x>.path``
+    elif isinstance(part, ast.Delete):
+        targets = part.targets
+    elif isinstance(part, (ast.For, ast.AsyncFor, ast.comprehension)):
+        targets = [part.target]
+    elif isinstance(part, (ast.With, ast.AsyncWith)):
+        targets = [i.optional_vars for i in part.items if i.optional_vars is not None]
+    else:
+        return False
+    return any(_writes_foreign_path(t) for t in targets)
+
+
+def _writes_foreign_path(target: ast.expr) -> bool:
+    """A binding target that stores into ``<expr>.path`` or its elements, however nested
+    (tuple, list, starred). No receiver is trusted: any write to a ``.path`` attribute counts."""
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_writes_foreign_path(t) for t in target.elts)
+    if isinstance(target, ast.Starred):
+        return _writes_foreign_path(target.value)
+    if isinstance(target, ast.Subscript):
+        return _foreign_path(target.value)  # element or slice assignment, ``del``
+    return _foreign_path(target)
+
+
 def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bool:
     for part in ast.walk(node):
+        if _edits_foreign_path(part):
+            return True
         if (
             isinstance(part, ast.Attribute)
             and part.attr == "path"
@@ -238,11 +302,46 @@ def _is_path_edit_statement(node: ast.AST, sys_names: set[str], text: str) -> bo
     return any(word in text for word in PATH_WORDS)
 
 
+def _has_write(tree: ast.Module) -> bool:
+    items: list[tuple[Key, ast.AST]] = []
+    _collect_statements(tree.body, "", items)
+    openers = _imported_openers(tree)
+    writers = _imported_names(
+        tree,
+        frozenset({"NamedTemporaryFile", "copyfileobj"}),
+        frozenset({"tempfile", "shutil"}),
+    )
+    fileios = _exclusive_imported_names(tree, frozenset({"FileIO"}), frozenset({"io"}))
+    flag_openers = _imported_names(tree, frozenset({"open"}), frozenset({"shelve", "dbm"}))
+    modules = _module_aliases(tree)
+    return any(
+        _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
+        for _, own in items
+    )
+
+
+def _frozen_search_path_file(new_tree: ast.Module, old_tree: ast.Module | None) -> bool:
+    """Frozen when one single version both binds the search path and writes a file."""
+    if binds_search_path(new_tree) and _has_write(new_tree):
+        return True
+    return old_tree is not None and binds_search_path(old_tree) and _has_write(old_tree)
+
+
+def frozen_search_path_change(old: bytes | None, new: bytes) -> bool:
+    """Whether a change to a frozen file (old or new binds the search path and writes a file)."""
+    new_tree = _parse_source(new)
+    if new_tree is None or old is None or old == new:
+        return False
+    return _frozen_search_path_file(new_tree, _parse_source(old))
+
+
 def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
     new_tree = _parse_source(new)
     if new_tree is None:
         raise ValueError("candidate source could not be parsed")
     old_tree = _parse_source(old)
+    if frozen_search_path_change(old, new):
+        return True
 
     new_items: list[tuple[Key, ast.AST]] = []
     _collect_statements(new_tree.body, "", new_items)
@@ -257,6 +356,8 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
     added_counts = new_counts - old_counts
     if not added_counts:
         return False
+
+    doc_reference = references_doc(new_tree) or (old_tree is not None and references_doc(old_tree))
 
     new_sys = _collect_sys_names(new_tree)
     added_items = [own for key, own in new_items if key in added_counts]
@@ -273,10 +374,15 @@ def runtime_shadow_added(old: bytes | None, new: bytes) -> bool:
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for own in added_items
     )
-    added_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items)
+    added_path = any(
+        _is_path_edit_statement(own, new_sys, ast.unparse(own)) for own in added_items
+    ) or (
+        binds_search_path(new_tree)
+        and (doc_reference or not all(is_docstring(own) for own in added_items))
+    )
+    new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     new_write = any(
         _is_write_statement(own, openers, writers, modules, fileios, flag_openers)
         for _, own in new_items
     )
-    new_path = any(_is_path_edit_statement(own, new_sys, ast.unparse(own)) for _, own in new_items)
     return (added_write and new_path) or (added_path and new_write)

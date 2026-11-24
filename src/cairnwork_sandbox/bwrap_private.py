@@ -1,4 +1,4 @@
-"""A private, read-only /run, /var/run (when separate) and /tmp for each bwrap run (#391).
+"""A private, read-only /run, /var/run (when separate), /tmp and /var/tmp for each bwrap run (#391).
 
 /run holds the host's daemon sockets (journald, systemd, snapd, uuidd, D-Bus, container daemons) and
 /tmp the users' own (ssh-agent, tmux, X11), and a read-only bind does not stop ``connect()``. So
@@ -26,9 +26,10 @@ import stat
 from cairnwork_sandbox.backend import SandboxError
 from cairnwork_sandbox.bwrap_reach import account_may_traverse
 
-TREES = ("/run", "/var/run", "/tmp")  # read at call time: tests rebind them
-HOLDS_ROOTS = "/tmp"  # the one tree a run's roots may be in
+TREES = ("/run", "/var/run", "/tmp", "/var/tmp")  # read at call time: tests rebind them
+HOLDS_ROOTS = ("/tmp", "/var/tmp")  # the trees a run's roots may be in (#471)
 ETC = "/etc"
+MAX_TMP_LINKS = 4000
 _NAME = re.compile(r"^[A-Za-z0-9_./+@~][A-Za-z0-9 _./+@~-]*$")  # no line break, no leading '-'
 
 
@@ -38,7 +39,7 @@ def trees() -> list[str]:
     found: list[str] = []
     for tree in TREES:
         real = os.path.realpath(tree)
-        if not os.path.isdir(tree) or (real in found and tree != HOLDS_ROOTS):
+        if not os.path.isdir(tree) or (real in found and tree != HOLDS_ROOTS[0]):
             continue
         if not _NAME.fullmatch(real):
             raise SandboxError(f"private tree {real!r} has characters not allowed in a policy")
@@ -69,7 +70,7 @@ def _readlink(entry: os.DirEntry[str]) -> str:
 
 def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[list[str], list[str]]:
     """(the flags that follow the root bind, the ``--remount-ro`` flags that end the policy)."""
-    private, holds = trees(), [os.path.realpath(HOLDS_ROOTS)]
+    private, holds = trees(), [os.path.realpath(h) for h in HOLDS_ROOTS]
     for root in reads + writes:
         if root in private or (_under(root, private) and not _under(root, holds)):
             raise SandboxError(f"root {root!r} is in a private tree {private}")
@@ -84,6 +85,8 @@ def private_flags(reads: list[str], writes: list[str], owner: bool) -> tuple[lis
             real = os.path.realpath(os.path.join(tree, target)) if target else ""
             if _under(real, private) and _NAME.fullmatch(real) and _NAME.fullmatch(entry.name):
                 head += ["--symlink", real, f"{tree}/{entry.name}"]
+                if head.count("--symlink") > MAX_TMP_LINKS:
+                    raise SandboxError(f"{tree}: more than {MAX_TMP_LINKS} links to rebuild")
     for root in reads:  # a read root absent at build time is skipped
         head += ["--ro-bind", root, root] if _under(root, private) and os.path.exists(root) else []
     daemons = [tree for tree in private if not _under(tree, holds)]  # not /tmp

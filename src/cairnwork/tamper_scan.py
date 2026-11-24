@@ -24,7 +24,8 @@ carriage return, which Python also reads as a line end, starts a new piece to sc
 identifiers in NFKC form, so each piece is also matched with them in that form (nfkc_names), and a
 source encoding other than UTF-8 declared on line 1 or 2 is refused (``source_encoding``), as is an
 over-long added line, unread (``long_line``), and a patch past its scan budget (``scan_budget``,
-tamper_scan_budget.py); each fails closed with a dedicated reason.
+tamper_scan_budget.py); each fails closed with a dedicated reason. The residual classes, each with
+the run-time defence that refuses it (or none) and its pinning test, are in tamper_scan_limits.py.
 To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
 Python (only a comment or plain string text) is skipped; the ``sys.modules`` write rule applies in
 full only to test code (``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a
@@ -45,8 +46,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.gitcmd_capped import GitOutputTooLarge
 from cairnwork.pytest_config import PytestConfigError, test_file_rule
-from cairnwork.tamper_scan_budget import SCAN_BUDGET, ScanBudget, Table
+from cairnwork.tamper_scan_budget import MAX_TOKENIZED, SCAN_BUDGET, ScanBudget, Table
 from cairnwork.tamper_scan_budget import canonical as _canonical
 from cairnwork.tamper_scan_diff import (
     MAX_LINE,
@@ -69,6 +71,14 @@ from cairnwork.tamper_scan_pytest import (
     PYTEST_HINT_IMPORT,
     PYTEST_HOOK_IMPL,
     PYTEST_PUBLIC_PATCH,
+)
+from cairnwork.tamper_scan_stub import (
+    _SENSITIVE_KEY,
+    _SYS_MODULES_STUB,
+    GC_WALK,
+    MODULES_ITEM,
+    MODULES_UPDATE,
+    OS_EXIT,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
 from cairnwork.textclean import shown
@@ -93,27 +103,6 @@ def _rule(
 
 
 _COMMENT_ONLY = re.compile(r"^\s*#")
-# sys.modules entries a forgery would swap; a literal key naming any other module is a test stub.
-_SENSITIVE_MODULE = (
-    r"(?:_?pytest\w*|pluggy|py|_?cairnwork\w*|sys|os|builtins|importlib|gc|conftest|__main__)"
-)
-# Test code by module name: a test root package, a conftest or a test module, at any depth.
-_TEST_MODULE = r"(?:\w+\.)*(?:tests|test|testing|conftest|test_\w*|\w+_test)"
-_SENSITIVE_NAME = rf"(?:{_SENSITIVE_MODULE}|{_TEST_MODULE})(?:\.[\w.]*)?"
-_SENSITIVE_KEY = rf"(?:'{_SENSITIVE_NAME}'|\"{_SENSITIVE_NAME}\")"
-_STUB_NAME = (
-    rf"(?:'(?!{_SENSITIVE_MODULE}(?:\.|')|{_TEST_MODULE}(?:\.|'))[\w.]+'"
-    rf"|\"(?!{_SENSITIVE_MODULE}(?:\.|\")|{_TEST_MODULE}(?:\.|\"))[\w.]+\")"
-)
-_STUB_KEY = rf"\[\s*{_STUB_NAME}\s*\]"
-_STUB_RHS = r"(?:(?!\bmodules\b)[^;])*"  # no second sys.modules access chained on the line
-# One statement on the line: assign, delete, pop or setdefault one literal stub key.
-_SYS_MODULES_STUB = (
-    rf"^\s*(?:sys\s*\.\s*modules\s*{_STUB_KEY}\s*=(?!=){_STUB_RHS}"
-    rf"|del\s+sys\s*\.\s*modules\s*{_STUB_KEY}"
-    rf"|sys\s*\.\s*modules\s*\.\s*pop\s*\(\s*{_STUB_NAME}\s*(?:,\s*None\s*)?\)"
-    rf"|sys\s*\.\s*modules\s*\.\s*setdefault\s*\(\s*{_STUB_NAME}\s*,{_STUB_RHS}\))\s*(?:#.*)?$"
-)
 _TEST_DIRS = frozenset({"tests", "test", "testing"})
 
 
@@ -127,24 +116,17 @@ def _is_test_path(path: str, is_test: Callable[[str], bool] | None = None) -> bo
 
 
 RULES: tuple[Rule, ...] = (
-    _rule(
-        "os_exit",
-        r"\b(?:os|posix|nt)\s*\.\s*_exit\b|\bfrom\s+(?:os|posix|nt)\s+import\b[^#\n]*\b_exit\b",
-    ),
+    _rule("os_exit", OS_EXIT),
     _rule(
         "cairnwork_env",
         r"(?m)^(?=.*\bCAIRNWORK_)(?=.*(?:\benviron\b|\bgetenv\b|\benvb\b))",  # once per line
     ),
-    _rule(
-        "gc_walk",
-        r"\bgc\s*\.\s*(?:get_objects|get_referrers|get_referents)\b"
-        r"|\bfrom\s+gc\s+import\b[^#\n]*\b(?:get_objects|get_referrers|get_referents)\b",
-    ),
+    _rule("gc_walk", GC_WALK),
     _rule(
         "sys_modules_write",
-        r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])[^\]]*\]\s*=(?!=)"
+        rf"{MODULES_ITEM}(?:(?!{MODULES_ITEM})[^\]])*\]\s*=(?!=)"
         r"|\bdel\s+sys\s*\.\s*modules\b"
-        r"|\bdel\s+[^#;]*\bsys\s*\.\s*modules\s*\[\s*"
+        r"|\bdel\s+(?:(?!\bdel\s)[^#;])*\bsys\s*\.\s*modules\s*\[\s*"
         rf"{_SENSITIVE_KEY}\s*\]"
         r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear"
         r"|__setitem__|__delitem__|__ior__)\s*\(|\bsys\s*\.\s*modules\s*\|=",
@@ -197,15 +179,17 @@ _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alia
 _MODULES = r"\bsys\s*\.\s*modules\s*"
 _LIBRARY_MODULES_WRITE = re.compile(
     rf"{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]\s*=(?!=)"
-    rf"|\bdel\s+[^#;]*{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]"
+    rf"|\bdel\s+(?:(?!\bdel\s)[^#;])*{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]"
     rf"|{_MODULES}\.\s*(?:pop|setdefault|__setitem__|__delitem__)\s*\(\s*{_SENSITIVE_KEY}"
-    rf"|{_MODULES}(?:\.\s*(?:update|__ior__)\s*\(|\|=)[^)]*{_SENSITIVE_KEY}"
+    rf"|{_MODULES}{MODULES_UPDATE}(?:(?!{_MODULES}{MODULES_UPDATE})[^)])*{_SENSITIVE_KEY}"
 )
 # An import statement naming _pytest (not importlib.import_module, not a pytest_x helper), or a
 # patch or monkeypatch target naming it, which the call imports.
 _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
     "pytest_internals",
-    re.compile(rf"\bimport\s+[^#;]*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b|{PATCHED_INTERNALS}"),
+    re.compile(
+        rf"\bimport\s+(?:(?!\bimport\s)[^#;])*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b|{PATCHED_INTERNALS}"
+    ),
     allow=_BY_NAME["pytest_internals"].allow,
 )
 
@@ -367,6 +351,9 @@ def _committed_coding(path: str, data: bytes | None, found: list[Finding]) -> li
     ]
 
 
+MAX_GIT_READ = MAX_TOKENIZED  # bytes read from git per diff or blob (#766)
+
+
 def scan_patch(
     repo: Path, base: str, head: str, *, python: str, notes: list[str] | None = None
 ) -> list[Finding]:
@@ -375,11 +362,15 @@ def scan_patch(
     Only ``.py`` files are read, as text whatever git attributes or size settings say. ``python`` is
     the verifier's interpreter (verifier_interpreter): file rules parse with it; ``notes``: records.
     """
-    raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
-        repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
-        "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0", "--text",
-        "--full-index", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", "*.py",
-    )  # fmt: skip
+    try:  # git output past MAX_GIT_READ is refused before the budget can count it (#766)
+        raw = run_git_bytes(  # bytes: no newline translation, so a lone "\r" stays inside its line
+            repo, "-c", "diff.suppressBlankEmpty=false", "-c", "diff.interHunkContext=0",
+            "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "-U0", "--text",
+            "--full-index", "--src-prefix=a/", "--dst-prefix=b/", base, head, "--", "*.py",
+            max_bytes=MAX_GIT_READ,
+        )  # fmt: skip
+    except GitOutputTooLarge:
+        return [Finding("", 0, SCAN_BUDGET)]
     try:
         diff = raw.decode("utf-8")
     except UnicodeDecodeError as exc:  # as run_git: a change that is not UTF-8 is unreadable
@@ -394,7 +385,12 @@ def scan_patch(
         is_test = None
     for path, lines in files.items():
         if path.endswith(".py") and not budget.over:  # read whole, as committed (delete-only too)
-            data = run_git_bytes(repo, "cat-file", "blob", f"{head}:{path}")
+            try:
+                data = run_git_bytes(
+                    repo, "cat-file", "blob", f"{head}:{path}", max_bytes=MAX_GIT_READ
+                )
+            except GitOutputTooLarge:
+                return [*found, Finding(path, 0, SCAN_BUDGET)]
             found += scan_added_lines(path, lines, data, budget, trusted, is_test)
     more = [] if budget.over else file_rules(repo, base, head, budget, python, notes)  # over: done
     return found + [Finding(path, 0, rule) for path, rule in more]

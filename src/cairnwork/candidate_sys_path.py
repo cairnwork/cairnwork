@@ -40,11 +40,16 @@ import re
 import subprocess
 from pathlib import Path
 
-from cairnwork.candidate_alias import alias_machinery_changed, runtime_shadow_added
+from cairnwork.candidate_alias import (
+    alias_machinery_changed,
+    frozen_search_path_change,
+    runtime_shadow_added,
+)
 from cairnwork.candidate_shadow import find_shadow_file
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import GitCommandError
 from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES
 from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
@@ -59,7 +64,8 @@ _REACH_WORDS = tuple(
     word.encode()
     for word in (
         "sys.modules", "meta_path", "path_hooks", "path_importer_cache", "importlib", "runpy",
-        "pytest_plugins", "__import__",
+        "pytest_plugins", "__import__", "getmembers", "getattr_static",
+        "marshal", "pickle", "FunctionType", "CodeType", "copyreg",
     )
 )  # fmt: skip
 _MACHINERY_WORDS = _REACH_WORDS + tuple(
@@ -160,7 +166,7 @@ def refuse_new_sys_path_mutation(
                         f"{path!r}: writes a file and edits the import path in the same change "
                         "(a shadow module can be created at run time)",
                     )
-                shadow = find_shadow_file(repo, candidate, test_commit, changed)
+                shadow = find_shadow_file(repo, candidate, test_commit, changed, base_commit=base)
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
@@ -185,12 +191,12 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
     """Read and scan one committed blob: "" (none), _REDIRECT (a path or program launch, which
     needs a shadow file) or _MACHINERY (an added or removed statement reaches machinery).
     Unreadable or unparseable candidate source fails closed."""
-    data = run_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
+    data = read_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
     signal = scan_sys_path_blob(data)
     if signal is None:
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
     added = changed[path] == "ADD"
-    old = None if added else run_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
+    old = None if added else read_git_bytes(repo, "cat-file", "blob", f"{base}:{path}")
     try:
         alias = alias_machinery_changed(old, data)
     except ValueError:
@@ -199,8 +205,8 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         raise
     if alias:
         return _MACHINERY
-    if not signal:
-        return ""
+    if not signal:  # a frozen file stays frozen even when the candidate text loses its signal
+        return _RUNTIME if frozen_search_path_change(old, data) else ""
     if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST):
         return _MACHINERY
     if runtime_shadow_added(old, data):

@@ -17,7 +17,7 @@ Read `README.md` and `docs/LESSONS_FROM_NEXUS.md` first.
 - A failure in a safeguard, in verification or in a Core call must never produce a success state or an unauthorised side effect. Allowed degradations are listed in the contract, not improvised in `except` blocks.
 - Every task has exactly one owning system, bound before dispatch by a durable, atomic record (idempotency key, request digest, owner, task id). Resend, query, cancel and recovery route by that record; unknown ownership stops dispatch.
 - Only a nexus-core VERIFIED verdict marks a task complete.
-- Limits enforced in CI (blocking): file ≤400 lines, function ≤80 lines, the sandbox package cap (`cairnwork_sandbox` ≤1,250), no import cycles, core never imports `experimental`.
+- Limits enforced in CI (blocking): file ≤400 lines, function ≤80 lines, the sandbox package cap (`cairnwork_sandbox` ≤1,280), no import cycles, core never imports `experimental`.
 - `src/cairnwork` 5,000 lines is a warning budget, not a hard limit: above it CI prints WARNING (not a failure) and the PR must briefly state the reason, alternatives considered (existing implementation, contract or adapter), responsibility (no second authority or duplicated state), cost, and verification. Placement follows responsibility: never create a new `cairnwork_*` package to avoid the counter; a new package needs an explainable boundary, one-way dependencies and an independently verifiable interface. `scripts/check_size.py` prints the per-package table.
 
 ## Verification
@@ -30,7 +30,7 @@ uv run python scripts/check_size.py
 uv run pytest -q
 ```
 
-Run the sandbox tests for real on macOS: `CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q`. Without it the `sandbox`-marked tests are skipped locally, while CI's `test-macos` job sets it and fails if `sandbox-exec` is missing, so a local green run can hide a real failure. Local verification always runs the full `uv run pytest -q` (with `CAIRNWORK_REQUIRE_SANDBOX=1` on macOS). Separately, for Issue-intake tasks the verifier counts a run as passed only if every collected test passed, so a skipped test fails it: when choosing the verification commands or hidden tests of such a task, pick targets that have zero skips on the host (`scripts/env_smoke.py` reports `SKIPPED_TESTS`).
+Run the sandbox tests for real on macOS: `CAIRNWORK_REQUIRE_SANDBOX=1 uv run pytest -q`. Without it the `sandbox`-marked tests are skipped locally, while CI's `test-macos` job sets it and fails if `sandbox-exec` is missing, so a local green run can hide a real failure. On a pull request `test-macos` runs only the platform-specific test files (`scripts/ci_macos_platform.py`, Issue #1684); the whole macOS suite runs nightly and on manual dispatch, and a red run opens or updates the Issue "macOS nightly failed". Likewise on a pull request the Linux `test` job runs the suite on Python 3.11 only (`test (3.12)` and `test (3.13)` pass at once); a push to main, the nightly and a manual run on main run all three versions, and only a red nightly or manual run opens or updates the Issue "Linux nightly failed" (Issue #1696). Local verification always runs the full `uv run pytest -q` (with `CAIRNWORK_REQUIRE_SANDBOX=1` on macOS). Separately, for Issue-intake tasks the verifier counts a run as passed only if every collected test passed, so a skipped test fails it: when choosing the verification commands or hidden tests of such a task, pick targets that have zero skips on the host (`scripts/env_smoke.py` reports `SKIPPED_TESTS`).
 
 ## Merging
 

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 FLAG = "CAIRNWORK_LOCAL_RELAY"
+MASK_SECRET_LINES_FLAG = "RELAY_MASK_SECRET_LINES"
 DEFAULT_CONTEXT_TOKENS = 32768
 RETRY_CONTEXT_TOKENS = 65536
 DEFAULT_MAX_STEPS = 200  # experiment values for the local worker loop
@@ -30,7 +31,11 @@ class RelayConfig:
     timeout_seconds: float = 60.0
     # Builds what the gate reviews from a candidate; default is the candidate's string form.
     plan_for: Callable[[Any], str] | None = None
+    mask_secret_lines: bool = False  # last: existing positional callers stay unchanged
 
     @classmethod
     def from_env(cls) -> RelayConfig:
-        return cls(enabled=os.environ.get(FLAG) == "1")
+        return cls(
+            enabled=os.environ.get(FLAG) == "1",
+            mask_secret_lines=os.environ.get(MASK_SECRET_LINES_FLAG) == "1",
+        )

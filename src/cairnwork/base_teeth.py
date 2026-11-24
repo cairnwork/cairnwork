@@ -17,11 +17,17 @@ _PLUGIN_HINT = "; install the plugin in the verifier's Python (pytest_config.PLU
 _SETUP_HINT = "; import fix-introduced symbols inside the test function"
 
 
+def _shown(nodeids: list[str], hidden: bool) -> str:
+    """#1186: a run of a not-yet-published test commit reports how many tests, never which."""
+    return f"{len(nodeids)} test(s)" if hidden else _names(nodeids)
+
+
 def base_teeth(runs, targets) -> tuple[str, str, str]:
     """``(kind, code, detail)`` for ``Comparison``: TEETH, UNCOMPARABLE or NO_TEETH."""
     setup: list[str] = []
     env: list[str] = []
     plugin: list[str] = []
+    hidden = any(getattr(run, "hidden_tests", False) for run in runs)
     for run in runs:
         for nodeid, outcome in run.outcomes.items():
             if outcome != "failed" or not (
@@ -33,18 +39,18 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
                 return ("TEETH", "", "")
             {"setup": setup, "plugin": plugin}.get(kind, env).append(nodeid)
     if plugin and not setup:  # #804: only a missing table plugin's fixture stopped the base
-        detail = f"a pytest plugin fixture is missing for {_names(plugin)}"
+        detail = f"a pytest plugin fixture is missing for {_shown(plugin, hidden)}"
         return ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED", detail + _PLUGIN_HINT)
     if setup or plugin:
         setup += plugin
         files = {file_part(target) for target in targets}
         hint = _SETUP_HINT if any(file_part(n) in files for n in setup) else ""
-        detail = f"fixture setup failed for {_names(setup)}{hint}"
+        detail = f"fixture setup failed for {_shown(setup, hidden)}{hint}"
         return ("UNCOMPARABLE", "BASE_SETUP_ERROR", detail)
     if env:
         detail = (
             "the test body failed from the environment (OSError, MemoryError, RecursionError, "
-            f"or a subprocess that could not run) for {_names(env)}"
+            f"or a subprocess that could not run) for {_shown(env, hidden)}"
         )
         return ("UNCOMPARABLE", "BASE_ENV_ERROR", detail)
     return ("NO_TEETH", "", "")

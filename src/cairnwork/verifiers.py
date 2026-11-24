@@ -56,12 +56,19 @@ import os
 import secrets
 import tempfile
 from contextlib import nullcontext
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
 import cairnwork_sandbox
-from cairnwork import gitcmd, pytest_config, report_channel, report_guard
+from cairnwork import (
+    collect_stop,
+    fixture_probe,
+    gitcmd,
+    pytest_config,
+    report_channel,
+    report_guard,
+)
 from cairnwork.account_checkout import checkout_differences, make_account_checkout
 from cairnwork.account_checkout import remove_checkout as _remove_checkout
 from cairnwork.account_prelude import locked_prelude
@@ -72,15 +79,19 @@ from cairnwork.core_request import VerifierObservation
 from cairnwork.import_path_tree import require_plain_dirs
 from cairnwork.node_ids import normalise_run_ids
 from cairnwork.pycache_guard import PYCACHE_DIR
-from cairnwork.reasons import all_skipped, candidate_denial, plain_test_failure, why_not_passed
+from cairnwork.reasons import candidate_denial, plain_test_failure
 from cairnwork.run_scrub import close_private
+from cairnwork.run_tags import EVIDENCE_MARK
 from cairnwork.verifier_account import lock_wait_seconds
 from cairnwork.verifier_exec import (  # low-level run primitives, split out for the 400-line cap
     _file_sha256,
     _record_digest,
     _run_confined,
     _write_new,
+    opaque_clone_id,
 )
+from cairnwork.verifier_failure_summary import failure_reason, with_failure_detail
+from cairnwork.verifier_run import VerifierRun
 from cairnwork.verifier_spec import (  # re-exported for existing importers
     VerifierRejected,
     VerifierSpec,
@@ -104,47 +115,6 @@ DEFAULT_TIMEOUT_SECONDS = 600
 # Kept here (not in verifier_exec) because tests monkeypatch verifiers._ENV_KEEP to inject env vars,
 # and _prepare_run below must read the patched value.
 _ENV_KEEP = ("PATH", "LANG", "LC_ALL")
-
-
-@dataclass(frozen=True)
-class VerifierRun:
-    spec: VerifierSpec
-    returncode: int | None
-    timed_out: bool
-    mutated: tuple[str, ...]
-    log_path: Path
-    observation: VerifierObservation
-    outcomes: dict[str, str]
-    skips: dict[str, tuple[str, str]] = field(default_factory=dict)
-    survivors: int = 0
-    ran: bool = False
-    # a plain test failure: the guard reported a failed test and nothing about the run itself
-    # is suspect (no timeout, mutation, survivor or oversized log); p2p.py may re-run only this
-    plain_failure: bool = False
-    report_too_big: bool = False  # the guard's report exceeded MAX_REPORT_BYTES: no verdict read
-    recorded: bool = False  # the guard's record was there and well-formed (base_comparison, #234)
-    collect_errors: tuple[str, ...] = ()  # collectors the guard saw fail (B2, #234)
-    skipped_deps: tuple[str, ...] = ()  # modules skipped collectors could not import (#813)
-    import_errors: tuple[tuple[str, str, str], ...] = ()  # #796: guard's import record, unread
-    submodule_errors: tuple[tuple[str, str, str], ...] = ()  # #796 S3: the same, unread
-    teardown_errors: tuple[str, ...] = ()  # tests whose teardown failed (#478, report_guard)
-    fail_kind: dict[str, str] = field(default_factory=dict)  # #775: node -> setup/env/plugin
-    forged: tuple[str, ...] = ()  # FORGED_BYTECODE findings (#289): a base run proves nothing
-    log_too_big: bool = False  # the run's log went over MAX_LOG_BYTES (#481, base_comparison)
-    why: str = ""  # in words, why the run did not pass ("" when it passed): reasons.py
-    # facts about the sandbox policy used (e.g. "shm withheld: BWRAP_TMPFS_SIZE_UNSUPPORTED"); not
-    # in the observation's artifact hash, so recording them changes no bound digest
-    notes: tuple[str, ...] = ()
-    collected: tuple[str, ...] = ()  # #793: node ids pytest collected (the guard's record)
-    collect_skipped: tuple[str, ...] = ()  # #793: collectors skipped while collecting
-    collection_finished: bool = False  # #793: collection was not stopped part way
-    deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
-    deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
-    setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)  # #962; unhashed
-    data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
-    not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
-    renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection
-    uncollected_exposed: tuple[str, ...] | None = None
 
 
 def run_verifiers(
@@ -174,15 +144,16 @@ def run_verifiers(
     if settings.pythonpath:
         require_plain_dirs(ctx.repo, candidate_commit, settings.pythonpath)
     account = ctx.account
+    keep = bool(ctx.attempt_id) and run_id == f"{ctx.attempt_id}-v"  # the Core run's own id
     if account is not None:
         python = verifier_interpreter(ctx)
         ctx = replace(ctx, run_root=account.run_root)
         # a prelude refusal is AccountUnusableBeforeRun (#803)
-        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout)):
-            batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny)
+        with locked_prelude(account, python, lock_wait_seconds(len(specs), timeout), ctx.repo):
+            batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny, keep)
             return _run_all(batch, specs, run_id)
     python = verifier_interpreter(ctx)
-    batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny)
+    batch = _Batch(ctx, python, candidate_commit, timeout, settings, note, deny, keep)
     return _run_all(batch, specs, run_id)
 
 
@@ -199,6 +170,7 @@ class _Batch:
     settings: pytest_config.PytestSettings
     note: str
     deny: bool = False
+    keep_log: bool = False  # the Core run's: recovery keeps its verify log (EVIDENCE_MARK)
 
 
 def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
@@ -212,8 +184,8 @@ def _run_all(batch: _Batch, specs, run_id) -> tuple[VerifierRun, ...]:
     for index, spec in enumerate(specs):
         if index and ctx.account is not None:
             ctx.account.require_idle()  # survivors of the last spec
-            ctx.account.scrub_stale_runs()  # #437 D: no run beside the last spec's leftover run/
-        clone_id = f"{run_id}-v{index}"
+            ctx.account.scrub_stale_runs(ctx.repo)  # #437 D: no run beside the last spec's run/
+        clone_id = opaque_clone_id(ctx.attempt_id)  # not run_id: the code under test sees it
         # The checkout sits alone in its own work directory, which the tests may write (some
         # create files next to their repository: Nexus-new nexus-runtime-targets). Under the account
         # the checkout is its own copy, which it may rename: _same_directory catches that.
@@ -279,7 +251,7 @@ def _prepare_run(private: Path, ini: Path, ini_text: bytes, channel=None, hash_s
 
 
 def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
-    account, python = batch.ctx.account, batch.python
+    account, python, ctx = batch.ctx.account, batch.python, batch.ctx
     plugins = pytest_config.installed_plugins(python)
     ini_text = batch.settings.ini_text(checkout, plugins)
     private = Path(tempfile.mkdtemp(prefix=f"{checkout.name}.", dir=checkout.parent.parent))
@@ -287,17 +259,30 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     # close the channel, then drop private/run even if that close raises
     with unless_interrupted(partial(close_private, private, account)):
         try:
-            return _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            run = _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
+            names = fixture_probe.finish(spec, ctx, batch.candidate_commit, private, ini_text, run)
+            return replace(run, fixture_names=names)
         finally:
+            # After the child has ended (or the run failed): code under test must not see the mark
+            # at Path(HOME).parents[1] (#1698). An interrupt still gets it before recovery looks.
+            if batch.keep_log:
+                (private / EVIDENCE_MARK).touch()
             if channel is not None:
                 channel.close()
 
 
-def _read_verdict(channel, path, nonce, plugins, checkout):
-    """The guard's record, with its ``plugin:<module>`` fail kinds made final (#804)."""
-    verdict = channel.read() if channel else report_guard.read_verdict(path, nonce)
+def _read_verdict(channel, path, nonce, plugins, checkout, stop=None, returncode=None):
+    """(the guard's record, the run's exit status). The record has its ``plugin:<module>`` fail
+    kinds made final (#804). A quiet collect run that has a collection record (#1671) is read from
+    that alone, as the watcher first read it, with the exit status pytest recorded in it (a run
+    that timed out keeps none): the final record and the status of an ended process are ignored."""
+    got = stop.record() if stop else None
+    if got is not None:
+        verdict, returncode = got, (None if returncode is None else got.exitstatus)
+    else:
+        verdict = channel.read() if channel else report_guard.read_verdict(path, nonce)
     verdict = replace(verdict, fail_kind=pytest_config.plugin_kinds(verdict.fail_kind, plugins))
-    return normalise_run_ids(verdict, checkout)
+    return normalise_run_ids(verdict, checkout), returncode
 
 
 def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
@@ -313,6 +298,15 @@ def _denial(batch: _Batch, verdict, checkout, run_dir, clean=True) -> str:
 _RUN_FILES = ("verifier.log", "pytest.ini", "profile.sb")  # a run's private files
 
 
+def _argv(batch: _Batch, spec, python, ini, checkout, plugins, probe_argv) -> list[str]:
+    return [
+        python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
+        f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
+        *batch.settings.args(plugins), "-p", report_guard.MODULE, *probe_argv, *spec.targets,
+        *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
+    ]  # fmt: skip
+
+
 def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, channel) -> VerifierRun:
     ctx, candidate_commit, timeout = batch.ctx, batch.candidate_commit, batch.timeout
     account, python, attempt_id = ctx.account, batch.python, ctx.attempt_id
@@ -320,48 +314,47 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     run_dir, home, tmp, env, verdict_path, verdict_nonce = _prepare_run(
         private, ini, ini_text, channel, ctx.hash_seed
     )
+    stop = collect_stop.watcher(spec, channel, verdict_path, verdict_nonce)  # quiet run only
     if account is not None:
         account.share_run(private, ini, run_dir, home, tmp)
-    if attempt_id:
-        env[ATTEMPT_ENV] = attempt_id
-    argv = [
-        python, "-P", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-c", str(ini),
-        f"--rootdir={checkout}", f"--confcutdir={checkout}", "-o", "addopts=",
-        *batch.settings.args(plugins), "-p", report_guard.MODULE, *spec.targets,
-        *spec.flags(),  # --collect-only (#793), --continue-on-collection-errors (#796)
-    ]  # fmt: skip
-    before, profile, evidence, backend = os.lstat(checkout), None, None, cairnwork_sandbox.select()
-    if backend is not None:
-        profile = backend.policy(
-            read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
-            write_roots=(checkout.parent, run_dir),
-            mask_home_credentials=account is None,  # account uid can't enter the owner's home
-        )
-        profile, returncode, timed_out, survivors, evidence = _run_confined(
-            batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
-            account, backend, channel.pass_fds if channel else (),
-        )  # fmt: skip
-    else:
-        _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
-        returncode, timed_out, survivors = None, False, 0
+    env.update({ATTEMPT_ENV: attempt_id} if attempt_id else {})
+    with fixture_probe.start(spec, ctx, private, env, ini_text, candidate_commit) as probe:
+        argv = _argv(batch, spec, python, ini, checkout, plugins, probe.argv)
+        before, backend = os.lstat(checkout), cairnwork_sandbox.select()
+        profile, evidence, returncode, timed_out, survivors = None, None, None, False, 0
+        if backend is not None:
+            profile = backend.policy(
+                read_roots=(*pytest_config.interpreter_roots(python), ini, private / "guard"),
+                write_roots=(checkout.parent, run_dir),
+                mask_home_credentials=account is None,  # account uid can't enter the owner's home
+            )
+            profile, returncode, timed_out, survivors, evidence = _run_confined(
+                batch.deny, profile, python, argv, profile_path, checkout, env, timeout, log_path,
+                account, backend, (*(channel.pass_fds if channel else ()), *probe.pass_fds),
+                *([stop] if stop else []),
+            )  # fmt: skip
+        else:
+            _write_new(log_path, b"no sandbox backend available: verifier not executed\n")
     mutated = checkout_differences(ctx.repo, candidate_commit, checkout, before, account, python)
     forged = bytecode_findings(tmp, checkout, run_dir, spec.targets, account, python)
-    verdict = _read_verdict(channel, verdict_path, verdict_nonce, plugins, checkout)
+    verdict, returncode = _read_verdict(
+        channel, verdict_path, verdict_nonce, plugins, checkout, stop, returncode
+    )
     not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
-    passed = profile is not None and returncode == 0 and clean and ran  # ran: pytest said 0 too
+    # ran: pytest said 0 too; a collect run never passes, even a quiet one that ran on (#1671)
+    passed = profile is not None and returncode == 0 and clean and ran and not spec.collect_only
     plain_failure = plain_test_failure(profile is not None, returncode, clean, verdict.outcomes)
-    why = "" if passed else why_not_passed(
-        ran_sandboxed=profile is not None, returncode=returncode, timed_out=timed_out,
-        mutated=mutated, survivors=survivors, log_too_big=too_big, tests_ran=ran,
-        report_too_big=verdict.too_big, forged=forged, not_run=not_run, renamed=verdict.renamed,
-        exitstatus=verdict.exitstatus, testsfailed=verdict.testsfailed, fail_kind=verdict.fail_kind,
-        data_refused=verdict.data_refused,
-        denied_path=_denial(batch, verdict, checkout, run_dir, clean and not not_run),
-        all_skipped=all_skipped(verdict.collected, verdict.outcomes), outcomes=verdict.outcomes,
-    )  # fmt: skip
+    why = ""
+    if not passed:
+        denial = _denial(batch, verdict, checkout, run_dir, clean and not not_run)
+        reason = failure_reason(
+            verdict, profile, ran, timed_out, mutated, survivors, too_big, returncode, forged,
+            not_run, bool(ctx.test_commit), denial,
+        )  # fmt: skip
+        why = with_failure_detail(reason, ctx, spec, verdict, log_path)
     digest = _record_digest(
         candidate_commit=candidate_commit,
         verifier_id=spec.verifier_id,
@@ -383,7 +376,8 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
-        report_too_big=verdict.too_big, notes=(profile.notes if profile else ()) + host_notes(),
+        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big,
+        notes=(profile.notes if profile else ()) + host_notes(),
         collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped, skips=verdict.skips,

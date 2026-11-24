@@ -14,10 +14,11 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
-import sys
 import tempfile
 import time
 from pathlib import Path
+
+from _child_python import run_module
 
 
 def git(cwd: Path, *args: str) -> str:
@@ -76,7 +77,7 @@ def run_mode(args, ctx, mode: str) -> dict:
     commit = push_test_commit(root, origin, base, args, mode)
     started = time.monotonic()
     done = subprocess.run(
-        [sys.executable, "-I", "-m", "cairnwork.verify_cli", "--state", str(state), "run",
+        run_module("cairnwork.verify_cli") + ["--state", str(state), "run",
          "--repo-path", str(project), "--base", base, "--candidate", cand,
          "--allowed-file", args.src_file, "--test-commit", commit,
          "--verifier", f"python3 -m pytest -q {args.tests_root}/test_zz_measure.py"],
