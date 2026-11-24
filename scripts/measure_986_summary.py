@@ -15,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 
 MIN_N = 20
+MIN_TIMED_FRACTION = 0.4  # of the good pairs after the warm-up that must have a usable time
 
 
 def _p95(values: list[float]) -> float:
@@ -25,7 +26,9 @@ def _p95(values: list[float]) -> float:
 def _invalid(rows: list[dict], min_n: int, expect_n: int | None) -> list[str]:
     if not rows:
         return ["no rows"]
-    n = expect_n or max(r["i"] for r in rows) + 1
+    if expect_n is not None and expect_n <= 0:
+        return ["--expect-n must be positive"]
+    n = max(r["i"] for r in rows) + 1 if expect_n is None else expect_n
     want = {(i, a, s) for i in range(n) for a in ("on", "off") for s in ("bad", "good")}
     keys = Counter((r["i"], r["arm"], r["scenario"]) for r in rows)
     reasons = []
@@ -35,6 +38,8 @@ def _invalid(rows: list[dict], min_n: int, expect_n: int | None) -> list[str]:
         reasons.append(f"{len(want - set(keys))} of {len(want)} expected cases missing")
     if any(v > 1 for v in keys.values()):
         reasons.append("a case appears more than once")
+    if any(not math.isfinite(r["seconds"]) or r["seconds"] <= 0 for r in rows):
+        reasons.append("a time is not a finite positive number")
     return reasons
 
 
@@ -53,6 +58,10 @@ def summarise(rows: list[dict], min_n: int = MIN_N, expect_n: int | None = None)
     added = [on[k]["seconds"] - off[k]["seconds"] for k in timed]
     total_on = sum(on[k]["seconds"] for k in timed)
     total_off = sum(off[k]["seconds"] for k in timed)
+    eligible = [k for k in both if k[1] == "good" and (k[0] > 0 or len(both) <= 2)]
+    floor = max(1, math.ceil(MIN_TIMED_FRACTION * len(eligible)))
+    if len(timed) < floor:
+        invalid.append(f"{len(timed)} timed good pairs, need at least {floor}")
     on_rows = list(on.values())
     ok = [r["probe"] == "OK" for r in on_rows]
     return {
@@ -97,6 +106,10 @@ def table(s: dict) -> str:
         ("False blocks (step on)", s["false_blocks_on"], "0"),
         ("Added max (s)", s["added_max_s"], "-"),
         ("Error rows", s["errors"], "0"),
+    ]
+    lines += [
+        f"Timed good pairs: {s['timed_pairs']} (at least {MIN_TIMED_FRACTION:.0%} required)",
+        "",
     ]
     lines += ["| Item | Measured | AC8 threshold |", "|---|---|---|"]
     lines += [f"| {a} | {b} | {c} |" for a, b, c in gate]

@@ -149,3 +149,51 @@ def test_p95_and_max_of_varying_pair_differences_with_negatives():
     s = summary.summarise(rows, expect_n=21)
     assert s["timed_pairs"] == 20
     assert s["added_p95_s"] == 9.5 and s["added_max_s"] == 10.0  # 19th of 20, then the largest
+
+
+def _set(rows, arm, scenario, pairs, **fields):
+    for k, r in enumerate(rows):
+        if r["arm"] == arm and r["scenario"] == scenario and r["i"] in pairs:
+            rows[k] = {**r, **fields}
+    return rows
+
+
+@pytest.mark.parametrize("timed", [0, 1, 7])
+def test_too_few_timed_good_pairs_is_invalid(timed):
+    rows = _good_rows()
+    _set(rows, "on", "good", set(range(1 + timed, 20)), status="ERROR", seconds=1.0)
+    s = summary.summarise(rows, expect_n=20)
+    assert s["timed_pairs"] == timed and s["invalid"]
+
+
+def test_the_timed_pair_floor_is_printed_in_the_table():
+    assert "40%" in summary.table(summary.summarise(_good_rows()))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0], ids=["nan", "inf", "negative"])
+def test_a_time_that_is_not_a_finite_positive_number_is_invalid(bad):
+    rows = _set(_good_rows(), "on", "good", {7}, seconds=bad)
+    assert summary.summarise(rows, expect_n=20)["invalid"]
+
+
+def test_an_off_arm_baseline_of_zero_is_invalid():
+    rows = _set(_good_rows(), "off", "good", set(range(20)), seconds=0.0)
+    assert summary.summarise(rows, expect_n=20)["invalid"]
+
+
+@pytest.mark.parametrize("n", [0, -3])
+def test_a_non_positive_expect_n_is_refused_not_ignored(n):
+    assert summary.summarise(_good_rows(), expect_n=n)["invalid"]
+
+
+def test_a_good_candidate_that_failed_in_the_off_arm_is_not_timed():
+    rows = _set(_good_rows(), "off", "good", set(range(1, 11)), status="FAILED", seconds=1.0)
+    s = summary.summarise(rows, expect_n=20)
+    assert s["end_to_end_increase"] == 0.1564 and s["timed_pairs"] == 9 and s["invalid"] == []
+
+
+def test_main_passes_expect_n_down(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in _good_rows(20)))
+    assert summary.main(["x", str(path), "--expect-n", "20"]) == 0
+    assert summary.main(["x", str(path), "--expect-n", "40"]) == 1
