@@ -99,3 +99,75 @@ def test_commits_built_in_the_same_second_are_all_distinct(tmp_path):
         times.append(_git(out / "work", "show", "-s", "--format=%ct", shas[-1]))
     assert len(set(shas)) == 3  # a repeated sha would be a used test commit the store refuses
     assert len(set(times)) < 3  # at least two were built in the same second
+
+
+# --- path-component symlink check (#1533 follow-up, #1743) ---------------------------------
+from experimental.local_relay.hidden_tests import _refuse_symlink_components  # noqa: E402
+
+
+def test_relative_link_target_is_resolved_against_the_links_own_directory(tmp_path):
+    deep = tmp_path / "d1" / "d2"
+    deep.mkdir(parents=True)
+    real = tmp_path / "real"
+    _private_dir(real)
+    (deep / "sib").symlink_to(real)  # an untrusted link, a sibling of the trusted one
+    trusted = deep / "lnk"
+    trusted.symlink_to("sib")  # relative: must be read as d1/d2/sib, not from / or the cwd
+    with pytest.raises(ValueError, match="symlink"):
+        _refuse_symlink_components(trusted / "x", lambda p: p == trusted)
+
+
+def test_dotdot_after_a_followed_link_steps_out_of_the_link_target(tmp_path):
+    user_dir = tmp_path / "user_dir"
+    (user_dir / "sub").mkdir(parents=True)
+    real = tmp_path / "real"
+    _private_dir(real)
+    (user_dir / "evil").symlink_to(real)  # untrusted link beside the link's target
+    trusted = tmp_path / "trusted_link"
+    trusted.symlink_to(user_dir / "sub")
+    # trusted/.. is user_dir (the target's parent), so evil is reached and must be refused
+    with pytest.raises(ValueError, match="symlink"):
+        _refuse_symlink_components(trusted / ".." / "evil" / "x", lambda p: p == trusted)
+
+
+def test_dotdot_in_a_clean_path_passes_and_cannot_hide_a_link(tmp_path):
+    (tmp_path / "x").mkdir()
+    real = tmp_path / "real"
+    _private_dir(real)
+    _refuse_symlink_components(tmp_path / "x" / ".." / "real", lambda p: False)
+    (tmp_path / "alias").symlink_to(real)
+    with pytest.raises(ValueError, match="symlink"):
+        _refuse_symlink_components(tmp_path / "real" / ".." / "alias", lambda p: False)
+
+
+def test_link_cycles_stop_within_the_hop_cap(tmp_path):
+    a, b, me = tmp_path / "a", tmp_path / "b", tmp_path / "me"
+    a.symlink_to(b)
+    b.symlink_to(a)
+    me.symlink_to(me)
+    for start in (a, me):
+        calls: list[Path] = []
+
+        def trust(p: Path, calls: list[Path] = calls) -> bool:
+            calls.append(p)
+            assert len(calls) < 200, "hop cap missing: the walk does not stop on a cycle"
+            return True
+
+        with pytest.raises(ValueError, match="symlink"):
+            _refuse_symlink_components(start / "x", trust)
+        assert 0 < len(calls) <= 40
+
+
+def test_runtime_refuses_a_fixture_whose_hidden_dir_path_has_a_user_symlink(tmp_path):
+    real_parent = tmp_path / "real_parent"
+    real_parent.mkdir()
+    _private_dir(real_parent / "private")
+    (tmp_path / "alias").symlink_to(real_parent)
+    data = {
+        "task_id": "d" * 32, "prompt": "p", "allowed_files": ["src/calc.py"],
+        "verifiers": [["python3", "-m", "pytest", "-q", "tests/test_hidden.py"]],
+        "hidden_tests_dir": str(tmp_path / "alias" / "private"),
+    }  # fmt: skip
+    repo, _base = _repo(tmp_path)
+    with pytest.raises(ValueError, match="symlink"):
+        runtime._validate_task(data, repo)
