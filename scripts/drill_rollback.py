@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 import drill_normal
+from _child_python import run_module
 
 TIMEOUT = 600.0
 RESULTS: list[dict[str, Any]] = []
@@ -33,7 +34,7 @@ Json = dict[str, Any]
 
 def route(state: Path, *args: str, stdin: Json | None = None) -> tuple[int, Json]:
     proc = subprocess.run(
-        [sys.executable, "-m", "cairnwork.route", "--state", str(state), *args],
+        run_module("cairnwork.route") + ["--state", str(state), *args],
         input=json.dumps(stdin) if stdin is not None else "",
         capture_output=True,
         text=True,

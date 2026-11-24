@@ -291,6 +291,38 @@ def test_account_mode_refuses_a_reachable_dangling_inner_target_under_a_root(wor
     assert _policy(world / "home", owner=False)  # outside every root: skipped
 
 
+def test_account_mode_counts_an_unreachable_dangling_target_under_a_root(world):
+    """#422: its parent is one the account cannot traverse, so the reach rule drops it before the
+    dangling check; it lies under a run root, so the skip must still be counted (no path)."""
+    out = world / "out"
+    (out / "priv").mkdir(mode=0o700)
+    (world / "home" / ".aws").mkdir()
+    (world / "home" / ".aws" / "gone").symlink_to(out / "priv" / "gone")
+    policy = bwrap.BACKEND.policy(
+        (out / "priv",), (), home=world / "home", mask_home_credentials=False
+    )
+    assert f"{bwrap_inner.DANGLING_NOTE}1" in policy.notes
+    assert not any(str(out) in note for note in policy.notes)
+
+
+def test_account_mode_refuses_an_unreadable_target_under_a_root_not_counts_it_dangling(world):
+    """#1045: the owner cannot stat the target (EACCES), so it is not known to be absent; the
+    unreachable-target branch must refuse like the reachable one, not count it as dangling."""
+    locked = world / "out" / "locked"
+    locked.mkdir(mode=0o700)
+    (locked / "tok").write_text("secret\n")  # must exist: the root guard below stats it
+    (world / "home" / ".aws").mkdir()
+    (world / "home" / ".aws" / "x").symlink_to(locked / "tok")
+    locked.chmod(0)
+    try:
+        if os.access(locked / "tok", os.F_OK):
+            pytest.skip("running as a user that stats through a mode-0 directory (root)")
+        with pytest.raises(SandboxError, match="cannot be checked"):
+            _policy(world / "home", reads=(world / "out",), owner=False)
+    finally:
+        locked.chmod(0o700)
+
+
 def _serve(path: Path) -> socket.socket:
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(path))

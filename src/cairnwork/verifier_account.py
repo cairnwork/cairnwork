@@ -251,17 +251,21 @@ class VerifierAccount:
             lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
         )
 
-    def reap(self) -> int:
+    def reap(self, main: int = 0) -> int:
         """Kill everything the account runs; return how many escaped processes were running.
         Before the kill a failed ps is not retried (that gives a survivor time to hide). An
-        unknown count is one more, so "cannot tell" is never "nothing escaped"."""
+        unknown count is one more, so "cannot tell" is never "nothing escaped". ``main`` (#1671):
+        processes the caller knows are its own run and ends on purpose; they come off a KNOWN
+        count only, never off an unknown one."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
             return 1
-        return max(before, 0) + (1 if before < 0 or left != 0 else 0)
+        if before < 0 or left != 0:
+            return max(before, 0) + 1
+        return max(before - main, 0)
 
     def kill_all(self, attempts: int = 5) -> int:
         """SIGKILL every process of the account; return how many ESCAPED processes are left (-1:
@@ -300,11 +304,11 @@ class VerifierAccount:
         if left != 0:
             raise VerifierAccountError(f"account {self.user} still runs processes ({left})")
 
-    def scrub_stale_runs(self) -> None:
+    def scrub_stale_runs(self, candidate_tree: Path) -> None:
         """Under exclusive(), after require_idle: drop leftover private/run dirs or refuse."""
         from cairnwork.run_scrub import stale_run_error
 
-        detail = stale_run_error(self)
+        detail = stale_run_error(self, candidate_tree)
         if detail:
             raise VerifierAccountError(detail)
 

@@ -31,6 +31,11 @@ darwin = pytest.mark.skipif(sys.platform != "darwin", reason="macOS flags and AC
 SMALL = (16, 45)  # entries, seconds: a budget the trees below outgrow
 
 
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
+
+
 @pytest.fixture
 def runs(tmp_path):
     root = tmp_path / "runs"
@@ -92,7 +97,7 @@ def test_a_lock_deeper_than_the_old_depth_limit_is_cleared_in_one_pass(runs):
     close_private(private, account)
     assert not os.path.lexists(private / "run"), account.ran
     assert [rc for _argv, rc, _err in account.ran] == [0, 0], account.ran
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
 
 
 @darwin
@@ -107,11 +112,11 @@ def test_past_the_entry_limit_each_scrub_gets_further(runs, monkeypatch, kind):
     close_private(private, account)
     assert os.path.lexists(private / "run")  # the budget really was too small
     left = [_weight(private / "run")]
-    while stale_run_error(account) is not None:
+    while stale_run_error(account, runs.parent / "candidate") is not None:
         left.append(_weight(private / "run"))
         assert left[-1] < left[-2] and len(left) < 40, (left, account.ran[-2:])
     assert not os.path.lexists(private / "run")
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
 
 
 @darwin
@@ -121,7 +126,7 @@ def test_the_printed_account_steps_repeated_clear_a_tree_past_a_limit(runs, monk
     monkeypatch.setattr(run_scrub, "_UNLOCK_LIMITS", SMALL)
     private = _private(runs)
     _chain(private / "run" / "home", 60, sibling=True)
-    message = stale_run_error(_Refusing(runs))
+    message = stale_run_error(_Refusing(runs), runs.parent / "candidate")
     assert message is not None
     steps = message[message.index("as the verifier account: ") :]
     account_steps = steps[: steps.index("; as root")]
@@ -133,7 +138,7 @@ def test_the_printed_account_steps_repeated_clear_a_tree_past_a_limit(runs, monk
     assert not os.path.lexists(private / "run")
     owner_steps = steps[steps.index("; as the owner: ") + 2 :]
     assert [rc for _argv, rc, _err in _run_printed(owner_steps)] == [0, 0]
-    assert stale_run_error(_Refusing(runs)) is None
+    assert stale_run_error(_Refusing(runs), runs.parent / "candidate") is None
     assert "repeat the two account steps until" in message  # and when root is needed
 
 

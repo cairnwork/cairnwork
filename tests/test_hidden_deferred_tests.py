@@ -64,6 +64,14 @@ def test_a_changed_hidden_test_is_refused_beside_a_visible_one(project, shape):
     with pytest.raises(Rejected) as err:
         _new_tests(project, {F: REGRESSION + HIDDEN[shape]})
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE" and F in str(err.value)
+    # #1564: the reason names the shapes and tells the author what to change
+    assert "if/try/with/loop block" in str(err.value) and "top-level def test_*" in str(err.value)
+    if shape.startswith("testcase"):
+        assert "imported TestCase" in str(err.value)
+
+
+def test_a_top_level_changed_test_is_not_refused(project):
+    assert _new_tests(project, {F: REGRESSION}) == {f"{F}::test_regression"}  # the asked-for shape
 
 
 def test_removing_a_class_skip_changes_each_of_its_tests(project):
@@ -287,7 +295,7 @@ def test_verify_refuses_an_unrun_copy_of_a_test_whose_base_class_skip_was_remove
     assert out["status"] == status, out
     if status == "REFUSED":
         assert out["reason"].startswith("DEFERRED_TESTS_NOT_TARGETED"), out
-        assert "請點名整個檔案" in out["reason"], out
+        assert "detail withheld" in out["reason"], out
 
 
 @pytest.mark.parametrize("shadow", ["tests/unittest.py", "tests/lib/deep/unittest/__init__.py"])

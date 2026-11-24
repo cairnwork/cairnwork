@@ -53,6 +53,7 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
 from cairnwork.proc_cwd import attempt_dirs
 from cairnwork.reasons import _names
+from cairnwork.run_tags import EVIDENCE_MARK
 from cairnwork.run_tags import RUN_TAGS as _RUN_TAGS
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
 from cairnwork.workspace import WorkspaceError, remove_attempt_clone
@@ -272,7 +273,9 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
         if private.suffix == ".work" or not real(private):
             continue
         # a base-test or P2P run is not Core evidence and would show the tests: all of it goes
-        keep_log = f"{attempt_id}-v-" in private.name and not private.is_symlink()
+        keep_log = not private.is_symlink() and (
+            f"{attempt_id}-v-" in private.name or (private / EVIDENCE_MARK).is_file()
+        )  # #1698: run directories no longer carry the run id; the Core run's has a mark
         privates.append(private / "run" if keep_log else private)
     clones = sorted(
         p for pattern in patterns for p in root.glob(pattern) if real(p) and "." not in p.name

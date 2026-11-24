@@ -10,7 +10,11 @@ from collections import Counter
 from importlib.machinery import all_suffixes
 from pathlib import Path
 
-from cairnwork.gitcmd import GitCommandError, run_git_bytes
+from cairnwork import git_read_cap as cap
+from cairnwork.candidate_recognise import recognised_test_imports
+from cairnwork.candidate_recognise_names import base_roots_from_tree
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import GitCommandError
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _IMPORT_CALLS = frozenset({"import_module", "__import__", "importorskip"})
@@ -22,6 +26,7 @@ def find_shadow_file(
     candidate: str,
     test_commit: str | None = None,
     changed: dict[str, str] | None = None,
+    base_commit: str | None = None,
 ) -> str | None:
     """Return the first changed nested file that can shadow an imported module.
 
@@ -34,6 +39,12 @@ def find_shadow_file(
     )
     always = {name.casefold() for name in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
     changed = changed or {}
+    base_roots: frozenset[str] = frozenset()
+    if base_commit is not None:
+        try:
+            base_roots = base_roots_from_tree(_tree_entries(repo, base_commit))
+        except (GitCommandError, OSError, ValueError, UnicodeError):
+            base_roots = frozenset()
     imported: set[str] = set()
     importer_dirs: dict[str, set[str]] = {}
     top_importers: dict[str, set[str]] = {}
@@ -47,19 +58,22 @@ def find_shadow_file(
         for mode, typ, oid, path in trees[commit]
         if _is_source(path)
     ]
-    blobs = _read_source_blobs(repo, sources)
+    first_path: dict[str, str] = {}
+    for _, path, oid in sources:
+        first_path.setdefault(oid, path)
     parsed: dict[str, set[str] | None] = {}
     parsed_top: dict[str, set[str]] = {}
-    for commit, path, oid in sources:
-        if oid not in parsed:
+    for batch in _source_batches(repo, list(first_path)):  # each batch is read and parsed alone
+        for oid, raw_blob in _read_source_blobs(repo, batch).items():
             try:
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    parsed[oid] = _parse_imports(blobs[oid], path)
-                    parsed_top[oid] = _parse_top_level_imports(blobs[oid], path)
+                    parsed[oid] = _parse_imports(raw_blob, first_path[oid], base_roots)
+                    parsed_top[oid] = _parse_top_level_imports(raw_blob, first_path[oid])
             except (SyntaxError, ValueError, UnicodeError, MemoryError, RecursionError):
                 parsed[oid] = None
                 parsed_top[oid] = set()
+    for commit, path, oid in sources:
         names = parsed[oid]
         if names is None and path in changed:
             raise ValueError(f"{commit}:{path} could not be parsed")
@@ -140,7 +154,7 @@ def _validate_oid(commit: str) -> None:
 
 
 def _tree_entries(repo: Path, commit: str) -> tuple[tuple[int, str, str, str], ...]:
-    raw = run_git_bytes(repo, "ls-tree", "-r", "-z", commit)
+    raw = read_git_bytes(repo, "ls-tree", "-r", "-z", commit)
     entries = []
     for item in raw.split(b"\0"):
         if not item:
@@ -158,12 +172,48 @@ def _tree_entries(repo: Path, commit: str) -> tuple[tuple[int, str, str, str], .
     return tuple(entries)
 
 
-def _read_source_blobs(repo: Path, sources: list[tuple[str, str, str]]) -> dict[str, bytes]:
-    """Read each distinct source object in one batch; malformed or missing records fail closed."""
-    oids = list(dict.fromkeys(oid for _, _, oid in sources))
+_BATCH_RECORD_OVERHEAD = 128  # header line plus newline per object, with slack
+
+
+def _source_batches(repo: Path, oids: list[str]) -> list[list[str]]:
+    """Split the objects into batches that each fit under the read cap (#1515).
+
+    Sizes come from ``cat-file --batch-check``; one object past the cap is refused, the rest are
+    read batch by batch so only a single blob over the cap, not a large tree, is unreadable."""
+    if not oids:
+        return []
+    limit = cap.MAX_GIT_READ
+    raw = read_git_bytes(
+        repo, "cat-file", "--batch-check", stdin="".join(f"{oid}\n" for oid in oids).encode()
+    )
+    lines = raw.split(b"\n")
+    if len(lines) != len(oids) + 1 or lines[-1]:
+        raise GitCommandError("git cat-file --batch-check returned unexpected data")
+    batches: list[list[str]] = [[]]
+    used = 0
+    for oid, line in zip(oids, lines, strict=False):
+        head = line.split()
+        if len(head) != 3 or head[0] != oid.encode() or head[1] != b"blob" or not head[2].isdigit():
+            raise GitCommandError("git cat-file did not return a blob")
+        cost = int(head[2]) + _BATCH_RECORD_OVERHEAD
+        if cost > limit:
+            raise GitCommandError(f"git blob is over {limit} bytes")
+        if used + cost > limit and batches[-1]:
+            batches.append([])
+            used = 0
+        batches[-1].append(oid)
+        used += cost
+    return batches
+
+
+def _read_source_blobs(repo: Path, sources: list) -> dict[str, bytes]:
+    """Read each distinct source object in one batch; malformed or missing records fail closed.
+
+    ``sources`` is a list of (commit, path, oid) tuples or of bare oids."""
+    oids = list(dict.fromkeys(x if isinstance(x, str) else x[2] for x in sources))
     if not oids:
         return {}
-    raw = run_git_bytes(
+    raw = read_git_bytes(
         repo, "cat-file", "--batch", stdin="".join(f"{oid}\n" for oid in oids).encode()
     )
     blobs: dict[str, bytes] = {}
@@ -192,16 +242,21 @@ def _is_source(path: str) -> bool:
     return path.casefold().endswith(".py")
 
 
-def _parse_imports(raw: bytes, path: str) -> set[str]:
+def _parse_imports(raw: bytes, path: str, base_roots: frozenset[str] = frozenset()) -> set[str]:
     """Names one file imports; raises when it cannot be parsed (the caller treats that as None)."""
     tree = ast.parse(raw, filename=path)
     names: set[str] = set()
+    if _is_test_file(path):
+        names.update(recognised_test_imports(tree, base_roots))
+    called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             names.update(part for alias in node.names for part in alias.name.split("."))
         elif isinstance(node, ast.ImportFrom):  # relative too: from . import helper
             names.update((node.module or "").split("."))  # a submodule can be redirected
             names.update(alias.name for alias in node.names if alias.name != "*")
+        elif _is_test_file(path) and _indirect_import(node, called):
+            continue  # the recogniser above handles these uses, including aliases
         elif isinstance(node, ast.Call) and _call_name(node.func) in _IMPORT_CALLS:
             named = (k.value for k in node.keywords if k.arg in {"name", "modname"})
             args = (*node.args[:1], *named)
@@ -215,6 +270,23 @@ def _parse_imports(raw: bytes, path: str) -> set[str]:
                 names.add("*")  # a dynamic test import fails closed for every nested file
     names.discard("")
     return names
+
+
+_IMPORT_ROUTES = frozenset({"runpy", "pkgutil", "resolve_name", "run_module", "run_path"})
+
+
+def _indirect_import(node: ast.AST, called: set[int]) -> bool:
+    """A dynamic import not written as a direct ``import_module(...)`` call: the import function
+    taken as a value or by ``getattr``, or the runpy/pkgutil routes."""
+    name = node.id if isinstance(node, ast.Name) else getattr(node, "attr", None)
+    if isinstance(node, (ast.Name, ast.Attribute)) and name is not None:
+        return name in _IMPORT_ROUTES or (name in _IMPORT_CALLS and id(node) not in called)
+    if isinstance(node, ast.Call) and _call_name(node.func) == "getattr" and len(node.args) >= 2:
+        owner, attr = node.args[0], node.args[1]
+        if isinstance(attr, ast.Constant) and isinstance(attr.value, str):
+            return attr.value in _IMPORT_ROUTES | _IMPORT_CALLS
+        return isinstance(owner, ast.Name) and owner.id in {"importlib", "builtins"}
+    return False
 
 
 def _is_test_file(path: str) -> bool:

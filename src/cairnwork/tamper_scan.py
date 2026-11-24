@@ -24,7 +24,8 @@ carriage return, which Python also reads as a line end, starts a new piece to sc
 identifiers in NFKC form, so each piece is also matched with them in that form (nfkc_names), and a
 source encoding other than UTF-8 declared on line 1 or 2 is refused (``source_encoding``), as is an
 over-long added line, unread (``long_line``), and a patch past its scan budget (``scan_budget``,
-tamper_scan_budget.py); each fails closed with a dedicated reason.
+tamper_scan_budget.py); each fails closed with a dedicated reason. The residual classes, each with
+the run-time defence that refuses it (or none) and its pinning test, are in tamper_scan_limits.py.
 To keep honest code out of the net (#221): a line that starts with ``#`` and holds no code for
 Python (only a comment or plain string text) is skipped; the ``sys.modules`` write rule applies in
 full only to test code (``conftest.py``, ``test_*.py``, ``*_test.py`` and files under a
@@ -74,6 +75,10 @@ from cairnwork.tamper_scan_pytest import (
 from cairnwork.tamper_scan_stub import (
     _SENSITIVE_KEY,
     _SYS_MODULES_STUB,
+    GC_WALK,
+    MODULES_ITEM,
+    MODULES_UPDATE,
+    OS_EXIT,
 )
 from cairnwork.tamper_scan_tokens import added_file, file_views, views_trusted
 from cairnwork.textclean import shown
@@ -111,24 +116,17 @@ def _is_test_path(path: str, is_test: Callable[[str], bool] | None = None) -> bo
 
 
 RULES: tuple[Rule, ...] = (
-    _rule(
-        "os_exit",
-        r"\b(?:os|posix|nt)\s*\.\s*_exit\b|\bfrom\s+(?:os|posix|nt)\s+import\b[^#\n]*\b_exit\b",
-    ),
+    _rule("os_exit", OS_EXIT),
     _rule(
         "cairnwork_env",
         r"(?m)^(?=.*\bCAIRNWORK_)(?=.*(?:\benviron\b|\bgetenv\b|\benvb\b))",  # once per line
     ),
-    _rule(
-        "gc_walk",
-        r"\bgc\s*\.\s*(?:get_objects|get_referrers|get_referents)\b"
-        r"|\bfrom\s+gc\s+import\b[^#\n]*\b(?:get_objects|get_referrers|get_referents)\b",
-    ),
+    _rule("gc_walk", GC_WALK),
     _rule(
         "sys_modules_write",
-        r"\bsys\s*\.\s*modules\s*\[(?!\s*__name__\s*\])[^\]]*\]\s*=(?!=)"
+        rf"{MODULES_ITEM}(?:(?!{MODULES_ITEM})[^\]])*\]\s*=(?!=)"
         r"|\bdel\s+sys\s*\.\s*modules\b"
-        r"|\bdel\s+[^#;]*\bsys\s*\.\s*modules\s*\[\s*"
+        r"|\bdel\s+(?:(?!\bdel\s)[^#;])*\bsys\s*\.\s*modules\s*\[\s*"
         rf"{_SENSITIVE_KEY}\s*\]"
         r"|\bsys\s*\.\s*modules\s*\.\s*(?:pop|popitem|update|setdefault|clear"
         r"|__setitem__|__delitem__|__ior__)\s*\(|\bsys\s*\.\s*modules\s*\|=",
@@ -181,15 +179,17 @@ _ALIAS_RULES = ("os_exit", "gc_walk", "pytest_public_patch")  # read on the alia
 _MODULES = r"\bsys\s*\.\s*modules\s*"
 _LIBRARY_MODULES_WRITE = re.compile(
     rf"{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]\s*=(?!=)"
-    rf"|\bdel\s+[^#;]*{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]"
+    rf"|\bdel\s+(?:(?!\bdel\s)[^#;])*{_MODULES}\[\s*{_SENSITIVE_KEY}\s*\]"
     rf"|{_MODULES}\.\s*(?:pop|setdefault|__setitem__|__delitem__)\s*\(\s*{_SENSITIVE_KEY}"
-    rf"|{_MODULES}(?:\.\s*(?:update|__ior__)\s*\(|\|=)[^)]*{_SENSITIVE_KEY}"
+    rf"|{_MODULES}{MODULES_UPDATE}(?:(?!{_MODULES}{MODULES_UPDATE})[^)])*{_SENSITIVE_KEY}"
 )
 # An import statement naming _pytest (not importlib.import_module, not a pytest_x helper), or a
 # patch or monkeypatch target naming it, which the call imports.
 _LIBRARY_PYTEST = Rule(  # with main's type-hint import allow
     "pytest_internals",
-    re.compile(rf"\bimport\s+[^#;]*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b|{PATCHED_INTERNALS}"),
+    re.compile(
+        rf"\bimport\s+(?:(?!\bimport\s)[^#;])*?(?<![\w.])_pytest\b|\bfrom\s+_pytest\b|{PATCHED_INTERNALS}"
+    ),
     allow=_BY_NAME["pytest_internals"].allow,
 )
 

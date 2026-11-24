@@ -5,24 +5,24 @@ import warnings
 import pytest
 from conftest import commit_change, git
 
-from cairnwork import candidate_shadow
+from cairnwork import candidate_shadow, git_read_cap
 from cairnwork.gitcmd import GitCommandError
 
 
 def test_git_reads_are_bounded_as_file_count_grows(repo, monkeypatch):
     cand = commit_change(repo, {f"pkg/f{i}.py": "import json\n" for i in range(40)})
     calls = []
-    original = candidate_shadow.run_git_bytes
+    original = git_read_cap.run_git_bytes
 
     def counted(*args, **kwargs):
         calls.append(args[1])
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(candidate_shadow, "run_git_bytes", counted)
+    monkeypatch.setattr(git_read_cap, "run_git_bytes", counted)
     candidate_shadow.find_shadow_file(repo, cand, changed={})
     assert calls.count("ls-tree") == 1
-    assert calls.count("cat-file") == 1
-    assert len(calls) == 2
+    assert calls.count("cat-file") == 2  # one size check, then one batch read (#1515)
+    assert len(calls) == 3  # still constant as the file count grows
 
 
 def test_unchanged_syntaxwarning_is_suppressed(repo):
@@ -65,7 +65,7 @@ def test_shared_candidate_and_test_blob_has_same_import_result(repo):
 
 def test_cat_file_batch_truncated_body_raises(repo, monkeypatch):
     commit = commit_change(repo, {"pkg/mod.py": "x = 1\n"}, delete=["src/a.py", "src/b.py"])
-    original = candidate_shadow.run_git_bytes
+    original = git_read_cap.run_git_bytes
 
     def stub(*args, **kwargs):
         if len(args) > 1 and args[1] == "cat-file":
@@ -73,14 +73,14 @@ def test_cat_file_batch_truncated_body_raises(repo, monkeypatch):
             return raw[:-2]
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(candidate_shadow, "run_git_bytes", stub)
+    monkeypatch.setattr(git_read_cap, "run_git_bytes", stub)
     with pytest.raises(GitCommandError):
         candidate_shadow.find_shadow_file(repo, commit, changed={})
 
 
 def test_cat_file_batch_extra_trailing_bytes_raise(repo, monkeypatch):
     commit = commit_change(repo, {"pkg/mod.py": "x = 1\n"}, delete=["src/a.py", "src/b.py"])
-    original = candidate_shadow.run_git_bytes
+    original = git_read_cap.run_git_bytes
 
     def stub(*args, **kwargs):
         if len(args) > 1 and args[1] == "cat-file":
@@ -88,7 +88,7 @@ def test_cat_file_batch_extra_trailing_bytes_raise(repo, monkeypatch):
             return raw + b"extra\n"
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(candidate_shadow, "run_git_bytes", stub)
+    monkeypatch.setattr(git_read_cap, "run_git_bytes", stub)
     with pytest.raises(GitCommandError):
         candidate_shadow.find_shadow_file(repo, commit, changed={})
 

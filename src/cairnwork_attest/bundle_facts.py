@@ -19,6 +19,24 @@ _OID = re.compile(r"^[0-9a-f]{40}$")
 
 
 def bundle_facts(path: Path) -> dict[str, Any]:
+    try:
+        envelope = read_bundle(path)
+    except (BundleError, OSError):
+        return null_facts()
+    return facts_from_envelope(envelope)
+
+
+def null_facts() -> dict[str, Any]:
+    return {
+        "base": None,
+        "statement_sha256": None,
+        "core_status": None,
+        "keyid": None,
+        "test_source": None,
+    }
+
+
+def facts_from_envelope(envelope: dict[str, Any]) -> dict[str, Any]:
     nulls: dict[str, Any] = {
         "base": None,
         "statement_sha256": None,
@@ -27,7 +45,6 @@ def bundle_facts(path: Path) -> dict[str, Any]:
         "test_source": None,
     }
     try:  # read_bundle's one guarded read (#458): no symlink, FIFO, directory or oversize file
-        envelope = read_bundle(path)
         raw_payload = base64.b64decode(envelope["payload"], validate=True)
         statement = json.loads(raw_payload)
         base = None

@@ -24,6 +24,10 @@ sides; a test the AST reader cannot see stays a P2P test (at worst a wrong refus
 wrong acceptance). The removed tests join ``changed``: both are left to the author's verifiers.
 AST classification has a 10-second process limit; timeout or child failure is refused
 (``TEST_COMMIT_ANALYSIS_LIMIT``).
+
+The classifier runs in a child under a 10 s wall-clock limit and a 1 GiB resident-memory limit
+(#1246; the memory limit is sampled, see ``child_run.run_child``); a hit is refused with
+``TEST_COMMIT_ANALYSIS_LIMIT``, never verified.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
-from cairnwork.child_run import run_child
+from cairnwork.child_run import GAUGE_FAILED, run_child
 from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
@@ -62,6 +66,7 @@ _tree = _classify_child._tree
 
 CLASSIFY_TIMEOUT_SECONDS = 10
 CLASSIFY_OUTPUT_CAP = 1024 * 1024
+CLASSIFY_MEMORY_LIMIT = 1 << 30  # #1246: resident bytes of the classifier child
 
 
 @dataclass(frozen=True)
@@ -193,6 +198,9 @@ def _run_classification(base_ids, test_ids, edited, sources, exposed=None, chang
     output, timed_out, returncode = _run_child(_classify_argv(), payload)
     if timed_out:
         _analysis_failure("time limit exceeded")
+    if returncode == GAUGE_FAILED:  # #1700: the host could not measure; nothing about the candidate
+        detail = "the memory gauge of the classifier child could not be read"
+        raise BaseUncomparable(Comparison("UNCOMPARABLE", "P2P_CLASSIFY_ENV_UNUSABLE", detail))
     if returncode != 0:
         _analysis_failure("child process failed")
     removed_set: set[str] = set()
@@ -239,7 +247,11 @@ def _classify_argv():
 def _run_child(argv, payload):
     """The classifier child under this module's own limits (read at call time)."""
     return run_child(
-        argv, payload, timeout=CLASSIFY_TIMEOUT_SECONDS, output_cap=CLASSIFY_OUTPUT_CAP
+        argv,
+        payload,
+        timeout=CLASSIFY_TIMEOUT_SECONDS,
+        output_cap=CLASSIFY_OUTPUT_CAP,
+        memory_limit=CLASSIFY_MEMORY_LIMIT,
     )
 
 

@@ -6,7 +6,9 @@ only if every top-level statement is one of a few inert shapes (docstrings; impo
 unittest, the standard library or the project; assignments of literals, names and pytest marks;
 ``def`` and ``class`` whose decorators, decorator arguments, defaults and annotations are such
 literals or plain types and whose bases are defined in the file, ``object`` or unittest's
-``TestCase``; ``if TYPE_CHECKING:`` imports, with the flag imported from ``typing`` and never
+``TestCase``; marks whose ``ids`` and ``scope`` are literals, whose skipif or xfail conditions are
+``True`` or ``False`` and whose arguments name no ``def`` or ``class`` of the file; ``if
+TYPE_CHECKING:`` imports, with the flag imported from ``typing`` and never
 bound otherwise). Names that pytest or Python call implicitly (hooks, setup functions, a module's
 ``__getattr__``, a class's ``__init_subclass__``) are allowed only where a ``def`` of them is
 read elsewhere. Anything else refuses every test in its scope, and statements that may define or
@@ -16,23 +18,21 @@ collect tests mark the count inexact. Nothing is executed: the modules are parse
 from __future__ import annotations
 
 import ast
-import sys
 from collections.abc import Callable
 
+from .marks import SAFE_IMPORTS, callables, later
 from .obligations import CLASS_HOOKS, SETUP_HOOKS
 from .resolve import dotted
 
 COUNT_HOOKS = {  # change what is collected
-    "pytest_generate_tests",
-    "pytest_collection_modifyitems",
-    "pytest_pycollect_makeitem",
-    "pytest_collect_file",
-    "pytest_ignore_collect",
-    "pytest_collection",
-}
+    "pytest_generate_tests", "pytest_collection_modifyitems", "pytest_pycollect_makeitem",
+    "pytest_collect_file", "pytest_ignore_collect", "pytest_collection",
+}  # fmt: skip
 HARMLESS_HOOKS = {"pytest_addoption", "pytest_report_header", "pytest_assertrepr_compare"}
+ACTIONS = {"store", "store_true", "store_false", "store_const", "append", "append_const"}
+ACTIONS |= {"count", "extend"}  # argparse's own; any other name may be registered elsewhere
+HOOKIMPL_OPTIONS = {"tryfirst", "trylast", "optionalhook"}  # specname, wrapper: not followed
 PYTEST_HEADS = {"pytest", "mark", "fixture", "param"}
-SAFE_IMPORTS = {"pytest", "unittest", "_pytest"} | set(sys.stdlib_module_names)
 TYPING_NAMES = {"TYPE_CHECKING": "typing.TYPE_CHECKING", "typing": "typing"}
 MODULE_DUNDERS = {"__getattr__", "__dir__"}  # pytest's collection looks names up on the module
 CLASS_DUNDERS = {"__init_subclass__", "__class_getitem__"}  # run on subclassing, subscripting
@@ -51,6 +51,8 @@ class Verdict:
         self.project_names: set[str] = set()  # local names bound by those imports
         self.classes: set[str] = set()  # module-level classes here: bases besides _safe_base
         self.origins: dict[str, str] = {}  # name -> the import binding it, "" if bound otherwise
+        self.callables: set[str] = set()  # names of a def or class anywhere here, and aliases
+        self.notes: list[ast.expr] = []  # every def's annotations, read again once all has run
 
     def refuse(self, reason: str, *, known: bool = True) -> None:
         self.reason = self.reason or reason
@@ -127,10 +129,12 @@ def _bind(verdict: Verdict, name: str, origin: str = "") -> None:
     statement stops it naming a class defined here."""
     verdict.origins[name] = origin if verdict.origins.get(name, origin) == origin else ""
     verdict.classes.discard(name)
+    if name == "*":  # a star import can rebind any name: no class here is trusted as a base
+        verdict.classes.clear()
 
 
 def _trusted(verdict: Verdict, name: str, origin: str) -> bool:
-    return verdict.origins.get(name) == origin
+    return "*" not in verdict.origins and verdict.origins.get(name) == origin
 
 
 def _hook(verdict: Verdict, name: str, *, top: bool, by_def: bool) -> None:
@@ -142,6 +146,8 @@ def _hook(verdict: Verdict, name: str, *, top: bool, by_def: bool) -> None:
         verdict.refuse(f"hook {name} changes what is collected", known=False)
     elif name.startswith("pytest_") and name not in HARMLESS_HOOKS:
         verdict.refuse(f"hook {name} runs around the tests")
+    elif name in HARMLESS_HOOKS and not by_def:
+        verdict.refuse(f"hook {name} is bound by something other than a def")
     elif name in (MODULE_DUNDERS if top else CLASS_DUNDERS):
         verdict.refuse(f"{name} is called implicitly (collection, subclassing, subscripting)")
     elif not by_def and name in SETUP_HOOKS | CLASS_HOOKS:
@@ -155,7 +161,10 @@ def import_time(tree: ast.Module, is_project: Callable[[str], bool]) -> Verdict:
     blackbox case only if the runner imports the same module anyway; the caller checks this per
     test against ``verdict.imports``, once the drafted modules are known."""
     verdict = Verdict()
+    verdict.callables = callables(tree)
     _body(tree.body, verdict, is_project, top=True)
+    if not all(_annotation_inert(n, verdict) for n in verdict.notes):  # Python 3.14 (#370)
+        verdict.refuse("an annotation is not a plain type once the module has run (read lazily)")
     return verdict
 
 
@@ -222,7 +231,11 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
     if node.name in PYTEST_HEADS:
         verdict.refuse("a def binds a name this reader takes for pytest's")
     _hook(verdict, node.name, top=top, by_def=True)
+    if node.name in HARMLESS_HOOKS and not _empty_hook(node):
+        verdict.refuse(f"hook {node.name} does more than declare options")
     _decorators(node.decorator_list, verdict)
+    if any(_hookimpl_options(d) - HOOKIMPL_OPTIONS for d in node.decorator_list):
+        verdict.refuse("a hookimpl renames or wraps a hook (specname, wrapper)", known=False)
     if any(_from_pytest(n) for stmt in node.body for n in ast.walk(stmt)):
         verdict.refuse("a function imports from pytest in its body (only module imports are read)")
     if _calls_outside_pytest(node.args) or (node.returns and _calls_outside_pytest(node.returns)):
@@ -232,8 +245,43 @@ def _function(node: ast.FunctionDef | ast.AsyncFunctionDef, verdict: Verdict, *,
     notes = [p.annotation for p in params if p and p.annotation] + [node.returns]
     if not all(_inert(d, verdict) for d in [*args.defaults, *args.kw_defaults] if d):
         verdict.refuse("a default argument is not a literal (it is evaluated at import time)")
+    verdict.notes += [n for n in notes if n]
     if not all(_annotation_inert(n, verdict) for n in notes if n):
         verdict.refuse("an annotation is not a plain type (it is evaluated at import time)")
+
+
+def _empty_hook(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """A body of docstrings, ``pass`` and, in ``pytest_addoption``, ``parser.addoption`` calls
+    whose arguments are all literals (#370): anything else runs before or around the tests."""
+    if node.args.defaults or any(node.args.kw_defaults):  # may stand in for pytest's arguments
+        return False
+    names = [a.arg for a in [*node.args.posonlyargs, *node.args.args]]
+    parser = "parser" if node.name == "pytest_addoption" and "parser" in names else None
+    return all(_empty_statement(stmt, parser) for stmt in node.body)
+
+
+def _empty_statement(stmt: ast.stmt, parser: str | None) -> bool:
+    call = stmt.value if isinstance(stmt, ast.Expr) else None
+    if isinstance(stmt, ast.Pass) or isinstance(call, ast.Constant):
+        return True
+    if not isinstance(call, ast.Call) or dotted(call.func) != [parser, "addoption"]:
+        return False  # parser None: no call is plain
+    values = [*call.args, *(k.value for k in call.keywords)]
+    options = {k.arg: k.value for k in call.keywords}
+    action = options.get("action", ast.Constant("store"))
+    return (
+        all(k.arg for k in call.keywords)
+        and all(_literal(v) for v in values)
+        and "type" not in options  # a name can reach a converter registered elsewhere
+        and isinstance(action, ast.Constant)
+        and action.value in ACTIONS
+    )
+
+
+def _literal(node: ast.expr) -> bool:
+    if isinstance(node, ast.List | ast.Tuple):
+        return all(_literal(e) for e in node.elts)
+    return isinstance(node, ast.Constant)
 
 
 def _pytest_module(name: str) -> bool:
@@ -264,6 +312,20 @@ def _decorators(decorators: list[ast.expr], verdict: Verdict) -> None:
             and all(_inert(a, verdict) for a in [*d.args, *(k.value for k in d.keywords)])
         ):
             verdict.refuse("a decorator argument is not a literal (it is evaluated at import time)")
+        _later(d, verdict)
+
+
+def _later(node: ast.AST, verdict: Verdict) -> None:
+    for reason in later(node, verdict.callables, set(verdict.origins)):
+        verdict.refuse(reason)
+
+
+def _hookimpl_options(decorator: ast.expr) -> set[str]:
+    """The options of ``@pytest.hookimpl(...)``; a positional or ``**`` argument counts as one
+    the reader does not follow."""
+    if not isinstance(decorator, ast.Call) or (dotted(decorator.func) or [""])[-1] != "hookimpl":
+        return set()
+    return {k.arg or "**" for k in decorator.keywords} | ({"*"} if decorator.args else set())
 
 
 def _foreign(decorator: ast.expr) -> bool:
@@ -320,6 +382,8 @@ def _assign(node: ast.Assign | ast.AnnAssign, verdict: Verdict, *, top: bool) ->
         verdict.refuse("module-level value is not a literal (it can run project code)")
     if any(n.startswith("test") for n in names):  # test_b = test_a is collected too
         verdict.refuse("a test is defined by assignment", known=False)
+    if node.value is not None:  # pytestmark, or a mark assigned to a name and applied later
+        _later(node.value, verdict)
 
 
 def _annotation(node: ast.Assign | ast.AnnAssign) -> ast.expr | None:

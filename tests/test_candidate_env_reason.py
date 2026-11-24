@@ -47,7 +47,10 @@ class TestRealSandbox:
         code, out = run_cli(project, state, TEST, {"src/calc.py": WRITES})
         text = json.dumps(out)
         assert out["status"] == "FAILED" and out["verified"] is False, out
-        assert WORDS in text and DENIED in text and "unless the change raised this itself" in text
+        # the run has deferred (hidden) tests, so the path is withheld (#1186); the visible form
+        # is pinned in test_failure_names_1186.py
+        assert WORDS in text and "1 denied path (withheld)" in text and DENIED not in text
+        assert "unless the change raised this itself" in text
 
     def test_ac1_negative_an_assertion_failure_keeps_todays_reason(self, project, state):
         commit_change(project, {"src/calc.py": BASE_TEETH})

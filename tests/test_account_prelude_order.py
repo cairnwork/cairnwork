@@ -40,20 +40,23 @@ class LockOrderAccount:
         if self.refuse:
             raise VerifierAccountError("account still runs processes (1)")
 
-    def scrub_stale_runs(self):
+    def scrub_stale_runs(self, candidate_tree):
         self.events.append("scrub")
 
 
-def test_every_probe_sits_between_lock_and_unlock():
+def test_every_probe_sits_between_lock_and_unlock(tmp_path):
     account: Any = LockOrderAccount()
-    with locked_prelude(account, "python3", 1):
+    with locked_prelude(account, "python3", 1, tmp_path / "candidate"):
         account.events.append("run")
     assert account.events == ["lock", "available", "require_idle", "scrub", "run", "unlock"]
 
 
-def test_a_refusal_still_releases_the_lock_after_the_probes():
+def test_a_refusal_still_releases_the_lock_after_the_probes(tmp_path):
     account: Any = LockOrderAccount(refuse=True)
-    with pytest.raises(AccountUnusableBeforeRun), locked_prelude(account, "python3", 1):
+    with (
+        pytest.raises(AccountUnusableBeforeRun),
+        locked_prelude(account, "python3", 1, tmp_path / "candidate"),
+    ):
         pytest.fail("the run must not start")
     assert account.events == ["lock", "available", "require_idle", "unlock"]
 

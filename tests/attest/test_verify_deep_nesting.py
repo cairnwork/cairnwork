@@ -208,15 +208,32 @@ def test_any_step_that_recurses_too_deeply_refuses(tmp_path, repo, monkeypatch):
     assert "nested too deeply" in out.detail
 
 
-def test_a_step_raising_another_error_is_not_turned_into_a_refusal(tmp_path, repo, monkeypatch):
-    """#444 review N3: the last-resort catch is for recursion only. A programmer error (here a
-    ValueError from one step) still raises: a wider catch would hide a bug as STATEMENT_SHAPE."""
+@pytest.mark.parametrize(
+    "error",
+    [
+        ValueError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        IndexError,
+        OSError,
+        ArithmeticError,
+        RuntimeError,  # RecursionError's own parent: a catch widened to it hides a bug too
+    ],
+)
+def test_a_step_raising_another_error_is_not_turned_into_a_refusal(
+    tmp_path, repo, monkeypatch, error
+):
+    """#444 review N3, #449: the last-resort catch is for recursion only. A programmer error (a
+    ValueError, KeyError, TypeError, AttributeError, IndexError, OSError, ArithmeticError or
+    RuntimeError from one step) still raises: a wider catch, even one
+    widened to only one of them, would hide a bug as STATEMENT_SHAPE."""
     state = tmp_path / "state"
     bundle, pub, _base, candidate = setup_verified_bundle_fixture(state, repo)
 
     def broken(*_args: Any) -> None:
-        raise ValueError("programmer error")
+        raise error("programmer error")
 
     monkeypatch.setattr(verify_module, "_check_manifest", broken)
-    with pytest.raises(ValueError, match="programmer error"):
+    with pytest.raises(error, match="programmer error"):
         verify_bundle(bundle, public_key_pem=pub, repo=repo, expected_candidate=candidate)

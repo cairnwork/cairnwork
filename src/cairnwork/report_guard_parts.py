@@ -2,6 +2,8 @@
 the fixture table, _source and _missing (pure moves) and the import-error recorders. Plugin text,
 not parent code: the plugin cannot import cairnwork."""
 
+from cairnwork.plugin_names import fixtures_source
+
 PARTS_SOURCE = """\
 import sys
 import pytest
@@ -10,21 +12,14 @@ from types import CodeType, FrameType, ModuleType, TracebackType
 from _pytest.mark.structures import Mark
 from _pytest._code.code import ExceptionInfo
 from _pytest.config import Config
+from _pytest.fixtures import FixtureLookupErrorRepr
 from _pytest.reports import CollectReport, TestReport
 from _pytest.runner import CallInfo
 
 # #804: fixture -> module of the pytest_config.PLUGINS entry that provides it. A setup error that
 # says one of them is missing is recorded as "plugin:<module>"; the parent keeps it as "plugin"
 # (base PLUGIN_NOT_INSTALLED) only when that module cannot be found in the verifier's Python.
-_PLUGIN_FIXTURES = {
-    **dict.fromkeys(("mocker", "class_mocker", "module_mocker", "package_mocker",
-                     "session_mocker"), "pytest_mock"),
-    # pytest-django: only names a project rarely defines itself (not db, client or settings)
-    **dict.fromkeys(("transactional_db", "django_db_setup", "django_db_blocker", "admin_client",
-                     "admin_user", "rf", "async_rf", "live_server", "django_user_model",
-                     "django_assert_num_queries", "mailoutbox"), "pytest_django.plugin"),
-    "anyio_backend": "anyio.pytest_plugin",
-}
+@@FIXTURES@@
 
 
 def _marker_items(session, _type=type, _mark=Mark):
@@ -37,15 +32,25 @@ def _marker_items(session, _type=type, _mark=Mark):
             for item in session.items}
 
 
-def _record_skip(reporter, report):
-    xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
-    if report.outcome != "skipped" or type(xfail) is str and xfail:
+def _record_skip(reporter, report, _type=type):
+    # #1368 / #1374: longrepr and nodeid exact types; hostile doubles run no methods.
+    if _type(report) is not TestReport:  # #1374: a hostile double runs no __getattribute__
         return
-    shown = report.longrepr[2] if isinstance(report.longrepr, tuple) else str(report.longrepr)
+    xfail = getattr(report, "wasxfail", None)  # #1368: only an exact str reason is an xfail
+    outcome = getattr(report, "outcome", None)  # #1374: only an exact str is compared
+    if _type(outcome) is not str or outcome != "skipped" or _type(xfail) is str and xfail:
+        return
+    longrepr = getattr(report, "longrepr", None)
+    shown = (
+        longrepr[2]
+        if _type(longrepr) is tuple and len(longrepr) == 3 and _type(longrepr[2]) is str
+        else (longrepr if _type(longrepr) is str else "")
+    )
     reason = shown.removeprefix("Skipped: ")
-    if len(reporter._skips) < 50:
-        kind = "marker" if reporter._item_marks.get(report.nodeid, False) else "runtime"
-        reporter._skips[report.nodeid] = {"kind": kind, "reason": reason[:200]}
+    nodeid = getattr(report, "nodeid", None)
+    if _type(nodeid) is str and len(reporter._skips) < 50:
+        kind = "marker" if reporter._item_marks.get(nodeid, False) else "runtime"
+        reporter._skips[nodeid] = {"kind": kind, "reason": reason[:200]}
 
 
 def _innermost(exc, _type=type, _tb=BaseException.__traceback__.__get__,
@@ -205,8 +210,11 @@ def _checkout_frame(tb, top, _in=_checkout_rel, _type=type):
     return origin, line
 
 
-def _fixture_plugin(table, longrepr, _type=type):
-    # #1368: lookup only exact strings; test objects never reach dict hashing or equality.
+def _fixture_plugin(table, longrepr, _type=type, _repr=FixtureLookupErrorRepr):
+    # #1368 / #1374: lookup only exact strings from an exact FixtureLookupErrorRepr;
+    # test objects never reach dict hashing or equality.
+    if _type(longrepr) is not _repr:
+        return None
     name = getattr(longrepr, "argname", None)
     return table.get(name) if _type(name) is str else None
 
@@ -215,6 +223,11 @@ def _exit_status(value, _type=type, _code=pytest.ExitCode, _int=int.__int__):
     # #1368: only exact ints and pytest ExitCode values enter the record; anything else is
     # None, which the parent refuses (exitstatus must be an exact int).
     return _int(value) if _type(value) is int or _type(value) is _code else None
+
+
+def _tests_failed(value, _type=type, _int=int.__int__):
+    # #1374: only exact ints enter the record; anything else is None (parent refuses).
+    return _int(value) if _type(value) is int else None
 
 
 def _denied_origin(info, root, _exc=_denied_exc, _real=os.path.realpath, _str=str,
@@ -303,7 +316,26 @@ def _source(item):
         return ""
 
 
-def _missing(report):  # #813: the module a skip at collection says it could not import
-    shown = report.longrepr[-1] if isinstance(report.longrepr, tuple) else ""
-    return str(shown).partition("could not import '")[2].partition("'")[0][:100]
-"""
+# #813: the module a skip at collection says it could not import
+def _missing(report, _type=type, _report=CollectReport):
+    if _type(report) is not _report:
+        return ""
+    longrepr = report.longrepr
+    shown = (
+        longrepr[-1]
+        if _type(longrepr) is tuple and longrepr and _type(longrepr[-1]) is str
+        else ""
+    )
+    return shown.partition("could not import '")[2].partition("'")[0][:100]
+
+
+def _collect(reporter, report, _type=type, _report=CollectReport):
+    # #1374: read only an exact CollectReport whose outcome and nodeid are exact str; anything
+    # else is a collection error (fail closed) and none of its methods or properties run
+    ok = _type(report) is _report and _type(report.outcome) is str and _type(report.nodeid) is str
+    if not ok or report.outcome == "failed":
+        reporter._collect_errors.append(report.nodeid if ok else "")
+    elif report.outcome == "skipped":  # a module or directory skipped whole while collecting
+        reporter._collect_skipped.append(report.nodeid)
+        reporter._skipped_deps.append(_missing(report))
+""".replace("@@FIXTURES@@\n", fixtures_source())

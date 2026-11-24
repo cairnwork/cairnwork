@@ -53,7 +53,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cairnwork.gitcmd import OID, GitCommandError, run_git_bytes
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import OID, GitCommandError
 from cairnwork.tamper_scan_budget import ScanBudget
 
 _ASSIGN = r"(?:[-+*/%&|^@]|//|\*\*|<<|>>)?=(?!=)"
@@ -185,7 +186,9 @@ def _batch(repo: Any, oids: list[str]) -> dict[str, bytes]:
     """Contents of blobs from one ``git cat-file --batch`` (oids are 40/64-hex, checked)."""
     if not oids:
         return {}
-    raw = run_git_bytes(repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in oids).encode())
+    raw = read_git_bytes(
+        repo, "cat-file", "--batch", stdin="".join(f"{o}\n" for o in oids).encode()
+    )
     out: dict[str, bytes] = {}
     at = 0
     for oid in oids:
@@ -215,7 +218,7 @@ def file_rules(
     """
     if not (OID.fullmatch(head) and OID.fullmatch(base)):
         raise GitCommandError("base or head is not a full commit id")
-    raw = run_git_bytes(
+    raw = read_git_bytes(
         repo, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames",
         "--raw", "--no-abbrev", "-z", base, head,
     )  # fmt: skip

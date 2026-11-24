@@ -16,7 +16,13 @@ import cairnwork.verifiers as verifiers
 from cairnwork.pytest_config import PytestSettings
 from cairnwork.run_scrub import close_private, stale_run_error
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verify_context import VerifyContext
+
+
+@pytest.fixture(autouse=True)
+def _candidate_tree(tmp_path):
+    (tmp_path / "candidate").mkdir()
 
 
 class _Checkout:
@@ -55,7 +61,7 @@ def test_scrub_removes_a_real_run_dir_and_keeps_the_log(tmp_path):
     (outside / "secret").write_text("keep")
     (private / "run" / "escape").symlink_to(outside, target_is_directory=True)
     account = _Account(root)
-    assert stale_run_error(account) is None
+    assert stale_run_error(account, tmp_path / "candidate") is None
     assert not (private / "run").exists()
     assert (private / "verifier.log").read_text() == "kept"
     assert stat.S_IMODE(private.stat().st_mode) == 0o700
@@ -76,7 +82,7 @@ def test_a_run_symlink_outside_the_root_is_not_followed(tmp_path):
     (private / "run").symlink_to(outside)
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError) as caught:
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     message = str(caught.value)
     run = private / "run"
     assert str(run) in message
@@ -115,7 +121,7 @@ def test_a_work_dir_is_not_scrubbed_and_a_bad_name_refuses(tmp_path):
     (odd / "run" / "marker").write_text("stay")
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError) as caught:
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     assert str(odd / "run") in str(caught.value)
     assert (work / "run" / "marker").read_text() == "stay"
     assert (odd / "run" / "marker").read_text() == "stay"
@@ -145,7 +151,7 @@ def test_a_raised_verifier_still_drops_its_run_dir(tmp_path, monkeypatch):
         VerifyContext(nothing, nothing), sys.executable, nothing, nothing, PytestSettings(), nothing
     )
     with pytest.raises(RuntimeError, match="before verdict"):
-        verifiers._run_one(batch, None, _Checkout(tmp_path))
+        verifiers._run_one(batch, VerifierSpec("scrub", ()), _Checkout(tmp_path))
     private = made["private"]
     assert not (private / "run").exists()
     assert (private / "verifier.log").read_text() == "kept"
@@ -185,7 +191,7 @@ def test_a_symlinked_private_is_not_followed_to_a_same_named_directory(tmp_path)
     link.symlink_to(real)
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError):
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     assert (real / "run" / "secret").read_text() == "keep"
     assert link.is_symlink()
     assert account.removed == []
@@ -210,7 +216,7 @@ def test_both_deletes_fail_and_recovery_steps_quote_a_hostile_path(tmp_path, mon
     monkeypatch.setattr(run_scrub.shutil, "rmtree", _InertRmtree())
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError) as caught:
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     message = str(caught.value)
     run = private / "run"
     q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
@@ -254,7 +260,7 @@ def test_rmtree_that_follows_symlinks_is_not_called(tmp_path, monkeypatch):
     monkeypatch.setattr(run_scrub.shutil, "rmtree", _Following())
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError):
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     assert account.removed == []
     assert called == []
     assert (private / "run" / "marker").read_text() == "stay"
@@ -285,7 +291,7 @@ def test_the_unlock_is_requested_as_the_account(tmp_path, monkeypatch):
             raise VerifierAccountError("no sudo in this test")
 
     account: Any = _Recording(root)
-    assert stale_run_error(account) is None  # owner rmtree still removes the real directory
+    assert stale_run_error(account, tmp_path / "candidate") is None  # owner rmtree still removes it
     unlock = next(argv for argv in account.commands if run_scrub._UNLOCK in argv)
     rm = next(argv for argv in account.commands if "/bin/rm" in argv)
     assert unlock[:4] == ["/usr/bin/sudo", "-n", "-u", "cairnwork-verifier"]
@@ -324,7 +330,7 @@ def test_an_unlistable_run_root_has_no_private_chmod(tmp_path, monkeypatch):
         raise OSError(13, "Permission denied")
 
     monkeypatch.setattr(run_scrub.os, "listdir", _boom)
-    message = stale_run_error(_Account(root))
+    message = stale_run_error(_Account(root), tmp_path / "candidate")
     assert message is not None
     assert "chmod" not in message
     assert "700" not in message
@@ -342,5 +348,5 @@ def test_a_symlinked_run_leaves_private_at_0750(tmp_path):
     (private / "run").symlink_to(outside)
     account: Any = _Account(root)
     with pytest.raises(VerifierAccountError):
-        VerifierAccount.scrub_stale_runs(account)
+        VerifierAccount.scrub_stale_runs(account, tmp_path / "candidate")
     assert stat.S_IMODE(private.stat().st_mode) == 0o750

@@ -52,141 +52,74 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cairnwork.run_scrub_unlock import UNLOCK as _UNLOCK
 from cairnwork.run_tree import _private_name, _real_dir, root_problem, run_tree_ok, seal_private
 
 
 def _shown(path: Path) -> str:
-    """One line: a leftover name must not start a second line in the error."""
-    return str(path).replace("\r", "\\r").replace("\n", "\\n")
+    """Escape C0 and DEL so displayed paths cannot inject terminal control characters."""
+    return "".join(
+        f"\\x{ord(char):02x}" if ord(char) < 0x20 or ord(char) == 0x7F else char
+        for char in str(path)
+    )
+
+
+def _shell_quote(value: str) -> str:
+    """Quote one shell argument without embedding control characters in recovery text."""
+    if not any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return shlex.quote(value)
+    return "$'" + "".join(f"\\x{byte:02x}" for byte in os.fsencode(value)) + "'"
+
+
+def _run_root_inside_candidate(root: Path, candidate_tree: Path) -> bool:
+    """Compare filesystem identities along the resolved run-root parent chain."""
+    try:
+        candidate = os.stat(candidate_tree)
+    except (OSError, TypeError, ValueError):
+        return True
+    if not stat.S_ISDIR(candidate.st_mode):
+        return True
+    candidate_id = (candidate.st_dev, candidate.st_ino)
+    current = Path(os.path.realpath(root))
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return True
+        if (info.st_dev, info.st_ino) == candidate_id:
+            return True
+        if current.parent == current:
+            return False
+        current = current.parent
+
+
+def _candidate_chain(candidate_tree: Path) -> set[tuple[int, int]]:
+    """Identities of the candidate tree and every directory above it, by realpath."""
+    chain: set[tuple[int, int]] = set()
+    current = Path(os.path.realpath(candidate_tree))
+    while True:
+        try:
+            info = os.lstat(current)
+        except OSError:
+            return chain
+        chain.add((info.st_dev, info.st_ino))
+        if current.parent == current:
+            return chain
+        current = current.parent
+
+
+def _holds(entry: Path, chain: set[tuple[int, int]]) -> bool:
+    """True when ``entry`` is the candidate tree or one of its parents (never scrubbed)."""
+    try:
+        info = os.lstat(entry)
+    except OSError:
+        return False
+    return (info.st_dev, info.st_ino) in chain
 
 
 _SUDO = "/usr/bin/sudo"
 _ALLOW_ALL = "(version 1) (allow default)"
 
-# Run by the verifier python as the account (macOS): argv is run, then the entry and second limits.
-# One pre-order pass. Per entry, before relying on lstat: clear its ACL (setattrlist with
-# FSOPT_NOFOLLOW: the entry itself, a symlink too, never a target; no open, so a denied read or
-# readsecurity does not stop it) and uchg/uappnd (the chflags syscall needs no stat). A directory
-# on run's device gets u+rwx and is entered by an O_NOFOLLOW fd, closed once listed (no PATH_MAX).
-# No depth limit: a listing keeps at most half the entries left and reads for at most half the
-# time left, so what it read is still unlocked, and the next listing gets some of both. A
-# cut-short directory once done, or the current one at the clock (checked before each entry), is
-# moved up into run unless it is right under run already: rm frees the path above it and the next
-# scrub goes on, not over. Whatever the clock says, a pass does one unit of work first: unlock a
-# non-directory, finish a directory with nothing in it cut short or failed (rm can then remove
-# it), or move one up. So past the clock it does at most that one unit, or tries one entry that
-# fails (what fails every pass is item G: root only); a listing it reads then is cut at one name.
-# With the entry budget spent no directory is opened again: a deep one is moved up instead.
-# Exit 1 if anything is left (cut short, an entry, listing or move that failed, another device,
-# the clock): rm fails, the scrub refuses.
-_UNLOCK_SOURCE = """\
-import ctypes, itertools, os, stat, struct, sys, time
-top, max_nodes, seconds = sys.argv[1], *map(int, sys.argv[2:4])
-deadline, listed, cut, done, stack = time.monotonic() + seconds, 0, False, False, []
-failed, failed_late = 0, False
-LOCKS = stat.UF_IMMUTABLE | stat.UF_APPEND
-DIR = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib")
-lib.setattrlist.argtypes = (ctypes.c_char_p,) * 3 + (ctypes.c_size_t, ctypes.c_uint32)
-ATTRS = struct.pack("=HHIIIII", 5, 0, 0x400000, 0, 0, 0, 0)
-FILESEC = struct.pack("=I16s16sII", 0x012CC16D, bytes(16), bytes(16), 0xFFFFFFFF, 0)
-NO_ACL = struct.pack("=iI", 8, len(FILESEC)) + FILESEC
-def attempt(call, *args, **kwargs):
-    try:
-        call(*args, **kwargs)
-    except OSError:
-        return False
-    return True
-def fail():
-    global cut, failed, failed_late
-    cut, failed = True, failed + 1
-    failed_late = failed_late or time.monotonic() >= deadline
-def up(name):
-    global done
-    if attempt(os.rename, name, os.path.join(top, ".unlock-" + os.urandom(8).hex())):
-        done = True
-    else:
-        fail()
-def leave(cut_short):
-    _names, _short, here, _failed = stack.pop()
-    if stack:
-        os.chdir("..")
-        if cut_short and len(stack) > 1:
-            up(here)
-def stop():
-    if stack:
-        leave(True)
-    sys.exit("unlock: limit reached, the rest is left in place")
-def late():
-    return time.monotonic() >= deadline and (done or failed_late or len(stack) > 2)
-def no_acl(name):
-    lib.setattrlist(os.fsencode(name), ATTRS, NO_ACL, len(NO_ACL), 1)
-def unlock(name):
-    no_acl(name)
-    try:
-        info = os.lstat(name)
-    except OSError:
-        attempt(os.lchflags, name, 0)
-        no_acl(name)
-        try:
-            info = os.lstat(name)
-        except OSError:
-            return None
-    if info.st_flags & LOCKS:
-        attempt(os.lchflags, name, info.st_flags & ~LOCKS)
-        no_acl(name)
-    return info
-def opened(name, dev):
-    global listed, cut
-    fd = os.open(name, DIR)
-    try:
-        if os.fstat(fd).st_dev != dev:
-            raise OSError("another device: left in place")
-        keep, names, short = (max_nodes - listed + 1) // 2, [], False
-        until = (time.monotonic() + deadline) / 2
-        with os.scandir(fd) as entries:
-            for entry in itertools.islice(entries, keep + 1):
-                names.append(entry.name)
-                if time.monotonic() >= until:
-                    short = True
-                    break
-        os.fchdir(fd)
-    finally:
-        os.close(fd)
-    short = short or len(names) > keep
-    cut, listed = cut or short, listed + min(len(names), keep)
-    return iter(names[:keep]), short, name, failed
-dev = os.stat(top, follow_symlinks=False).st_dev
-stack.append(opened(top, dev))
-while stack:
-    name = next(stack[-1][0], None)
-    if name is None:
-        done = done or (not stack[-1][1] and stack[-1][3] == failed)
-        leave(stack[-1][1])
-        continue
-    if late():
-        stop()
-    info = unlock(name)
-    if info is None or info.st_dev != dev:
-        fail()
-        continue
-    if not stat.S_ISDIR(info.st_mode):
-        done = True
-        continue
-    attempt(os.chmod, name, stat.S_IMODE(info.st_mode) | 0o700, follow_symlinks=False)
-    if listed >= max_nodes:
-        cut = True
-        if len(stack) > 1:
-            up(name)
-        continue
-    try:
-        stack.append(opened(name, dev))
-    except OSError:
-        fail()
-if cut:
-    stop()
-"""
-_UNLOCK = f"exec({_UNLOCK_SOURCE!r})"  # one line, so the printed recovery step is one line
 _UNLOCK_LIMITS = (500_000, 45)  # entries, seconds: under remove()'s 60 s timeout
 
 
@@ -216,7 +149,7 @@ def account_delete_argv(user: str, path: str, wrap, python: str) -> list[list[st
 
 def _as_account_shell(user: str, argv: list[str]) -> str:
     """One recovery step, naming the account. The sandbox form matches ``unconfined``."""
-    inner = " ".join(shlex.quote(part) for part in argv)
+    inner = " ".join(_shell_quote(part) for part in argv)
     tool = (
         f"/usr/bin/sandbox-exec -p {shlex.quote(_ALLOW_ALL)} {inner}"
         if sys.platform == "darwin"
@@ -227,7 +160,7 @@ def _as_account_shell(user: str, argv: list[str]) -> str:
 
 def _recovery_steps(user: str, python: str, run: Path, private: Path) -> str:
     """Who runs each step. Joined with ``;``, not ``&&``, and no period after the last command."""
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = [_as_account_shell(user, _unlock_argv(python, str(run)))]
     account_rm = f"sudo -n -u {shlex.quote(user)} -- /bin/rm -rf -- {q_run}"
     steps.append(f"as the verifier account: {account_rm}")
@@ -244,17 +177,19 @@ def _hint(user: str, python: str, path: Path, root: Path | None = None) -> str:
     if root is not None and path.parent == root and path.name == "run":
         return (
             f"{_shown(path)} sits directly in the run root. Check it without following links: "
-            f"ls -ld {shlex.quote(str(path))}. If a symlink, unlink that symlink only; "
+            f"ls -ld {_shell_quote(str(path))}. If a symlink, unlink that symlink only; "
             f"never chmod the root."
         )
     private = path.parent if path.name == "run" else path
     run = private / "run"
-    q_run, q_priv = shlex.quote(str(run)), shlex.quote(str(private))
+    q_run, q_priv = _shell_quote(str(run)), _shell_quote(str(private))
     steps = _recovery_steps(user, python, run, private)
     return (
         f"leftover {_shown(path)} blocks the next account run. "
         f"Clean it by hand without following links: ls -ld {q_priv} {q_run}. "
         f"If either is a symlink, unlink that symlink only and do not remove or chmod its target. "
+        f"The unlock step reports an unwritable top as `unlock: {_shown(run)} is not writable "
+        f"by the account`; the owner must fix that directory before retrying. "
         f"If both are real directories under the run root, run the steps in order even when one "
         f"fails, and repeat the two account steps until {q_run} is gone or a pass removes or "
         f"moves nothing in it. {steps}"
@@ -365,7 +300,7 @@ def _refuse(account, stuck: list[Path]) -> str:
     return f"{shown}{extra}. {_hint(account.user, account.python, stuck[0], account.run_root)}"
 
 
-def stale_run_error(account) -> str | None:
+def stale_run_error(account, candidate_tree: Path) -> str | None:
     """Why the next account run must not start, or None when no private/run residue remains.
 
     Call under the account lock, after ``require_idle``, before creating this run's directories.
@@ -373,11 +308,18 @@ def stale_run_error(account) -> str | None:
     this. ``.work`` checkouts are left to recovery.
     """
     root = account.run_root
-    if _real_dir(root) is None:
+    real_root = _real_dir(root)
+    if real_root is None:
         shown = _shown(root)
         return (
             f"{shown} is not a real directory. The owner must fix it without following links: "
             f"ls -ld {shown}. If it is a symlink, unlink it only and do not remove its target."
+        )
+    if _run_root_inside_candidate(root, candidate_tree):
+        return (
+            f"run root is inside the candidate tree or the candidate tree cannot be checked: "
+            f"{_shown(root)}; move it outside the candidate tree before starting "
+            "verification. Nothing in the run root was inspected or changed."
         )
     try:
         names = sorted(os.listdir(root))
@@ -392,8 +334,9 @@ def stale_run_error(account) -> str | None:
     if (problem := root_problem(root)) is not None:
         return f"{_shown(root)} {problem}. The owner must fix it: ls -ld {shlex.quote(str(root))}"
     stuck: list[Path] = []
+    chain = _candidate_chain(candidate_tree)
     for name in names:
-        if name.endswith(".work"):
+        if name.endswith(".work") or _holds(root / name, chain):
             continue
         _consider(account, root, name, stuck)
     return _refuse(account, stuck) if stuck else None

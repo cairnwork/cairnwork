@@ -55,7 +55,7 @@ def test_sigkill_during_p2p_orphan_git_is_cleaned(p2p_project, tmp_path, step):
     script = f"""#!{sys.executable}
 import os, subprocess, sys, time
 args = sys.argv[1:]
-if "clone" in args and any("-{step}-v" in a for a in args):
+if "clone" in args and os.path.exists({str(tmp_path / "state" / "inflight")!r}):
     with open({str(pid_file)!r}, "w") as f:
         f.write(str(os.getpid()))
     time.sleep(2)

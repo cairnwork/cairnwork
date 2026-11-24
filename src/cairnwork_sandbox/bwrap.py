@@ -3,7 +3,7 @@
 The policy is a read-only bind of the whole root plus read-write binds for the write roots,
 with a fresh /dev and /proc, every namespace unshared (so no network), all capabilities
 dropped and nested user namespaces disabled. A read-only root bind does not stop connect() to a
-pathname socket, which no network namespace covers, so /run, /tmp (and a separate /var/run) are
+pathname socket, which no network namespace covers, so /run, /tmp, /var/tmp, /var/run are
 private, read-only tmpfs trees per run with only what a run needs put back (``bwrap_private``,
 #391). Named credential directories under $HOME are emptied with a tmpfs, credential files are
 replaced by /dev/null, and so are root-equivalent daemon sockets (Docker/Podman/containerd, the
@@ -14,7 +14,7 @@ Trade-off (documented in docs/SECURITY.md): the whole root stays readable, so ev
 running account (the launching one, or the dedicated verifier account) can read is readable
 inside; only the named credential list is masked. Other users' 0700 home directories are
 protected by POSIX permissions. This is not complete read isolation, and a pathname socket
-outside the private trees (/var/tmp, /var/lib, a home, /srv) stays connectable if that account may.
+outside the private trees (/var/lib, a home, /srv) stays connectable if that account may.
 
 On Ubuntu 24.04+ an AppArmor rule restricts unprivileged user namespaces by default:
 ``unshare(CLONE_NEWUSER)`` still succeeds but the new namespace holds no capabilities, so
@@ -105,8 +105,7 @@ _DANGEROUS_SOCKETS = (
 
 # Unshare a user + pid namespace, drop all capabilities, disable nested userns, bind the root
 # read-only, mount a fresh /proc, run true. Exit 0 means bwrap can build a confining namespace
-# here with the same hardening flags the real policy uses (so a build that rejects one fails
-# the probe rather than passing it and then erroring on the real run).
+# here with the real policy's hardening flags (a build that rejects one fails the probe).
 _PROBE = (
     "--unshare-pid",
     "--unshare-user",
@@ -202,18 +201,15 @@ def build_policy(
     are always applied; on the account path a socket the account cannot enter is skipped (#482).
     """
     real_home = _safe(home or Path.home())
-    # read_roots are validated but never emitted: the whole root is already bound read-only, so
-    # (unlike Seatbelt's allow-list) a read root grants no extra scope. Validating still rejects
-    # a malformed path early, and a credential mask must not hide one (#378).
+    # read_roots are validated, never emitted: the root is already bound read-only (no extra scope
+    # as in Seatbelt). This rejects a malformed path early; a mask must not hide one (#378).
     reads = [_safe(root) for root in read_roots]
     writes = [_safe(root) for root in write_roots]
     for root in writes:
         _require_narrow(root, real_home)
     flags = [
         "--unshare-all",
-        # --unshare-all uses --unshare-user-try (soft); --disable-userns needs the hard
-        # --unshare-user, so pass it explicitly or bwrap refuses with
-        # "--disable-userns requires --unshare-user".
+        # --unshare-all is only --unshare-user-try; --disable-userns needs the hard --unshare-user.
         "--unshare-user",
         "--new-session",
         "--die-with-parent",
@@ -247,10 +243,10 @@ def build_policy(
             masked_socks.add(real)
             flags += ["--ro-bind", "/dev/null", real]
     flags += remount  # last: the private trees turn read-only once everything is mounted on them
-    # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
     notes = ((f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()) + mask_notes
-    return Policy("\n".join(flags) + "\n", notes)
+    inputs = (read_roots, write_roots, home, mask_home_credentials)
+    return Policy("\n".join(flags) + "\n", notes, inputs)
 
 
 def _credential_masks(

@@ -7,7 +7,42 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 import cairnwork.post_verified as post_verified
+
+
+def _fake_watchdog(tmp_path: Path, body: str) -> None:
+    script = tmp_path / "hook_watch.py"
+    script.write_text(body)
+
+
+def test_hook_status_survives_slow_session_scan_near_limit(tmp_path, monkeypatch):
+    _fake_watchdog(
+        tmp_path,
+        "import subprocess, sys, time\n"
+        "result = subprocess.run(sys.argv[3:])\n"
+        "time.sleep(0.5)\n"
+        "raise SystemExit(result.returncode)\n",
+    )
+    monkeypatch.setattr(post_verified, "__file__", str(tmp_path / "post_verified.py"))
+
+    code, _out, _err = post_verified._run(["/bin/sleep", "1.7"], 2, {"PATH": "/usr/bin:/bin"})
+
+    assert code == 0
+
+
+def test_timeout_with_wedged_watchdog_waits_one_cleanup_budget(tmp_path, monkeypatch):
+    _fake_watchdog(tmp_path, "import time; time.sleep(60)\n")
+    monkeypatch.setattr(post_verified, "__file__", str(tmp_path / "post_verified.py"))
+    monkeypatch.setattr(post_verified, "CLEANUP_SECONDS", 2)
+    started = time.monotonic()
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        post_verified._run(["/bin/sleep", "30"], 1, {"PATH": "/usr/bin:/bin"})
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 1 + getattr(post_verified, "EXIT_SCAN_GRACE", 1) + 2 + 1
 
 
 def test_v5_post_verified_hook_does_not_outlive_a_killed_runner(tmp_path):

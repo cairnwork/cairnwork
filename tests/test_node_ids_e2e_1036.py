@@ -80,7 +80,7 @@ def test_checkout_path_parameter_ids_allow_correct_candidate_with_p2p_off(
 def test_uuid_parameter_still_refuses_with_stable_id_advice(project, state):
     out = _case(project, state, "__import__('uuid').uuid4().hex")
     assert out["verified"] is False, out
-    assert "per-run" in out["reason"] and "ids=" in out["reason"], out
+    assert "detail withheld" in out["reason"], out
 
 
 @sandbox
@@ -95,7 +95,7 @@ def test_uuid_parameter_in_base_test_with_p2p_off_is_refused(project, state):
 def test_time_ns_parameter_still_refuses_with_stable_id_advice(project, state):
     out = _case(project, state, "__import__('time').time_ns()")
     assert out["verified"] is False, out
-    assert "per-run" in out["reason"] and "ids=" in out["reason"], out
+    assert "detail withheld" in out["reason"], out
 
 
 @sandbox
@@ -156,5 +156,5 @@ def test_candidate_literal_cannot_impersonate_base_checkout_path(project, state)
 def test_outside_checkout_path_is_refused_without_host_path(project, state):
     out = _case(project, state, "str(pathlib.Path(__file__).parents[2])")
     assert out["verified"] is False, out
-    assert "per-run" in out["reason"] and "<path>" in out["reason"], out
+    assert "detail withheld" in out["reason"], out
     assert all(prefix not in out["reason"] for prefix in ("/Users/", "/private/", "/var/")), out

@@ -37,6 +37,8 @@ def once(spec, plan, note, task, judged, result, ctx, tag):
         failed = {"tests/test_slow.py::test_slow": "failed"}
         return VerifierRun(spec, 1, False, (), ctx.run_root / "q.log", observation, failed,
                            plain_failure=True)  # fmt: skip
+    if tag == step:  # the run that sleeps is about to start (its directory carries no tag, #1698)
+        (state / "inflight").write_text(tag)
     return real(spec, plan, note, task, judged, result, ctx, tag)
 
 

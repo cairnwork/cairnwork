@@ -46,6 +46,7 @@ from cairnwork.protected_paths import is_protected, protected_note
 from cairnwork.refusal_types import CandidateRejected
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
+from cairnwork.test_commit_paths import _keys
 from cairnwork.textclean import shown
 from cairnwork.treecompare import tree_differences
 
@@ -132,14 +133,18 @@ def _refuse_case_collisions(repo: Path, base_commit: str, clone: Path, differenc
 
 
 def _case_collisions(names) -> list[list[str]]:
-    """Groups of tree paths, or directories, whose names differ only in case."""
-    folded: dict[str, set[str]] = {}
+    """Groups of tree paths or directories that differ only in case or Unicode form (#1714)."""
+    spelled: dict[str, set[str]] = {}
     for name in names:
         parts = name.split("/")  # a directory differing in case collides as well
-        for end in range(1, len(parts) + 1):
-            prefix = "/".join(parts[:end])
-            folded.setdefault(prefix.casefold(), set()).add(prefix)
-    return sorted(sorted(group) for group in folded.values() if len(group) > 1)
+        for prefix in ("/".join(parts[:end]) for end in range(1, len(parts) + 1)):
+            for key in _keys(prefix):
+                spelled.setdefault(key, set()).add(prefix)
+    groups: list[set[str]] = []
+    for group in (g for g in spelled.values() if len(g) > 1):
+        hit = [g for g in groups if g & group]
+        groups = [g for g in groups if g not in hit] + [group.union(*hit)]
+    return sorted(sorted(group) for group in groups)
 
 
 def _collision_detail(groups: list[list[str]], differences, commit: str = "base") -> str:

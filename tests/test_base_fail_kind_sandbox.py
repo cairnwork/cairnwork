@@ -22,7 +22,8 @@ def test_a_fixture_whose_user_lookup_fails_is_uncomparable_base_setup_error(proj
     code, out = run_cli(project, state, SETUP_LOOKUP, {"src/calc.py": FIX_DOUBLE})
     assert code == 2 and out["status"] == "UNCOMPARABLE" and out["verified"] is False
     assert out["uncomparable"]["code"] == "BASE_SETUP_ERROR"
-    assert "test_double" in out["uncomparable"]["detail"]
+    detail = out["uncomparable"]["detail"]
+    assert "1 test(s)" in detail and "test_double" not in detail  # #1186: hidden run, count only
     assert out["core_status"] == "" and out["binding"] is None
 
 

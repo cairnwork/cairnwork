@@ -80,42 +80,49 @@ class _Client:
         model, effort, timeout, attempts = self._settings(request)
         pieces = list(_strings(messages))
         try:
-            blocked = any(self.scanner.scan(v) for v in pieces)
+            categories = tuple(dict.fromkeys(c for v in pieces for c in self.scanner.scan(v)))
         except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
-            blocked = True
+            categories = ("scanner_error",)
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
-        if blocked:
-            return None, model, effort, Reason.PAUSE_SECRET_BLOCKED
-        for attempt in range(max(0, attempts)):
+        if categories:
+            return None, model, effort, Reason.PAUSE_SECRET_BLOCKED, categories
+        budget, bad_retry = max(0, attempts), False
+        while budget > 0:
+            budget -= 1
             result = self.transport.send(model, effort, messages, timeout)
             if result.quota_blocked:
-                return None, model, effort, Reason[f"{prefix}_QUOTA_EXHAUSTED"]
+                return None, model, effort, Reason[f"{prefix}_QUOTA_EXHAUSTED"], ()
             if result.timed_out:
-                if attempt + 1 < attempts:
+                if budget > 0:
                     continue
-                return None, model, effort, Reason[f"{prefix}_TIMEOUT"]
+                return None, model, effort, Reason[f"{prefix}_TIMEOUT"], ()
             status = result.status if isinstance(result.status, int) else -1
             if 500 <= status <= 599:
-                if attempt + 1 < attempts:
+                if budget > 0:
                     continue
-                return None, model, effort, Reason[f"{prefix}_REFUSED"]
-            if status != 200:
-                return None, model, effort, Reason[f"{prefix}_REFUSED"]
+                return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
+            if status != 200 and (planner or not 200 <= status < 300):
+                return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
             body = result.body
             if body is not None and (body.get("stop_reason") == "refusal" or body.get("refusal")):
-                return None, model, effort, Reason[f"{prefix}_REFUSAL"]
+                return None, model, effort, Reason[f"{prefix}_REFUSAL"], ()
             if body is None or not isinstance(body.get("text"), str):
-                return None, model, effort, Reason[f"{prefix}_BAD_OUTPUT"]
+                return None, model, effort, Reason[f"{prefix}_BAD_OUTPUT"], ()
             text = body["text"]
             if planner:
                 if not text.strip():
-                    return None, model, effort, Reason.PAUSE_PLANNER_BAD_OUTPUT
-                return text, model, effort, None
+                    return None, model, effort, Reason.PAUSE_PLANNER_BAD_OUTPUT, ()
+                return text, model, effort, None, ()
             first = text.strip().splitlines()[0] if text.strip() else ""
             if first not in GATE_VERDICTS:
-                return None, model, effort, Reason.PAUSE_GATE_BAD_OUTPUT
-            return first, model, effort, None
-        return None, model, effort, Reason[f"{prefix}_REFUSED"]
+                if not bad_retry:  # one extra try for an empty or non-verdict reply
+                    bad_retry, budget = True, budget + 1
+                    continue
+                return None, model, effort, Reason.PAUSE_GATE_BAD_OUTPUT, (f"HTTP {status}",)
+            if status != 200:
+                return None, model, effort, Reason.PAUSE_GATE_REFUSED, ()
+            return first, model, effort, None, ()
+        return None, model, effort, Reason[f"{prefix}_REFUSED"], ()
 
 
 class HaikuPlanner(_Client):
@@ -123,8 +130,16 @@ class HaikuPlanner(_Client):
         super().__init__(transport, scanner or Scanner())
 
     def plan(self, request: PlanRequest) -> PlanReply:
-        text, model, effort, reason = self._send(request, request.messages, planner=True)
-        return PlanReply(text=text, model_id=model, effort=effort, reason=reason)
+        text, model, effort, reason, diagnostics = self._send(
+            request, request.messages, planner=True
+        )
+        return PlanReply(
+            text=text,
+            model_id=model,
+            effort=effort,
+            reason=reason,
+            diagnostics=diagnostics,
+        )
 
 
 class HaikuGate(_Client):
@@ -133,8 +148,14 @@ class HaikuGate(_Client):
 
     def review(self, request: GateRequest) -> GateReply:
         messages = ({"role": "user", "content": request.plan},)
-        verdict, model, effort, reason = self._send(request, messages, planner=False)
-        return GateReply(verdict=verdict, model_id=model, effort=effort, reason=reason)
+        verdict, model, effort, reason, diagnostics = self._send(request, messages, planner=False)
+        return GateReply(
+            verdict=verdict,
+            model_id=model,
+            effort=effort,
+            reason=reason,
+            diagnostics=diagnostics,
+        )
 
 
 def _strings(value: object) -> Iterator[str]:

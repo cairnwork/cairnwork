@@ -10,12 +10,34 @@ from (what the test itself calls) and only needs to know what the name is there:
 from __future__ import annotations
 
 import ast
+import importlib.machinery
 from dataclasses import dataclass
 from pathlib import Path
 
 from .literals import Refused
+from .loaders import by_name
+from .rebound import rebound
 
 MAX_HOPS = 6
+
+
+MODULE_HOOKS = {"__getattr__", "__dir__"}
+# Names that can bind a module attribute under a name the reader cannot see (#370).
+DYNAMIC = {"exec", "eval", "globals", "locals", "vars", "setattr", "delattr", "__import__"}
+DYNAMIC |= {"__builtins__", "import_module", "attrgetter", "methodcaller"}
+REFLECTIVE = {"__dict__", "__globals__", "__self__", "__setattr__", "__getattribute__", "modules"}
+REFLECTIVE |= {"f_globals", "f_locals", "f_builtins"}
+# What a def runs or shows to introspection, and the builtin that builds code from text (#370).
+REFLECTIVE |= {"__code__", "__defaults__", "__kwdefaults__", "__closure__", "cell_contents"}
+REFLECTIVE |= {"__wrapped__", "__signature__"}
+BUILDERS = {"compile"}  # a name only: re.compile and other methods stay plain
+DYNAMIC |= {"exec_module", "load_module", "_bootstrap", "_bootstrap_external"}  # importlib loaders
+INTROSPECTION = {"builtins", "ctypes", "gc", "inspect"}  # modules refused when imported at all
+INTROSPECTION |= {"importlib", "importlib_metadata"}  # EntryPoint.load imports by name
+# Modules that import or run other code by name, path or source text (#370).
+RUNNERS = {"runpy", "pkgutil", "timeit", "cProfile", "profile", "trace", "code", "codeop"}
+RUNNERS |= {"doctest", "pdb", "bdb", "zipimport"}
+SEARCH = {"__path__", "submodule_search_locations"}  # where a package finds its submodules
 
 
 @dataclass(frozen=True)
@@ -24,6 +46,9 @@ class Target:
     name: str
     kind: str  # "function" or "class"
     defined_in: str = ""  # the module whose source defines it (an exception's __module__)
+
+
+CLOSURE_LIMIT = 10000
 
 
 class Project:
@@ -56,22 +81,53 @@ class Project:
     def is_package_module(self, module: str) -> bool:
         return self.module_file(module) is not None
 
-    def import_closure(self, modules: set[str]) -> set[str]:
+    def files(self, module: str) -> list[Path]:
+        """Every file Python could import as module, in the first root that holds one."""
+        *head, last = module.split(".")
+        for root in self.roots:
+            found = [
+                path
+                for suffix in importlib.machinery.all_suffixes()
+                for path in (
+                    root.joinpath(*head, last + suffix),
+                    root.joinpath(*head, last, "__init__" + suffix),
+                )
+                if path.is_file()
+            ]
+            if found:
+                return found
+        return []
+
+    def import_closure(self, modules: set[str], anywhere: bool = False) -> set[str]:
         """The project modules that importing modules surely imports: each one, its parent
         packages, and what their top-level import statements name, transitively. Imports under
-        if/try/def are left out, so this may be too small, never too large."""
+        if/try/def are left out, so this may be too small, never too large. With anywhere, every
+        import statement is followed and a module with files but no readable source is kept, so
+        it may be too large instead (#370)."""
         found: set[str] = set()
         todo = list(modules)
-        while todo and len(found) < 10000:
+        while todo and len(found) < CLOSURE_LIMIT:
             module = todo.pop()
             parts = module.split(".")
             for name in (".".join(parts[: i + 1]) for i in range(len(parts))):
                 tree = self.tree(name)
-                if name in found or tree is None:
+                if name in found or (tree is None and not (anywhere and self.files(name))):
                     continue
                 found.add(name)
-                todo += _imported(tree, name, self.module_file(name))
+                if tree is not None:
+                    todo += _imported(tree, name, self.module_file(name), anywhere)
+        if anywhere and todo:  # too large: what is left might bind a hook
+            raise Refused("the drafted targets import more modules than this reader follows")
         return found
+
+    def lacks(self, module: str, name: str) -> bool:
+        """Whether a star import of module surely does not bind name: its source is read, binds
+        no such name anywhere, names it in no string (__all__) and has no such submodule (#370)."""
+        tree = self.tree(module)
+        if tree is None or self.files(f"{module}.{name}"):
+            return False
+        named = any(isinstance(n, ast.Constant) and n.value == name for n in ast.walk(tree))
+        return not named and not rebound(tree, name, set())
 
     def kind_of(self, module: str, name: str, hops: int = 0) -> tuple[str, str, str]:
         """(kind, defining module, name there): kind is 'function' or 'class', following
@@ -83,24 +139,40 @@ class Project:
             raise Refused(f"{module} is not a module of the project (stdlib or a dependency?)")
         path = self.module_file(module)
         package = path is not None and path.name == "__init__.py"
-        found = _defined(tree, module, name, package)
+        later: list[str] = []
+        found = _defined(tree, module, name, package, later)
+        if any(not self.lacks(star, name) for star in later):
+            raise Refused(f"{name!r} in {module} may be bound again by a star import")
         if found is None:
-            for star in _star_imports(tree, module, package):
+            stars = _star_imports(tree, module, package)
+            for i, star in enumerate(stars):
                 try:
-                    return self.kind_of(star, name, hops + 1)
+                    kind = self.kind_of(star, name, hops + 1)
                 except Refused:
                     continue
+                if any(not self.lacks(later, name) for later in stars[i + 1 :]):
+                    raise Refused(f"{name!r} in {module} may be bound again by a later star import")
+                return kind
             raise Refused(f"cannot find {name!r} in {module} by reading its source")
         if found[0] in ("function", "class"):
             return found
         return self.kind_of(found[1], found[2], hops + 1)
 
 
-def _defined(tree: ast.Module, module: str, name: str, package: bool):
-    """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n)."""
+Defs = ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef
+
+
+def _defined(tree: ast.Module, module: str, name: str, package: bool, later: list[str]):
+    """The last top-level binding of name: ('function'|'class', m, n) or ('import', m, n).
+    Adds to later each module star-imported after a binding of name."""
     found: tuple[str, str, str] | None = None
+    read: set[int] = set()
     for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == name:
+        if isinstance(node, Defs) and node.name == name:
+            read.add(id(node))
+        if isinstance(node, Defs) and node.name == name and node.decorator_list:
+            found = ("other", module, name)  # bound to what the decorator returns (#370)
+        elif isinstance(node, ast.FunctionDef) and node.name == name:
             found = ("function", module, name)
         elif isinstance(node, ast.AsyncFunctionDef) and node.name == name:
             found = ("async", module, name)
@@ -108,32 +180,41 @@ def _defined(tree: ast.Module, module: str, name: str, package: bool):
             found = ("class", module, name)
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
+                if alias.name == "*" and found is not None:
+                    later.append(_absolute(module, node, package))  # judged by lacks (#370)
+                if (alias.asname or alias.name) in (name, "*"):
+                    read.add(id(alias))
                 if (alias.asname or alias.name) == name:
                     found = ("import", _absolute(module, node, package), alias.name)
         elif (isinstance(node, ast.Assign) and any(_is_name(t, name) for t in node.targets)) or (
             isinstance(node, ast.AnnAssign) and _is_name(node.target, name)
         ):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            read.update(id(t) for t in targets if _is_name(t, name))
             found = (
                 ("import", module, node.value.id)
                 if isinstance(node.value, ast.Name)
                 else ("other", module, name)
             )
+    if rebound(tree, name, read):
+        found = ("other", module, name)  # bound again where this loop does not read (#370)
     if found and found[0] in ("async", "other"):
         raise Refused(f"{name!r} in {module} is not a plain def or class")
     return found
 
 
-def _imported(tree: ast.Module, module: str, path: Path | None) -> list[str]:
-    """Modules named by the top-level import statements of module (submodules included)."""
+def _imported(tree: ast.Module, module: str, path: Path | None, anywhere: bool) -> list[str]:
+    """Modules named by the top-level (or with anywhere, all) import statements of module
+    (submodules included)."""
     package = path is not None and path.name == "__init__.py"
     out: list[str] = []
-    for node in tree.body:
+    for node in ast.walk(tree) if anywhere else tree.body:
         if isinstance(node, ast.Import):
             out += [a.name for a in node.names]
         elif isinstance(node, ast.ImportFrom):
             base = _absolute(module, node, package)
             out += [base, *(f"{base}.{a.name}" for a in node.names if a.name != "*")]
-    return out
+    return out + by_name(tree)[0] if anywhere else out  # a literal name imports too (#370)
 
 
 def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
@@ -142,6 +223,68 @@ def _star_imports(tree: ast.Module, module: str, package: bool) -> list[str]:
         for node in tree.body
         if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names)
     ]
+
+
+def binds_module_hook(tree: ast.Module) -> bool:
+    """Whether a module may bind ``__getattr__`` or ``__dir__`` as module attributes (#370):
+    any mention of either name outside a class or function body, a ``global`` or attribute
+    store of either, either name as a string, or anything, anywhere in the module, that can
+    bind a module attribute under a name the reader cannot see (``exec``, ``globals()``,
+    ``setattr``, ``sys.modules``, a ``__dict__`` or ``__globals__``, a store to ``__class__``,
+    an import of ``builtins``, ``ctypes``, ``gc`` or ``inspect`` or of a module that runs
+    other code by name, path or source text, an importlib loader, a ``getattr`` with a computed
+    name, the ``compile`` builtin, or what a def runs or shows: its code object, defaults,
+    closure cells, ``__wrapped__`` or ``__signature__``), or any mention of a package's
+    ``__path__``. A method in a class body is not one."""
+    plain = {
+        id(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and _is_name(node.func, "getattr")
+        and len(node.args) > 1
+        and isinstance(node.args[1], ast.Constant)
+    }
+    return _mentions_hook(tree) or any(_binds(node, plain) for node in ast.walk(tree))
+
+
+def _binds(node: ast.AST, plain: set[int]) -> bool:
+    if isinstance(node, ast.Global):
+        return bool(MODULE_HOOKS & set(node.names))
+    if isinstance(node, ast.Name):
+        return node.id in DYNAMIC | SEARCH | BUILDERS or (
+            node.id == "getattr" and id(node) not in plain
+        )
+    if isinstance(node, ast.Attribute):
+        hooks = MODULE_HOOKS | {"__class__"}
+        store = isinstance(node.ctx, ast.Store) and node.attr in hooks
+        return store or node.attr in DYNAMIC | REFLECTIVE | SEARCH
+    if isinstance(node, ast.alias):
+        parts = node.name.split(".")
+        return (
+            parts[0] in INTROSPECTION | RUNNERS
+            or node.name in REFLECTIVE
+            or bool(set(parts) & DYNAMIC)
+        )
+    if isinstance(node, ast.ImportFrom):
+        parts = (node.module or "").split(".")
+        return parts[0] in INTROSPECTION | RUNNERS or bool(set(parts) & DYNAMIC)
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value in MODULE_HOOKS | REFLECTIVE | SEARCH
+    return False
+
+
+def _mentions_hook(node: ast.AST) -> bool:
+    """A def/class name, or any name field (Name, alias, except/match targets) at module scope."""
+    scope = isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    for field, value in ast.iter_fields(node):
+        if scope and field == "body":
+            continue
+        for item in value if isinstance(value, list) else [value]:
+            if isinstance(item, str) and item in MODULE_HOOKS:
+                return True
+            if isinstance(item, ast.AST) and _mentions_hook(item):
+                return True
+    return False
 
 
 def _is_name(target: ast.expr, name: str) -> bool:

@@ -349,5 +349,5 @@ def _git(repo: Path, *args: str) -> str:
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
     )
     if result.returncode:
-        raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+        raise RuntimeError(f"git {' '.join(args)} failed: {redact(result.stderr.strip())}")
     return result.stdout.strip()

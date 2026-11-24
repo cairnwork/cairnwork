@@ -80,6 +80,7 @@ def test_an_exit_status_that_disagrees_with_the_recorded_session_status_fails(re
     assert result.outcomes == {"tests/test_add.py::test_add": "failed"}
     assert result.why == (
         "process exit status 0 disagrees with the recorded session status (exit status 1, 1 failed)"
+        "; tests/test_add.py::test_add assertion: E assert -1 == 3"  # #1186: wording only
     )
 
 
@@ -104,7 +105,9 @@ def test_a_record_that_says_passed_does_not_pass_a_run_whose_pytest_exited_nonze
     from cairnwork import report_channel
 
     real_open = report_channel.open_channel
-    monkeypatch.setattr(report_channel, "open_channel", lambda d: _AllPassedChannel(real_open(d)))
+    monkeypatch.setattr(
+        report_channel, "open_channel", lambda d, *rest: _AllPassedChannel(real_open(d, *rest))
+    )
     head = commit_change(repo, {"tests/test_f.py": "def test_x():\n    assert False\n"})
     result = run(repo, tmp_path, head, "tests/test_f.py")
     assert result.ran and result.outcomes == {"tests/test_f.py::test_x": "passed"}

@@ -13,7 +13,8 @@ import stat
 from pathlib import Path
 
 # tempfile.mkdtemp(prefix=f"{checkout.name}.") appends 8 chars from [a-z0-9_]. checkout.name
-# ({run_id}-vN or {run_id}-vbb) has no dot, so a private dir has exactly one, before that suffix.
+# (<attempt>-x-v<16 digits>, or {run_id}-vbb) has no dot, so a private dir has exactly one,
+# before that suffix.
 _PRIVATE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,160}\.[a-z0-9_]{8}$")
 
 
