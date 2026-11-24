@@ -182,3 +182,39 @@ def _hidden_at(path: Path) -> Path:
     path.mkdir(mode=0o700)
     (path / "test_hidden.py").write_text("def test_h():\n    assert False\n")
     return path
+
+
+def test_trusted_link_target_with_untrusted_symlink_is_refused(tmp_path):
+    from experimental.local_relay.hidden_tests import _refuse_symlink_components
+
+    real = tmp_path / "real"
+    real.mkdir()
+    _hidden_at(real / "private")
+    user_dir = tmp_path / "user_dir"
+    user_dir.mkdir()
+    (user_dir / "inner").symlink_to(real)  # not trusted
+    trusted = tmp_path / "trusted_link"
+    trusted.symlink_to(user_dir)  # stands in for a root-owned link into user-controlled space
+    with pytest.raises(ValueError, match="symlink"):
+        _refuse_symlink_components(trusted / "inner" / "private", lambda p: p == trusted)
+
+
+def test_trusted_link_to_a_clean_path_passes(tmp_path):
+    from experimental.local_relay.hidden_tests import _refuse_symlink_components
+
+    real = tmp_path / "real"
+    real.mkdir()
+    _hidden_at(real / "private")
+    trusted = tmp_path / "trusted_link"
+    trusted.symlink_to(real)
+    _refuse_symlink_components(trusted / "private", lambda p: p == trusted)  # no error
+
+
+def test_trusted_link_cycle_is_refused(tmp_path):
+    from experimental.local_relay.hidden_tests import _refuse_symlink_components
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    a.symlink_to(b)
+    b.symlink_to(a)
+    with pytest.raises(ValueError, match="symlink"):
+        _refuse_symlink_components(a / "x", lambda p: True)

@@ -64,15 +64,45 @@ def load_hidden(data: dict[str, Any], root: Path) -> HiddenTests | None:
     return HiddenTests(directory, _collect(directory), python)
 
 
-def _refuse_symlink_components(directory: Path) -> None:
-    """No path component may be a symlink, except root-owned ones (macOS /var, /tmp)."""
-    for part in (*reversed(directory.parents), directory):
+def _root_owned(path: Path) -> bool:
+    return path.lstat().st_uid == 0
+
+
+def _refuse_symlink_components(
+    directory: Path, root_owned: Callable[[Path], bool] = _root_owned
+) -> None:
+    """No path component may be a symlink, except root-owned ones (macOS /var, /tmp).
+
+    A root-owned link is followed (relative targets against the link's directory) and the
+    components of its target get the same check; 40 hops at most, so a cycle is refused.
+    """
+    message = "fixture hidden_tests_dir must not contain symlinks in its path"
+    pending = list(reversed(directory.parts[1:]))  # next component last
+    current, hops = Path(directory.anchor), 0
+    while pending:
+        part = pending.pop()
+        if part in ("", "."):
+            continue
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
         try:
-            info = part.lstat()
+            is_link = candidate.is_symlink()
         except OSError:
             return  # a missing path is refused with its own message
-        if stat.S_ISLNK(info.st_mode) and info.st_uid != 0:
-            raise ValueError("fixture hidden_tests_dir must not contain symlinks in its path")
+        if not is_link:
+            current = candidate
+            continue
+        hops += 1
+        if hops > 40 or not root_owned(candidate):
+            raise ValueError(message)
+        target = Path(os.readlink(candidate))
+        if target.is_absolute():
+            current = Path(target.anchor)
+            pending.extend(reversed(target.parts[1:]))
+        else:
+            pending.extend(reversed(target.parts))
 
 
 def _collect(directory: Path) -> tuple[str, ...]:
