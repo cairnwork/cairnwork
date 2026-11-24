@@ -32,6 +32,32 @@ _DYNAMIC_ATTRS = {
     "__globals__",
     "__builtins__",
 }
+_NAMESPACE_DUNDERS = {
+    "__getattribute__",
+    "__getattr__",
+    "__globals__",
+    "__builtins__",
+    "__self__",
+    "__func__",
+    "__code__",
+    "__closure__",
+    "__subclasses__",
+    "__mro__",
+    "__bases__",
+    "__class__",
+    "__call__",
+    "__wrapped__",
+    "__loader__",
+    "__spec__",
+}
+_PLAIN_DECORATORS = {
+    "pytest",
+    "unittest",
+    "property",
+    "staticmethod",
+    "classmethod",
+    "abstractmethod",
+}
 _NAME_ONLY = {"list", "sorted", "len", "tuple", "set", "frozenset"}
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef)
 
@@ -43,7 +69,7 @@ def _import_time_uses_changed(base: ast.Module, test: ast.Module) -> bool:
         return False
     rebound = _rebound(test)
     named, bound = _named(test)
-    names, dynamic = _import_reads(test, bound, rebound)
+    names, dynamic = _import_reads(test, bound, named, rebound)
     if dynamic:
         return True
     pending, reached = list(names), set()
@@ -59,12 +85,35 @@ def _import_time_uses_changed(base: ast.Module, test: ast.Module) -> bool:
             if dyn:
                 return True
             pending.extend(found)
-            if isinstance(node, ast.ClassDef):  # protocol methods run without a named call
+            if isinstance(node, ast.ClassDef):
+                everything = _external_base(node, named)
                 pending.extend(
                     sub.name
                     for sub in ast.walk(node)
-                    if isinstance(sub, _FUNCS) and sub.name.startswith("__")
+                    if isinstance(sub, _FUNCS)
+                    and (
+                        sub.name.startswith("__") or everything and not sub.name.startswith("test")
+                    )
                 )
+    return False
+
+
+def _external_base(
+    cls: ast.ClassDef, named: dict[str, list[ast.AST]], seen: frozenset[int] = frozenset()
+) -> bool:
+    """A base that this file does not define: the library may call any method of ``cls``."""
+    if id(cls) in seen:
+        return False
+    for base in cls.bases:
+        local = (
+            [n for n in named.get(base.id, ()) if isinstance(n, ast.ClassDef)]
+            if isinstance(base, ast.Name)
+            else []
+        )
+        if not local and not (isinstance(base, ast.Name) and base.id == "object"):
+            return True
+        if any(_external_base(n, named, seen | {id(cls)}) for n in local):
+            return True
     return False
 
 
@@ -151,7 +200,7 @@ def _scan(
             elif isinstance(child, ast.Attribute):
                 names.add(child.attr)
                 special = child.attr in _DYNAMIC or child.attr in _DYNAMIC_ATTRS
-                special |= dunder and child.attr.startswith("__") and child.attr.endswith("__")
+                special |= dunder and child.attr in _NAMESPACE_DUNDERS
                 dynamic |= special and not (child.attr == "__dict__" and id(child) in exempt)
             elif isinstance(child, ast.alias):
                 names.add(child.name.rpartition(".")[2])
@@ -159,7 +208,17 @@ def _scan(
     return names, dynamic
 
 
-def _import_reads(tree: ast.Module, bound: set[int], rebound: bool) -> tuple[set[str], bool]:
+def _runs_the_function(decorator: ast.expr) -> bool:
+    """A decorator other than a plain marker may register or call the decorated function."""
+    root = decorator
+    while isinstance(root, (ast.Attribute, ast.Call)):
+        root = root.value if isinstance(root, ast.Attribute) else root.func
+    return not (isinstance(root, ast.Name) and root.id in _PLAIN_DECORATORS)
+
+
+def _import_reads(
+    tree: ast.Module, bound: set[int], named: dict[str, list[ast.AST]], rebound: bool
+) -> tuple[set[str], bool]:
     """What executing the module body reads: statements, class bodies, definition headers."""
     names: set[str] = set()
     dynamic = False
@@ -181,7 +240,7 @@ def _import_reads(tree: ast.Module, bound: set[int], rebound: bool) -> tuple[set
                 *([node.returns] if node.returns else []),
             ]
         )
-        if any(isinstance(item, ast.Lambda) for item in node.decorator_list):
+        if any(_runs_the_function(item) for item in node.decorator_list):
             names.add(node.name)
 
     def execute(body: Sequence[ast.stmt]) -> None:
@@ -190,6 +249,12 @@ def _import_reads(tree: ast.Module, bound: set[int], rebound: bool) -> tuple[set
                 header(stmt)
             elif isinstance(stmt, ast.ClassDef):
                 read([*stmt.decorator_list, *stmt.bases, *stmt.keywords])
+                if _external_base(stmt, named):
+                    names.update(
+                        sub.name
+                        for sub in ast.walk(stmt)
+                        if isinstance(sub, _FUNCS) and not sub.name.startswith("test")
+                    )
                 execute(stmt.body)
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 read(

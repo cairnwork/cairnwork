@@ -82,6 +82,20 @@ REACHED = [
     TK + "type.__getattribute__(K, 'target')(K())\n",
     TK + "import inspect\ninspect.getattr_static(K, 'target')(K())\n",
     TK + "import importlib\nimportlib.import_module(__name__).K().target()\n",
+    "import threading\nclass Th(threading.Thread):\n    def run(self): assert True\nTh().start()\n",
+    "import ast\nclass V(ast.NodeVisitor):\n    def visit_Module(self, n): assert True\n"
+    "V().visit(ast.parse(''))\n",
+    "import enum\nclass E(enum.Enum):\n    def _generate_next_value_(n, s, c, l): assert True\n"
+    "    A = enum.auto()\n",
+    "import enum\nclass E(enum.Enum):\n    A = 1\n    @classmethod\n"
+    "    def _missing_(cls, v): assert True\nE(5)\n",
+    "import json\nclass Enc(json.JSONEncoder):\n    def default(self, o): assert True\n"
+    "json.dumps(object(), cls=Enc)\n",
+    "import logging\nclass H(logging.Handler):\n    def emit(self, r): assert True\n"
+    "logging.getLogger().addHandler(H())\n",
+    "REG = []\n@REG.append\ndef new_body(): assert True\nREG[0]()\n",
+    "import operator\n@operator.call\ndef new_body(): assert True\n",
+    TK + "K.__getattribute__(K(), 'target')()\n",
     "class K:\n    def __init__(self): assert True\nif True:\n    K()\n",
     "class K:\n    def __init__(self): assert True\nfor _ in [0]:\n    K()\n",
     "class K:\n    def __init__(self): assert True\nwhile True:\n    K()\n    break\n",
@@ -98,6 +112,16 @@ def test_every_import_time_path_to_a_changed_definition_stays_dropped(code):
 
 HELPER = "import pytest\ndef is_ci(): return False\n"
 HONEST = [
+    ("import threading\nLOCK = threading.Lock()\ndef test_new(): assert True\n", ""),
+    (
+        "class Helper:\n    def run(self): return 1\ndef test_new(): assert Helper().run() == 1\n",
+        "",
+    ),
+    (
+        "from pathlib import Path\nROOT = Path(__file__).parent\ndef test_new(): assert ROOT\n",
+        "",
+    ),
+    ("import os\nROOT = os.__file__\nNAME = __name__\ndef test_new(): assert ROOT\n", ""),
     ("import re\nPATTERN = re.compile('x')\ndef test_new(): assert True\n", ""),
     ("class Box: pass\nNAMES = list(Box.__dict__)\ndef test_new(): assert True\n", ""),
     ("class K:\n    def run(self): return 1\ndef test_new(): assert True\n", ""),
