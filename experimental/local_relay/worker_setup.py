@@ -8,6 +8,7 @@ import stat
 import subprocess
 from pathlib import Path
 
+from experimental.local_relay.diagnostics import redact
 from experimental.local_worker.canary import INSTALLED_PYROOT
 from experimental.pause.git_env import hardened_git_env
 
@@ -128,7 +129,7 @@ def restore_judge_modes(checkout: Path, executable: frozenset[bytes]) -> None:
                 )
     except PermissionError as exc:
         raise RuntimeError(
-            f"cannot restore judge modes (entry not owned by the relay): {exc}"
+            f"cannot restore judge modes (entry not owned by the relay): {redact(str(exc))}"
         ) from exc
 
 

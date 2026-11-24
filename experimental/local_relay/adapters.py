@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 from experimental.local_relay.config import DEFAULT_LOCAL_ENDPOINT
-from experimental.local_relay.diagnostics import episode_failure, redacted_tail
+from experimental.local_relay.diagnostics import episode_failure, redact, redacted_tail
 from experimental.local_relay.gate_plan import PlanIncomplete, changed_paths
 from experimental.local_relay.relay import Acceptance, Attempt, LocalAttemptFailed
 from experimental.local_worker.endpoint import (
@@ -132,7 +132,9 @@ def _changed_paths(result: RunResult, source: Path | None) -> set[str]:
     try:
         return changed_paths(source, Path(result.checkout), result.base_sha)
     except PlanIncomplete as exc:
-        raise RuntimeError(f"cannot compare candidate paths with its base: {exc}") from exc
+        raise RuntimeError(
+            f"cannot compare candidate paths with its base: {redact(str(exc))}"
+        ) from exc
 
 
 class _UsageTransport:
@@ -258,7 +260,7 @@ class HaikuProxyFallback:
             try:
                 result = self.run_attempt(65536, self.endpoint_url)
             except (EndpointContextLimit, EndpointTimeout, EndpointUnreachable) as exc:
-                raise LocalAttemptFailed(f"Haiku local-worker failed: {exc}") from exc
+                raise LocalAttemptFailed(f"Haiku local-worker failed: {redact(str(exc))}") from exc
         finally:
             _proxy_call(self.request, "POST", f"{self.label_url}/label", {"label": "idle"})
         if (
@@ -340,7 +342,7 @@ def _proxy_call(request, method: str, url: str, body: dict | None) -> dict:
     except LocalAttemptFailed:
         raise
     except (OSError, http.client.HTTPException, RuntimeError, ValueError) as exc:
-        raise LocalAttemptFailed(f"Haiku proxy {method} failed: {exc}") from exc
+        raise LocalAttemptFailed(f"Haiku proxy {method} failed: {redact(str(exc))}") from exc
 
 
 def _int_field(value: dict, key: str, alternative: str) -> int:

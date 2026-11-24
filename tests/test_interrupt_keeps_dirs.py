@@ -6,6 +6,8 @@ verifier account's checkout: test_interrupt_account_mode.py. Stand-ins only: no 
 started or signalled here."""
 
 import io
+import os
+import select
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +34,14 @@ def _kept(exc: BaseException) -> bool:
 
 
 @pytest.mark.parametrize("stop", STOPS, ids=type)
-def test_an_interrupt_in_the_wait_still_kills_the_process_group(monkeypatch, tmp_path, stop):
+@pytest.mark.parametrize("waitid", ["native", "kqueue"])  # macOS before 3.13: no os.waitid (#1549)
+def test_an_interrupt_in_the_wait_still_kills_the_process_group(
+    monkeypatch, tmp_path, stop, waitid
+):
+    if waitid == "kqueue":
+        if not hasattr(select, "kqueue"):
+            pytest.skip("kqueue hosts only")
+        monkeypatch.delattr(os, "waitid", raising=False)
     killed = []
 
     class Stub:  # Popen whose first wait (the one with the timeout) is interrupted
