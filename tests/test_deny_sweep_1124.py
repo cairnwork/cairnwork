@@ -302,3 +302,27 @@ def test_a_plain_file_with_the_prefix_is_left_alone(tmp_path):
     os.utime(plain, (old, old))
     assert deny_sweep.sweep_stale(tmp_path, time.time()) == 0
     assert plain.read_text() == "keep"
+
+
+def test_a_directory_that_will_not_go_is_not_counted_and_tries_stay_bounded(monkeypatch, tmp_path):
+    for i in range(5):
+        _make_stale(tmp_path / f"cairnwork-deny.stuck{i}")
+    tried = []
+    monkeypatch.setattr(deny_sweep.shutil, "rmtree", lambda path, **kw: tried.append(path))
+    assert deny_sweep.sweep_stale(tmp_path, time.time(), max_remove=2) == 0
+    assert len(tried) == 2  # the limit counts tries
+    assert len(list(tmp_path.glob("cairnwork-deny.*"))) == 5
+
+
+def test_a_removal_that_raises_still_counts_as_a_try(monkeypatch, tmp_path):
+    for i in range(5):
+        _make_stale(tmp_path / f"cairnwork-deny.boom{i}")
+    tried = []
+
+    def boom(path, **kw):
+        tried.append(path)
+        raise OSError("busy")
+
+    monkeypatch.setattr(deny_sweep.shutil, "rmtree", boom)
+    assert deny_sweep.sweep_stale(tmp_path, time.time(), max_remove=2) == 0
+    assert len(tried) == 2
