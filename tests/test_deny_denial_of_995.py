@@ -1,7 +1,7 @@
 """#995 step 1: a recorded stream only ever proves a denial, never its absence (AC1-AC3)."""
 
 import pytest
-from test_deny_channel import C1, line, stream, window
+from test_deny_channel import line, stream, window
 
 from cairnwork import deny_channel
 from cairnwork.deny_channel import Evidence, judge
@@ -36,7 +36,8 @@ def test_no_state_of_an_empty_evidence_answers_not_denied(state):
 
 
 def test_the_answer_is_one_of_two_words_and_the_summary_is_unchanged():
-    answers = {judge(stream(line(OWN)), window()).denial_of(*t) for t in (TARGET, C1)}
+    free = ("file-read-data", "/private/etc/services")
+    answers = {judge(stream(line(OWN)), window()).denial_of(*t) for t in (TARGET, free)}
     assert answers == {"DENIED", "UNKNOWN"}
     assert str(judge(stream(line(OWN)), window())).startswith("DENIED: file-read-data /private/")
     assert deny_channel.Evidence is Evidence
@@ -49,7 +50,7 @@ def test_a_denial_beyond_the_summary_limit_is_still_denied():
     ]
     evidence = judge(stream(*many), window())
     last = ("file-read-data", f"/noise/{deny_channel.MAX_LISTED + 1}")
-    assert "/noise/9" not in evidence.detail  # the summary names only MAX_LISTED of them
+    assert last[1] not in evidence.detail  # the summary names only MAX_LISTED of them
     assert evidence.denial_of(*last) == "DENIED"
 
 
@@ -58,3 +59,14 @@ def test_the_match_is_exact_so_another_case_or_path_is_unknown():
     assert evidence.denial_of("FILE-READ-DATA", TARGET[1]) == "UNKNOWN"
     assert evidence.denial_of(TARGET[0], TARGET[1].upper()) == "UNKNOWN"
     assert evidence.denial_of(TARGET[0], TARGET[1] + "/") == "UNKNOWN"
+
+
+@pytest.mark.parametrize("state", ["CLEAN", "UNAVAILABLE"])
+def test_only_denied_evidence_answers_denied_even_if_it_holds_the_pair(state):
+    assert Evidence(state, denials=frozenset({TARGET})).denial_of(*TARGET) == "UNKNOWN"
+
+
+def test_a_shorter_prefix_of_the_recorded_path_is_unknown():
+    assert (
+        judge(stream(line(OWN)), window()).denial_of("file-read-data", "/private/etc") == "UNKNOWN"
+    )
