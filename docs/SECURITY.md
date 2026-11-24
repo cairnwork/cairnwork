@@ -401,7 +401,8 @@ secret the account owns and copy it into the retained verifier log, so **never h
 verifier log to a worker or a model** (`src/cairnwork/verifiers.py` says the same). For the
 same reason a result's `failure_evidence` (#1105) keeps a log tail and node ids only when the run
 used the dedicated account (masked and capped; otherwise only a count of failed tests and
-collection errors), and all of it is
+collection errors); the output's `pytest_output` (#1555) is the end of that same tail, so it
+follows the same rule (null otherwise; `pytest_exit_code` is only an integer), and all of it is
 candidate-controlled text to treat as untrusted. Other users'
 `0700` home directories are protected by ordinary POSIX permissions.
 
