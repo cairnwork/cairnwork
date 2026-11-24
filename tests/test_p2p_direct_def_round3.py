@@ -44,6 +44,7 @@ def test_same_name_definition_cannot_shadow_a_changed_one(code, extra):
     assert _verdict(code, extra) == "dropped"
 
 
+TK = "class K:\n    def target(self): assert True\n"
 REACHED = [
     "class K:\n    def body(self): assert True\nK().body()\n",
     "class K:\n    @staticmethod\n    def body(): assert True\nK.body()\n",
@@ -71,6 +72,16 @@ REACHED = [
     "from builtins import globals as g\ndef new_body(): assert True\ng()['new_body']()\n",
     "from builtins import eval as e\ndef new_body(): assert True\ne('new_body()')\n",
     "def new_body(): assert True\nf = lambda: new_body()\nf()\n",
+    TK + "import operator\noperator.attrgetter('target')(K)()\n",
+    TK + "from operator import attrgetter as ag\nag('target')(K)()\n",
+    TK + "import operator\noperator.methodcaller('target')(K())\n",
+    TK + "import functools\nfunctools.partial(getattr, K())('target')()\n",
+    TK + "import functools\nfunctools.reduce(getattr, ['target'], K())()\n",
+    TK + "vars(K)['target'](K())\n",
+    TK + "K.__dict__['target'](K())\n",
+    TK + "type.__getattribute__(K, 'target')(K())\n",
+    TK + "import inspect\ninspect.getattr_static(K, 'target')(K())\n",
+    TK + "import importlib\nimportlib.import_module(__name__).K().target()\n",
     "class K:\n    def __init__(self): assert True\nif True:\n    K()\n",
     "class K:\n    def __init__(self): assert True\nfor _ in [0]:\n    K()\n",
     "class K:\n    def __init__(self): assert True\nwhile True:\n    K()\n    break\n",

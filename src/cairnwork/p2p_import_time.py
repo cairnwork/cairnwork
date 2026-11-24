@@ -15,6 +15,11 @@ _DYNAMIC = {
     "eval",
     "__import__",
     "importlib",
+    "import_module",
+    "attrgetter",
+    "methodcaller",
+    "getattr_static",
+    "getmembers",
 }
 _DYNAMIC_ATTRS = {
     "modules",
