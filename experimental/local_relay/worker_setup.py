@@ -82,7 +82,7 @@ def _set_file_mode(name: str, root_fd: int, gid: int) -> None:
             if info.st_nlink != 1:
                 raise RuntimeError(f"refusing hard-linked checkout file: {name}")
             os.fchown(fd, -1, gid)
-            os.fchmod(fd, 0o660)
+            os.fchmod(fd, 0o770 if info.st_mode & 0o111 else 0o660)  # keep the exec bit (git mode)
     finally:
         os.close(fd)
 
