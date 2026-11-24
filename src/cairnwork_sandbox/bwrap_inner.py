@@ -11,12 +11,13 @@ Decisions (integration owner, #377): a target under a package-managed system pre
 breaks ordinary links such as ``~/.config/tz -> /usr/share/zoneinfo`` and systemd user units. A
 directory under ``/etc`` is shared system configuration the run may need, so a link to one is
 refused by name, while a file there is masked. A dangling target is refused when it lies under a
-read or write root of the run, and otherwise skipped with a count in ``Policy.notes``
-(``DANGLING_NOTE``). That skip is a residual of the #353 kind, not a proof of safety: the policy
-binds the whole host root read-only, so a target created while the run is in progress outside
-the private /run and /tmp is readable (a socket connectable) at its own path. Refusing every
-dangling target instead would block each run while, for example, a daemon whose socket a link
-names (``~/.codex/.../app-server-control.sock -> /tmp/codex-daemon-*/...``) is not running. The
+read or write root of the run and the account can reach it (an unreachable one, #422, is counted
+instead), and otherwise skipped with a count in ``Policy.notes`` (``DANGLING_NOTE``). That skip is
+a residual of the #353 kind, not a proof of safety: the policy binds the whole host root
+read-only, so a target created while the run is in progress outside the private /run and /tmp is
+readable (a socket connectable) at its own path. Refusing every dangling target instead would
+block each run while, for example, a daemon whose socket a link names
+(``~/.codex/.../app-server-control.sock -> /tmp/codex-daemon-*/...``) is not running. The
 scan reaches ``SCAN_DEPTH`` levels below each credential directory (``.config/a/b/c``), where
 credential links live (``~/.ssh/id_*``, ``~/.aws/credentials``, ``~/.config/gh/hosts.yml``);
 a full scan of a ``.local/state`` can be millions of entries per run. Deeper levels are not
@@ -42,7 +43,7 @@ _CHILD = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _CHANGED = (errno.ENOENT, errno.ENOTDIR, errno.ELOOP)
 SYSTEM_PREFIXES = ("/usr/", "/nix/store/", "/gnu/store/", "/snap/")
 ETC = "/etc/"
-DANGLING_NOTE = "dangling credential links skipped, outside every read and write root: "
+DANGLING_NOTE = "dangling credential links skipped (not refused, not proven safe): "
 DEPTH_NOTE = f"credential directories not scanned for links below depth {SCAN_DEPTH}: "
 _NULL = ["--ro-bind", "/dev/null"]
 
@@ -61,8 +62,8 @@ def inner_link_masks(
     scanned. ``mask`` is ``mask_target`` bound to this policy. ``owner`` false is the dedicated
     account: a target is masked only when the account may reach it (``account_may_traverse`` on
     its parent, the #358 rule); one it cannot reach cannot leak to it, and a mount there would
-    fail. Each real target is masked once. ``roots`` are the run's read and write roots: a
-    dangling target under one is refused (by ``mask``), any other is skipped and counted."""
+    fail. Each real target is masked once. ``roots``: the run's read and write roots; a dangling
+    target under one is refused (by ``mask``) unless unreachable (#422); the rest are counted."""
     dirs, files = _hidden(masked)
     flags: list[str] = []
     skipped = deep = 0
@@ -84,7 +85,7 @@ def inner_link_masks(
             if real.startswith(SYSTEM_PREFIXES):
                 continue
             if not owner and not account_may_traverse(os.path.dirname(real)):
-                skipped += _covered(real, set(roots)) and not os.path.exists(real)  # #422
+                skipped += _covered(real, set(roots)) and not _stat_ok(link)  # #422, #1045
                 continue
             if not _stat_ok(link) and not _covered(real, set(roots)):
                 skipped += 1
