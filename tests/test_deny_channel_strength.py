@@ -71,3 +71,9 @@ def test_the_canary_port_is_random_inside_the_ephemeral_range(monkeypatch, tmp_p
             lambda argv, log: ports.append(argv[1]) or "", tmp_path, Window(TAG), tmp_path / "s"
         )
     assert ports == ["49152", "65151"] and set(bounds) == {16000}
+
+
+def test_an_escaped_backslash_before_the_closing_quote_still_closes_the_string():
+    text = '(deny file-read* (subpath "/a\\\\"))\n'  # the string is /a\\: an escaped backslash
+    expected = f'(deny file-read* (subpath "/a\\\\") (with message "{TAG}"))\n'
+    assert tag_policy(text, TAG) == expected
