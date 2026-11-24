@@ -1,0 +1,215 @@
+"""scripts/measure_986_summary.py: the AC8 numbers from the rows of tests/measure_986_ac8.py, and
+INVALID (non-zero exit) whenever the rows cannot support them."""
+
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+_spec = importlib.util.spec_from_file_location(
+    "measure_986_summary", Path(__file__).parent.parent / "scripts" / "measure_986_summary.py"
+)
+assert _spec is not None and _spec.loader is not None
+summary = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(summary)
+
+
+def _row(i, arm, scenario, seconds, status, refused=False, probe=None):
+    return {
+        "i": i,
+        "arm": arm,
+        "scenario": scenario,
+        "seconds": seconds,
+        "status": status,
+        "refused_conftest": refused,
+        "uncomparable": "",
+        "probe": probe,
+    }
+
+
+def _good_rows(n=20):
+    rows = []
+    for i in range(n):  # the shape of the first dry run: a bad candidate refused early is cheap
+        rows += [
+            _row(i, "off", "bad", 25.4, "COMPLETED"),
+            _row(i, "on", "bad", 5.4, "FAILED", refused=True, probe="OK"),
+            _row(i, "off", "good", 24.3, "COMPLETED"),
+            _row(i, "on", "good", 28.1, "COMPLETED", probe="OK"),
+        ]
+    return rows
+
+
+def test_a_clean_run_reports_the_good_candidate_time_only():
+    s = summary.summarise(_good_rows())
+    assert s["invalid"] == []
+    assert s["end_to_end_increase"] == 0.1564  # 28.1 / 24.3 - 1, not mixed with the bad candidate
+    assert s["added_p95_s"] == 3.8 and s["added_max_s"] == 3.8
+    assert s["collection_success"] == 1.0
+    assert s["new_false_passes"] == 0 and s["false_blocks_on"] == 0 and s["errors"] == 0
+
+
+def _drop_one(rows):
+    return rows[:-1]
+
+
+def _only_off(rows):
+    return [r for r in rows if r["arm"] == "off"]
+
+
+def _error_row(rows):
+    rows[1] = _row(0, "on", "bad", 1.0, "ERROR")
+    return rows
+
+
+@pytest.mark.parametrize(
+    "make",
+    [lambda rows: [], _only_off, _drop_one, lambda rows: rows[:-4]],
+    ids=["empty", "one-arm-only", "79-of-80", "a-pair-short"],
+)
+def test_rows_that_cannot_support_the_numbers_are_invalid(make):
+    assert summary.summarise(make(_good_rows()))["invalid"]
+
+
+def test_too_few_pairs_is_invalid_unless_lowered():
+    assert summary.summarise(_good_rows(3))["invalid"]
+    assert summary.summarise(_good_rows(3), min_n=1)["invalid"] == []
+
+
+def test_an_error_row_is_counted_not_dropped():
+    s = summary.summarise(_error_row(_good_rows()))
+    assert s["errors"] == 1 and s["bad_not_refused_on"] == 1
+    assert s["invalid"] == []  # the row exists: it is a result, shown, not hidden
+
+
+def test_a_blocked_good_candidate_and_a_missed_probe_are_counted():
+    rows = _good_rows()
+    rows[3] = _row(0, "on", "good", 28.1, "FAILED", refused=True, probe="RUN_FAULT")
+    s = summary.summarise(rows)
+    assert s["false_blocks_on"] == 1
+    assert s["collection_success"] == 39 / 40  # the good candidates' probes count too
+    assert s["fallback_reasons"] == {"RUN_FAULT": 1}
+
+
+def test_a_bad_candidate_accepted_only_with_the_step_on_is_a_new_false_pass():
+    rows = _good_rows()
+    rows[0] = _row(0, "off", "bad", 25.4, "FAILED", refused=True)
+    rows[1] = _row(0, "on", "bad", 5.4, "COMPLETED", probe="OK")
+    assert summary.summarise(rows)["new_false_passes"] == 1
+
+
+def test_main_exits_nonzero_on_invalid_and_zero_on_valid(tmp_path, capsys):
+    ok, bad = tmp_path / "ok.jsonl", tmp_path / "bad.jsonl"
+    ok.write_text("".join(json.dumps(r) + "\n" for r in _good_rows()))
+    bad.write_text("")
+    assert summary.main(["x", str(ok)]) == 0
+    assert summary.main(["x", str(bad)]) == 1
+    assert "INVALID" in capsys.readouterr().out
+
+
+def test_the_cold_first_pair_is_a_warm_up_and_left_out_of_the_time():
+    rows = _good_rows()
+    rows[3] = _row(0, "on", "good", 90.0, "COMPLETED", probe="OK")  # pair 0 starts cold
+    s = summary.summarise(rows)
+    assert s["added_max_s"] == 3.8 and s["end_to_end_increase"] == 0.1564
+
+
+def test_the_requested_pair_count_decides_validity_not_what_was_seen():
+    rows = _good_rows(20)
+    assert summary.summarise(rows, expect_n=20)["invalid"] == []
+    assert summary.summarise(rows, expect_n=40)["invalid"]  # cancelled after 20 of 40 pairs
+    assert summary.summarise(rows, expect_n=19)["invalid"]  # more than asked for
+
+
+def test_a_repeated_case_is_invalid():
+    rows = _good_rows()
+    assert summary.summarise([*rows, rows[5]])["invalid"]
+
+
+def _on_error(rows, pairs):
+    return _set(rows, "on", "good", pairs, status="ERROR", seconds=1.0)
+
+
+def test_one_errored_good_pair_is_not_timed_but_is_counted_and_the_run_stays_valid():
+    s = summary.summarise(_on_error(_good_rows(), {1}), expect_n=20)
+    assert s["end_to_end_increase"] == 0.1564 and s["timed_pairs"] == 18
+    assert s["errors"] == 1 and s["false_blocks_on"] == 1 and s["invalid"] == []
+
+
+def test_half_the_good_pairs_erroring_is_invalid_and_the_errors_are_still_listed():
+    s = summary.summarise(_on_error(_good_rows(), set(range(1, 11))), expect_n=20)
+    assert s["timed_pairs"] == 9 and s["invalid"]
+    assert s["errors"] == 10 and s["false_blocks_on"] == 10
+
+
+def test_p95_and_max_of_varying_pair_differences_with_negatives():
+    diffs = {0: 90.0, 1: -3.0, 2: -1.0, **{i: i / 2 for i in range(3, 21)}}  # pair 0 is cold
+    rows = []
+    for i in range(21):
+        rows += [
+            _row(i, "off", "bad", 25.0, "COMPLETED"),
+            _row(i, "on", "bad", 5.0, "FAILED", refused=True, probe="OK"),
+            _row(i, "off", "good", 24.0, "COMPLETED"),
+            _row(i, "on", "good", 24.0 + diffs[i], "COMPLETED", probe="OK"),
+        ]
+    s = summary.summarise(rows, expect_n=21)
+    assert s["timed_pairs"] == 20
+    assert s["added_p95_s"] == 9.5 and s["added_max_s"] == 10.0  # 19th of 20, then the largest
+
+
+def _set(rows, arm, scenario, pairs, **fields):
+    for k, r in enumerate(rows):
+        if r["arm"] == arm and r["scenario"] == scenario and r["i"] in pairs:
+            rows[k] = {**r, **fields}
+    return rows
+
+
+@pytest.mark.parametrize("timed", [0, 1, 7, 17])
+def test_too_few_timed_good_pairs_is_invalid(timed):
+    rows = _good_rows()
+    _set(rows, "on", "good", set(range(1 + timed, 20)), status="ERROR", seconds=1.0)
+    s = summary.summarise(rows, expect_n=20)
+    assert s["timed_pairs"] == timed and s["invalid"]
+
+
+def test_the_timed_pair_floor_is_printed_in_the_table():
+    assert "90%" in summary.table(summary.summarise(_good_rows()))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0], ids=["nan", "inf", "negative"])
+def test_a_time_that_is_not_a_finite_positive_number_is_invalid(bad):
+    rows = _set(_good_rows(), "on", "good", {7}, seconds=bad)
+    assert summary.summarise(rows, expect_n=20)["invalid"]
+
+
+def test_an_off_arm_baseline_of_zero_is_invalid():
+    rows = _set(_good_rows(), "off", "good", set(range(20)), seconds=0.0)
+    assert summary.summarise(rows, expect_n=20)["invalid"]
+
+
+@pytest.mark.parametrize("n", [0, -3])
+def test_a_non_positive_expect_n_is_refused_not_ignored(n):
+    assert summary.summarise(_good_rows(), expect_n=n)["invalid"]
+
+
+def test_a_good_candidate_that_failed_in_the_off_arm_is_not_timed():
+    rows = _set(_good_rows(), "off", "good", {1}, status="FAILED", seconds=1.0)
+    s = summary.summarise(rows, expect_n=20)
+    assert s["end_to_end_increase"] == 0.1564 and s["timed_pairs"] == 18 and s["invalid"] == []
+    assert s["false_blocks_off"] == 1
+
+
+def test_a_boolean_time_is_invalid():
+    rows = _set(_good_rows(), "on", "good", {7}, seconds=True)  # JSON true is a number to Python
+    assert summary.summarise(rows, expect_n=20)["invalid"]
+
+
+def test_the_off_arm_false_blocks_are_in_the_table():
+    assert "False blocks (step off)" in summary.table(summary.summarise(_good_rows()))
+
+
+def test_main_passes_expect_n_down(tmp_path):
+    path = tmp_path / "rows.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in _good_rows(20)))
+    assert summary.main(["x", str(path), "--expect-n", "20"]) == 0
+    assert summary.main(["x", str(path), "--expect-n", "40"]) == 1
