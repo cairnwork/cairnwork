@@ -42,6 +42,11 @@ CASES = {
         "def new_body(): pass\nclass H:\n    def run(self): return new_body()\n",
         False,
     ),
+    "local_class_method_only_named": (
+        "class H:\n    def run(self): return 1\nH()\n",
+        "class H:\n    def run(self): return 2\nH()\n",
+        False,
+    ),
 }
 
 
