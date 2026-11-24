@@ -21,13 +21,9 @@ from cairnwork.verifiers import VerifierRun, VerifierSpec
 from cairnwork.verify_context import VerifyContext
 
 TASK = SimpleNamespace(
-    repo="/repo",
-    base_commit="b" * 40,
-    test_roots=("tests",),
-    import_paths=(),
-    allowed_files=("src/pkg/a/b.py",),
-    test_commit="",
-)
+    repo="/repo", base_commit="b" * 40, test_roots=("tests",), import_paths=(),
+    allowed_files=("src/pkg/a/b.py",), test_commit="",
+)  # fmt: skip
 RESULT = SimpleNamespace(attempt_id="att", logs=[])  # #331: an unusable probe adds a line
 
 
