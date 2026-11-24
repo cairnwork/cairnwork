@@ -1,0 +1,50 @@
+name: Measure 986
+
+# On-demand AC8 measurement for #986 (base-collected fixture names). workflow_dispatch only:
+# not attached to pull_request or push, not a required check. Read-only token, no secrets.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Pairs per scenario and arm (N >= 20 for the AC8 table)"
+        default: "20"
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Install bubblewrap and lift the userns restriction (same as test-linux-sandbox)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          bwrap --version
+          git --version
+          uv run python -c "from cairnwork_sandbox import bwrap; assert bwrap.available() is True"
+      - name: Measure (base collect on and off, real bwrap)
+        env:
+          CAIRNWORK_REQUIRE_SANDBOX: "1"
+          CW986_N: ${{ inputs.runs }}
+          CW986_OUT: ${{ runner.temp }}/rows.jsonl
+        run: uv run pytest -q -p no:cacheprovider tests/measure_986_ac8.py 2>&1 | tee "$RUNNER_TEMP/pytest.log" | tail -n 40
+      - name: Summary
+        if: always()
+        run: |
+          uv run python scripts/measure_986_summary.py "$RUNNER_TEMP/rows.jsonl" "$RUNNER_TEMP/summary.json" | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: measure-986
+          path: |
+            ${{ runner.temp }}/rows.jsonl
+            ${{ runner.temp }}/summary.json
+            ${{ runner.temp }}/pytest.log
