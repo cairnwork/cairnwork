@@ -21,6 +21,8 @@ from cairnwork import base_fixture_names
 pytestmark = pytest.mark.sandbox
 
 N = int(os.environ.get("CW986_N", "20"))
+if not 1 <= N <= 200:
+    raise ValueError("CW986_N must be between 1 and 200")
 SCENARIOS = {"bad": PLUGIN, "good": "# no plugin here\n"}
 CASES = [
     (i, arm, name)
@@ -44,20 +46,24 @@ def test_ac8_case(project, tmp_path, monkeypatch, i, arm, name):  # noqa: F811
         monkeypatch.setattr(base_fixture_names, "probe", record)
     else:
         monkeypatch.setattr(base_fixture_names, "collect", lambda *a, **k: None)
-    started = time.perf_counter()
-    result = _run(project, tmp_path, SCENARIOS[name])
-    seconds = time.perf_counter() - started
-    row = {
+    row: dict[str, Any] = {
         "i": i,
         "arm": arm,
         "scenario": name,
-        "seconds": round(seconds, 3),
-        "status": result.status,
-        "refused_conftest": "TEST_COMMIT_CONFTEST_STATIC" in (result.reason or ""),
-        "uncomparable": result.uncomparable,
-        "probe": reasons[0] if reasons else None,
+        "status": "ERROR",  # an exception or timeout still leaves a row: nothing is dropped
+        "refused_conftest": False,
+        "uncomparable": None,
     }
-    out = os.environ.get("CW986_OUT")
-    if out:
-        with open(out, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(row) + "\n")
+    started = time.perf_counter()
+    try:
+        result = _run(project, tmp_path, SCENARIOS[name])
+        row["status"] = result.status
+        row["refused_conftest"] = "TEST_COMMIT_CONFTEST_STATIC" in (result.reason or "")
+        row["uncomparable"] = result.uncomparable
+    finally:
+        row["seconds"] = round(time.perf_counter() - started, 3)
+        row["probe"] = reasons[0] if reasons else None
+        out = os.environ.get("CW986_OUT")
+        if out:
+            with open(out, "a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row) + "\n")

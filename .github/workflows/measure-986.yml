@@ -8,6 +8,7 @@ on:
       runs:
         description: "Pairs per scenario and arm (N >= 20 for the AC8 table)"
         default: "20"
+        type: string
 
 permissions:
   contents: read
@@ -21,6 +22,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.13"
+          enable-cache: false
       - run: uv sync --locked
       - name: Install bubblewrap and lift the userns restriction (same as test-linux-sandbox)
         run: |
@@ -31,6 +33,7 @@ jobs:
           git --version
           uv run python -c "from cairnwork_sandbox import bwrap; assert bwrap.available() is True"
       - name: Measure (base collect on and off, real bwrap)
+        shell: bash  # bash -e -o pipefail: a failing pytest fails the step despite the pipe
         env:
           CAIRNWORK_REQUIRE_SANDBOX: "1"
           CW986_N: ${{ inputs.runs }}

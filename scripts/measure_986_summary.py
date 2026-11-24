@@ -1,14 +1,19 @@
 """Summarise the rows of tests/measure_986_ac8.py against the #986 AC8 thresholds.
 
-Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json]. Prints a markdown table. Exit 0 always:
-the verdict is in the table (this is a measurement, not a gate)."""
+Usage: measure_986_summary.py ROWS.jsonl [SUMMARY.json] [--min-n N]. Prints a markdown table and
+exits 0; exits 1 and prints INVALID when the rows cannot support the numbers (no rows, a missing
+or repeated case, fewer than --min-n pairs, default 20). Time is taken from the good candidate
+only (a bad candidate refused early is cheaper by design) and pair 0 is a warm-up, left out."""
 
 from __future__ import annotations
 
 import json
 import math
 import sys
+from collections import Counter
 from pathlib import Path
+
+MIN_N = 20
 
 
 def _p95(values: list[float]) -> float:
@@ -16,17 +21,39 @@ def _p95(values: list[float]) -> float:
     return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)] if ordered else 0.0
 
 
-def summarise(rows: list[dict]) -> dict:
+def _invalid(rows: list[dict], min_n: int) -> list[str]:
+    if not rows:
+        return ["no rows"]
+    n = max(r["i"] for r in rows) + 1
+    want = {(i, a, s) for i in range(n) for a in ("on", "off") for s in ("bad", "good")}
+    keys = Counter((r["i"], r["arm"], r["scenario"]) for r in rows)
+    reasons = []
+    if n < min_n:
+        reasons.append(f"{n} pairs, need at least {min_n}")
+    if set(keys) != want:
+        reasons.append(f"{len(want - set(keys))} of {len(want)} expected cases missing")
+    if any(v > 1 for v in keys.values()):
+        reasons.append("a case appears more than once")
+    return reasons
+
+
+def summarise(rows: list[dict], min_n: int = MIN_N) -> dict:
+    invalid = _invalid(rows, min_n)
     on = {(r["i"], r["scenario"]): r for r in rows if r["arm"] == "on"}
     off = {(r["i"], r["scenario"]): r for r in rows if r["arm"] == "off"}
-    pairs = sorted(on.keys() & off.keys())
-    added = [on[k]["seconds"] - off[k]["seconds"] for k in pairs]
-    total_on = sum(on[k]["seconds"] for k in pairs)
-    total_off = sum(off[k]["seconds"] for k in pairs)
-    probes = [r["probe"] for r in on.values() if r["scenario"] == "bad"]
+    both = sorted(on.keys() & off.keys())
+    timed = [k for k in both if k[1] == "good" and (k[0] > 0 or len(both) <= 2)]
+    added = [on[k]["seconds"] - off[k]["seconds"] for k in timed]
+    total_on = sum(on[k]["seconds"] for k in timed)
+    total_off = sum(off[k]["seconds"] for k in timed)
+    on_rows = list(on.values())
+    ok = [r["probe"] == "OK" for r in on_rows]
     return {
-        "pairs": len(pairs),
-        "collection_success": (sum(p == "OK" for p in probes) / len(probes)) if probes else None,
+        "invalid": invalid,
+        "pairs": len(both),
+        "timed_pairs": len(timed),
+        "collection_success": (sum(ok) / len(ok)) if ok else None,
+        "fallback_reasons": dict(Counter(r["probe"] for r in on_rows if r["probe"] != "OK")),
         "added_p95_s": round(_p95(added), 3),
         "added_max_s": round(max(added, default=0.0), 3),
         "total_on_s": round(total_on, 3),
@@ -34,46 +61,57 @@ def summarise(rows: list[dict]) -> dict:
         "end_to_end_increase": round(total_on / total_off - 1, 4) if total_off else None,
         # a bad candidate accepted with the step on although the off arm refused it
         "new_false_passes": sum(
-            on[k]["scenario"] == "bad" and on[k]["status"] == "COMPLETED" and not _ok(off[k])
-            for k in pairs
+            k[1] == "bad" and on[k]["status"] == "COMPLETED" and off[k]["status"] != "COMPLETED"
+            for k in both
         ),
         "bad_not_refused_on": sum(
-            r["scenario"] == "bad" and not r["refused_conftest"] for r in on.values()
+            r["scenario"] == "bad" and not r["refused_conftest"] for r in on_rows
         ),
-        # a good candidate refused or made uncomparable with the step on
         "false_blocks_on": sum(
-            r["scenario"] == "good" and r["status"] != "COMPLETED" for r in on.values()
+            r["scenario"] == "good" and r["status"] != "COMPLETED" for r in on_rows
         ),
         "false_blocks_off": sum(
             r["scenario"] == "good" and r["status"] != "COMPLETED" for r in off.values()
         ),
+        "errors": sum(r["status"] == "ERROR" for r in rows),
     }
 
 
-def _ok(row: dict) -> bool:
-    return row["status"] == "COMPLETED"
-
-
 def table(s: dict) -> str:
+    if s["invalid"]:
+        lines = ["**INVALID: no AC8 numbers.** " + "; ".join(s["invalid"]), ""]
+    else:
+        lines = []
     gate = [
         ("Collection success", s["collection_success"], ">= 0.90"),
-        ("Added P95 (s)", s["added_p95_s"], "<= 30"),
-        ("End-to-end increase", s["end_to_end_increase"], "<= 0.20"),
+        ("Added P95 per good candidate (s)", s["added_p95_s"], "<= 30"),
+        ("End-to-end increase (good candidate)", s["end_to_end_increase"], "<= 0.20"),
         ("New false passes", s["new_false_passes"], "0"),
+        ("False blocks (step on)", s["false_blocks_on"], "0"),
+        ("Added max (s)", s["added_max_s"], "-"),
+        ("Error rows", s["errors"], "0"),
     ]
-    lines = ["| Item | Measured | AC8 threshold |", "|---|---|---|"]
+    lines += ["| Item | Measured | AC8 threshold |", "|---|---|---|"]
     lines += [f"| {a} | {b} | {c} |" for a, b, c in gate]
     lines += ["", "```json", json.dumps(s, indent=2), "```"]
     return "\n".join(lines)
 
 
 def main(argv: list[str]) -> int:
-    rows = [json.loads(x) for x in Path(argv[1]).read_text().splitlines() if x.strip()]
-    result = summarise(rows)
-    if len(argv) > 2:
-        Path(argv[2]).write_text(json.dumps(result, indent=2) + "\n")
+    args = argv[1:]
+    min_n = MIN_N
+    if "--min-n" in args:
+        at = args.index("--min-n")
+        min_n = int(args[at + 1])
+        del args[at : at + 2]
+    path = Path(args[0]) if args else None
+    text = path.read_text() if path is not None and path.exists() else ""
+    rows = [json.loads(x) for x in text.splitlines() if x.strip()]
+    result = summarise(rows, min_n)
+    if len(args) > 1:
+        Path(args[1]).write_text(json.dumps(result, indent=2) + "\n")
     print(table(result))
-    return 0
+    return 1 if result["invalid"] else 0
 
 
 if __name__ == "__main__":
