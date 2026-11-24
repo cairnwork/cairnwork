@@ -30,7 +30,7 @@ HELPERS = (
 )
 
 
-def collect(tmp_path: Path, body: str, *, fail_hook: str = "", extra=(), cap=None):
+def collect(tmp_path: Path, body: str, *, fail_hook: str = "", extra=(), cap=None, pair_cap=None):
     test_file = tmp_path / TARGET
     test_file.parent.mkdir(parents=True, exist_ok=True)
     test_file.write_text(body)
@@ -53,6 +53,11 @@ def collect(tmp_path: Path, body: str, *, fail_hook: str = "", extra=(), cap=Non
         source = plugin_file.read_text()
         plugin_file.write_text(
             source.replace("_MAX_REPORT_BYTES = ", f"_MAX_REPORT_BYTES = {cap} or ", 1)
+        )
+    if pair_cap is not None:
+        source = plugin_file.read_text()
+        plugin_file.write_text(
+            source.replace("_MAX_PAIRS = 2000000", f"_MAX_PAIRS = {pair_cap}", 1)
         )
     env = {
         **os.environ,
