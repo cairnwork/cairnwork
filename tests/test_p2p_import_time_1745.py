@@ -10,6 +10,10 @@ import pytest
 
 from cairnwork.p2p_import_time import _import_time_uses_changed as uses
 
+NESTED = (
+    "import threading\ndef f():\n    class Th(threading.Thread):\n"
+    "        def run(self): pass\n    Th().start()\n"
+)
 HOLD = "import lib\nclass H(lib.Base):\n"
 CASES = {
     "ext_base_method_uses_changed": (
@@ -46,6 +50,11 @@ CASES = {
         "class H:\n    def run(self): return 1\nH()\n",
         "class H:\n    def run(self): return 2\nH()\n",
         False,
+    ),
+    "ext_base_class_in_reached_function": (
+        NESTED + "f()\n",
+        NESTED + "def run(): assert True\nf()\n",
+        True,
     ),
 }
 
