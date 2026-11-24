@@ -105,8 +105,7 @@ _DANGEROUS_SOCKETS = (
 
 # Unshare a user + pid namespace, drop all capabilities, disable nested userns, bind the root
 # read-only, mount a fresh /proc, run true. Exit 0 means bwrap can build a confining namespace
-# here with the same hardening flags the real policy uses (so a build that rejects one fails
-# the probe rather than passing it and then erroring on the real run).
+# here with the real policy's hardening flags (a build that rejects one fails the probe).
 _PROBE = (
     "--unshare-pid",
     "--unshare-user",
@@ -244,7 +243,6 @@ def build_policy(
             masked_socks.add(real)
             flags += ["--ro-bind", "/dev/null", real]
     flags += remount  # last: the private trees turn read-only once everything is mounted on them
-    # Surfaced by the verifier run (Policy.notes), not written into the hashed policy text.
     reason = shm_unavailable_reason(bwrap_path() or "")
     notes = ((f"{SHM_NOTE_PREFIX}{reason}",) if reason else ()) + mask_notes
     inputs = (read_roots, write_roots, home, mask_home_credentials)
