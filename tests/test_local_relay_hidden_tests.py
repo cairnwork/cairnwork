@@ -60,6 +60,7 @@ def test_hidden_commit_is_fresh_each_call_and_absent_from_judged_repo(tmp_path):
         return {"status": "VERIFIED"}
 
     hidden = load_hidden({"hidden_tests_dir": str(_hidden(tmp_path))}, repo)
+    assert hidden is not None
     verify = HiddenVerify(repo, hidden, fake)
     intake = Intake(tmp_path / "state")
     for _ in range(2):
@@ -87,6 +88,7 @@ def test_hidden_files_are_not_in_worker_checkout_or_task_file(tmp_path):
 def test_core_gets_hidden_files_via_real_overlay_commit(tmp_path):
     repo, base = _repo(tmp_path)
     hidden = load_hidden({"hidden_tests_dir": str(_hidden(tmp_path))}, repo)
+    assert hidden is not None
     intake = Intake(tmp_path / "state")
     got = {}
 

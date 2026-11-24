@@ -9,6 +9,7 @@ import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Any
 
 from experimental.local_relay.config import RelayConfig
 from experimental.local_relay.thinking_shim import DEFAULT_EXTRA_BODY, merge_extra, thinking_off
@@ -19,7 +20,7 @@ from experimental.local_relay.worker_setup import prepare_worker_layout
 class _Upstream(BaseHTTPRequestHandler):
     seen: list[tuple[str, str, bytes]] = []
 
-    def log_message(self, *_a):
+    def log_message(self, format: str, *args: Any) -> None:
         return
 
     def _reply(self, body: bytes) -> None:
