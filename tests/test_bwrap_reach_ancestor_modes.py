@@ -1,10 +1,10 @@
-"""Ancestor-directory permission check in the account-mode reach rule: Linux and macOS differ on
-what the owner can stat below a directory whose owner bits are tighter than its other bits. The
-rule must read the ancestor's mode, not whether the owner's own stat of the next part succeeds."""
+"""Ancestor-directory permission check in the account-mode reach rule. A directory whose owner
+bits are tighter than its other bits shuts the owner out of what is below it while the account may
+still pass; the rule must read the ancestor's mode, not whether the owner's own stat of the next
+part succeeds."""
 
 import errno
 import os
-import sys
 
 import pytest
 from fixture_tree import world_dir
@@ -51,16 +51,42 @@ def test_a_denied_owner_stat_below_an_ancestor_follows_the_ancestors_mode(
     assert bwrap_reach.account_may_traverse(str(d / "sub")) is expect
 
 
-@pytest.mark.skipif(sys.platform != "linux", reason="owner-bit precedence is the Linux semantics")
-def test_an_ancestor_with_tighter_owner_bits_is_not_treated_as_unreachable(world):
+@pytest.mark.parametrize("mode", [0o601, 0o611, 0o001])
+def test_an_owner_shut_out_of_an_enterable_ancestor_refuses_the_policy(world, mode):
     d = world / "out" / "d"
-    d.chmod(0o701)
+    d.chmod(mode)
     if os.access(d / "sub", os.F_OK):
         pytest.skip("running as a user that stats through the directory (root)")
     with pytest.raises(SandboxError, match="cannot be checked"):
         bwrap.BACKEND.policy(
             (world / "other",), (), home=world / "home", mask_home_credentials=False
         )
+
+
+@pytest.mark.parametrize(
+    ("code", "expect"),
+    [
+        (errno.ENOENT, False),
+        (errno.ENOTDIR, False),
+        (errno.ELOOP, False),
+        (errno.EIO, False),
+        (errno.EACCES, True),
+        (errno.EPERM, True),
+    ],
+)
+def test_other_stat_errors_below_an_enterable_ancestor_stay_unreachable(
+    world, monkeypatch, code, expect
+):
+    d = (world / "out" / "d").resolve()
+    real = os.lstat
+
+    def lstat(path, *a, **kw):
+        if str(path).startswith(str(d) + os.sep):
+            raise OSError(code, os.strerror(code), str(path))
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(bwrap_reach.os, "lstat", lstat)
+    assert bwrap_reach.account_may_traverse(str(d / "sub")) is expect
 
 
 def test_an_ancestor_closed_to_everyone_stays_unreachable_and_is_skipped(world):
