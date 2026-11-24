@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import time
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -192,7 +193,7 @@ def test_a_reader_that_fails_never_stops_a_run():
 
 
 def _sleeper(tmp_path, **kwargs):
-    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: "t" * 32}
+    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     argv = [sys.executable, "-c", "import time; time.sleep(120)"]
     start = time.monotonic()
     out = confined.execute(argv, tmp_path, env, 100, tmp_path / "log", **kwargs)
@@ -214,14 +215,14 @@ def test_the_main_process_is_handed_to_the_reap_not_subtracted_here(tmp_path, re
 
 
 def test_without_a_stop_the_reaped_count_is_unchanged(tmp_path):
-    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: "t" * 32}
+    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     out = confined.execute([sys.executable, "-c", "pass"], tmp_path, env, 60, tmp_path / "log",
                            reap=lambda main=0: 1, stop=lambda: False)  # fmt: skip
     assert out[0] == 0 and not out[1] and int(out[2]) == 1
 
 
 def test_a_stop_that_never_fires_leaves_the_timeout_alone(tmp_path):
-    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: "t" * 32}
+    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     argv = [sys.executable, "-c", "import time; time.sleep(60)"]
     code, timed_out, _ = confined.execute(argv, tmp_path, env, 1, tmp_path / "log",
                                           stop=lambda: False)  # fmt: skip
@@ -238,7 +239,7 @@ def test_the_account_hand_over_writes_a_collection_file_and_the_parent_stops_on_
     path = run_dir / "verdict.json"
     env = {"PATH": "/usr/bin:/bin", "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONPATH": str(guard),
            report_guard.PATH_ENV: str(path), report_guard.NONCE_ENV: NONCE,
-           confined.RUN_TOKEN_VAR: "t" * 32}  # fmt: skip
+           confined.RUN_TOKEN_VAR: uuid.uuid4().hex}  # fmt: skip
     watcher = collect_stop.watcher(QUIET, None, path, NONCE)
     assert watcher is not None
     start = time.monotonic()
