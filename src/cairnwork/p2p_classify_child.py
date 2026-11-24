@@ -20,6 +20,7 @@ from cairnwork.p2p_bindings import (
     walk_without_nested_classes,
 )
 from cairnwork.p2p_function import _function
+from cairnwork.p2p_import_time import _import_time_uses_changed
 from cairnwork.p2p_simple_module import _simple_test_module, _utf8_source
 
 
@@ -40,6 +41,7 @@ def classify_payload(data: dict) -> dict:
     ):
         exposed = None
     texts, bases, test_trees, removed, dropped = {}, {}, {}, set(), set()
+    import_time: dict[str, bool] = {}
     collected_funcs = {_function(n) for n in test_ids}
     for nodeid in base_ids - test_ids:
         path = _file(nodeid)
@@ -52,10 +54,15 @@ def classify_payload(data: dict) -> dict:
             *owners, name = name_part(_function(nodeid)).split("::")
             test_tree = test_trees[path]
             if _defines(bases[path], owners, name):
+                if path not in import_time:
+                    import_time[path] = test_tree is not None and _import_time_uses_changed(
+                        bases[path], test_tree
+                    )
                 gone = (
                     test_tree is not None
                     and not _scope_mentions(test_tree, owners, name, texts[path])
                     and not _hidden(test_tree, bases[path], name, path, test_ids, base_ids)
+                    and not import_time[path]
                 )
             else:
                 origin = _inherited_origin(bases[path], owners, name)

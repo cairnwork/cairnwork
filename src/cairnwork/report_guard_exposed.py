@@ -2,6 +2,8 @@
 
 EXPOSED_SOURCE = r"""\
 import fnmatch
+import functools
+import types
 from types import ModuleType
 
 _TYPE_DICT = type.__dict__["__dict__"]
@@ -55,6 +57,24 @@ def _is_test_name(name, functions):
                and fnmatch.fnmatch(name, part) for part in functions)
 
 
+def _origin_module(value):
+    for _ in range(64):
+        if type(value) in (staticmethod, classmethod):
+            value = type(value).__dict__["__func__"].__get__(value, type(value))
+        elif type(value) is types.MethodType:
+            value = types.MethodType.__dict__["__func__"].__get__(value, types.MethodType)
+        elif type(value) is functools.partial:
+            value = functools.partial.func.__get__(value, functools.partial)
+        else:
+            break
+    else:
+        return None
+    if type(value) is types.FunctionType:
+        namespace = types.FunctionType.__dict__["__globals__"].__get__(value, types.FunctionType)
+        return namespace.get("__name__")
+    return None
+
+
 def _without_params(node):
     path, _, rest = node.partition("::")
     return f"{path}::{rest.split('[', 1)[0]}"
@@ -71,29 +91,38 @@ def _exposed_uncollected(session):
     result, pairs, total = set(), 0, 0
     for cls in classes:
         path = modules.get(_TYPE_MODULE.__get__(cls, type))
-        if path is None:
-            continue
+        own = _TYPE_DICT.__get__(cls, type)
         owner = _TYPE_QUALNAME.__get__(cls, type).replace(".", "::")
         seen = set()
-        for base in _TYPE_MRO.__get__(cls, type):
-            for name, value in _TYPE_DICT.__get__(base, type).items():
+        sources = (
+            ((_TYPE_DICT.__get__(base, type), True) for base in _TYPE_MRO.__get__(cls, type))
+            if path is not None else ((own, False),)
+        )
+        for namespace, counted in sources:
+            for name, value in namespace.items():
                 if type(name) is not str or name in seen:
                     continue
                 seen.add(name)
-                pairs += 1
-                if pairs > _MAX_PAIRS:
-                    return None
+                if counted:
+                    pairs += 1
+                    if pairs > _MAX_PAIRS:
+                        return None
                 if not _is_test_name(name, functions) or not (
                         callable(value) or issubclass(type(value), (staticmethod, classmethod))):
                     continue
-                node = f"{path}::{owner}::{name}"
-                if node not in collected and node not in result:
-                    result.add(node)
-                    total += len(node)
-                    if len(node) > _EXPOSED_NAME or len(result) > _EXPOSED_COUNT:
-                        return None
-                    if total > _EXPOSED_TOTAL:
-                        return None
+                origin = modules.get(_origin_module(value))
+                node_paths = {candidate for candidate in (path, origin) if candidate is not None}
+                if not node_paths:
+                    continue
+                for node_path in node_paths:
+                    node = f"{node_path}::{owner}::{name}"
+                    if node not in collected and node not in result:
+                        result.add(node)
+                        total += len(node)
+                        if len(node) > _EXPOSED_NAME or len(result) > _EXPOSED_COUNT:
+                            return None
+                        if total > _EXPOSED_TOTAL:
+                            return None
     return sorted(result)
 
 

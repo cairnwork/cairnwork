@@ -41,9 +41,6 @@ ASSEMBLERS = {
     "held_only": "def make():\n    class Helper: test_x = f\n    return Helper\nheld = [make()]",
 }
 
-# shapes the AST layer alone (main) reads as removed; the runtime fact must catch every shape
-MISSED_BY_AST = {"concat", "exec_concat", "fstring", "loop", "metaclass", "type_concat"}
-
 
 def _reattach(base, shape, top=False):
     prefix = (
@@ -155,14 +152,14 @@ def test_missing_or_malformed_runtime_evidence_fails_closed(payload):
 @pytest.mark.parametrize("shape", sorted(ASSEMBLERS))
 def test_real_collect_only_fact_alone_turns_removed_into_dropped(tmp_path, shape, top):
     """The gate on its own, independent of the deferred-tests guard: a real collect-only record
-    of the test commit; without the fact the AST layer alone says removed (main's verdict)."""
+    of the test commit; the AST layer alone (with the import-time rule) drops every shape."""
     base = BASE_TOP if top else BASE_CLASS
     test = _reattach(base, ASSEMBLERS[shape], top)
     record = collect(tmp_path, test)
     node = f"{TARGET}::test_x" if top else f"{TARGET}::TestA::test_x"
     test_ids = set(record["collected"])
     args = ({node, *test_ids}, test_ids, {TARGET}, lambda _: test, lambda _: base)
-    assert (node in classify(*args, exposed=()).removed) == (shape in MISSED_BY_AST)
+    assert node not in classify(*args, exposed=()).removed
     assert classify(*args, exposed=tuple(record["uncollected_exposed"])).dropped == {node}
 
 
