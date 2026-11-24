@@ -142,6 +142,10 @@ HONEST = [
         "    def v(self, x): pass\n",
     ),
     ("def deferred(): return 1\nlater = lambda: deferred()\ndef test_new(): assert True\n", ""),
+    (
+        "import unittest\nclass K(unittest.TestCase):\n    def test_new(self): pass\nK()\n",
+        "",
+    ),
 ]
 
 
