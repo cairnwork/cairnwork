@@ -1,7 +1,9 @@
 """#1671: a test that behaves differently only when pytest says it is collect-only is still seen.
-The collected-set run of #974 does not announce itself: same argv as a real run, the guard stops it
-after collection. Each wrong shape sits beside a visible new test (the false-green case); the
-controls are the same moves written plainly. Real runs under the sandbox, worker path."""
+The collected-set run of #974 does not announce itself: same argv and same hand-over as a real run;
+the parent ends it when it reads the guard's collection record. Each wrong shape sits beside a
+visible new test (the false-green case); the controls are the same moves written plainly. That
+the child cannot tell the two runs apart is pinned by test_collect_indistinguishable_1671. Real
+runs under the sandbox, worker path."""
 
 import sys
 
@@ -26,16 +28,6 @@ WRONG = {  # categories: arguments read at import, a skip that fires only then
     "if '--collect-only' in sys.argv:\n    pytest.skip('x', allow_module_level=True)\n"
     "class Hid(TC):\n" + BODY,
 }
-GUARD = "sys.modules.get('_cairnwork_report_guard')"
-SEEN = "'--collect-only' in sys.argv"  # the announced run that lists the tests
-HOOK = {  # hidden from the announced run by its flag and from the quiet run by the guard module
-    "class-attribute-from-guard-hook": "import sys\nfrom unittest import TestCase as TC\n"
-    f"class Hid(TC):\n    __test__ = not ({SEEN} or hasattr({GUARD}, 'pytest_runtestloop'))\n"
-    + BODY,
-    "class-attribute-from-guard-name-list": "import sys\nfrom unittest import TestCase as TC\n"
-    f"class Hid(TC):\n    __test__ = not ({SEEN} or [n for n in dir({GUARD}) if 'loop' in n])\n"
-    + BODY,
-}
 SCOPE = (  # review of #1698: a dynamic fixture scope is called with the config at registration
     "import pytest\nSEEN = []\n"
     "def _scope(*, fixture_name, config):\n"
@@ -59,18 +51,6 @@ RIGHT = {
 @pytest.mark.parametrize("shape", WRONG)
 def test_a_test_that_hides_only_under_collect_only_is_refused(project, tmp_path, shape):
     result = _run(project, tmp_path, WRONG[shape])
-    assert result.status == "FAILED", result.reason
-    assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
-    assert MARK not in repr(result) and "Hid" not in result.reason
-
-
-@sandbox
-@pytest.mark.parametrize("shape", HOOK)
-def test_the_quiet_run_cannot_be_told_apart_by_the_guard_module(project, tmp_path, shape):
-    """Review of #1698: both runs load the same guard module with the same names, so a test that
-    hides from the announced run by its flag and from the quiet run by the module is seen by the
-    quiet one and refused."""
-    result = _run(project, tmp_path, HOOK[shape])
     assert result.status == "FAILED", result.reason
     assert result.reason.startswith("DEFERRED_TESTS_UNREADABLE"), result.reason
     assert MARK not in repr(result) and "Hid" not in result.reason
@@ -107,28 +87,3 @@ def test_a_quiet_collect_run_reads_the_same_as_an_announced_one(repo, tmp_path):
     assert {"tests/test_ok.py::test_one", "tests/test_ok.py::test_two"} <= set(quiet.ids)
     loud = got[True][1]
     assert (quiet.ids, quiet.error_files) == (loud.ids, loud.error_files)
-
-
-def test_the_quiet_flag_is_not_state_on_any_registered_plugin(tmp_path, monkeypatch):
-    """Review of #1698: a test can reach every registered plugin object through the plugin
-    manager, so the quiet bit sits in a closure, on no attribute of any of them."""
-    import importlib.util
-    from types import SimpleNamespace
-
-    from cairnwork import report_guard
-
-    report_guard.install_plugin(tmp_path)
-    (module_file,) = [p for p in tmp_path.glob("*.py") if p.name != "sitecustomize.py"][:1]
-    monkeypatch.setenv(report_guard.PATH_ENV, str(tmp_path / "verdict.json"))
-    monkeypatch.setenv(report_guard.NONCE_ENV, "a" * 32 + "q")
-    spec = importlib.util.spec_from_file_location("_guard_under_test", module_file)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    manager = pytest.PytestPluginManager()
-    module.pytest_configure(SimpleNamespace(pluginmanager=manager))
-    plugins = [p for p in manager.get_plugins() if type(p).__name__ in ("_Reporter", "_Stop")]
-    assert len(plugins) == 2
-    for plugin in plugins:
-        state = {**vars(type(plugin)), **vars(plugin)}
-        assert not [k for k, v in state.items() if v is True or "quiet" in str(k)], state
