@@ -85,8 +85,8 @@ def _caught_denial(project, state, repo, tmp_path, test):
     denial must not pass."""
     for again in ("", "# retry\n"):
         (line,) = _verified(project, state, test + again)
-        # #1227: the evidence run commits into the repo it is given; in the project itself that moves
-        # HEAD past the origin the next make_test_commit clones from. Run it in a clone instead.
+        # #1227: the evidence run commits into the repo it is given; in the project that moves HEAD
+        # past the origin the next make_test_commit clones from. Run it in a clone instead.
         scratch = tmp_path / f"evidence-{len(list(tmp_path.glob('evidence-*')))}"
         git(tmp_path, "clone", "-q", str(repo), str(scratch))
         git(scratch, "config", "user.email", "test@example.invalid")
