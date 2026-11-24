@@ -26,6 +26,7 @@ TASK = SimpleNamespace(
     test_roots=("tests",),
     import_paths=(),
     allowed_files=("src/pkg/a/b.py",),
+    test_commit="",
 )
 RESULT = SimpleNamespace(attempt_id="att", logs=[])  # #331: an unusable probe adds a line
 
