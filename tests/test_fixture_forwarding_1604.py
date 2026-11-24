@@ -123,29 +123,6 @@ REFUSED = {  # shape: module text after HEAD
     "C().mk('taken')\n",
     "one literal and one variable call": WRAP + "mk('a')\nmk(x)\n",
 }
-READ = {  # shape: (module text after HEAD, a name it registers)
-    "a positional literal": (WRAP + "mk('taken')\n", "taken"),
-    "a keyword literal": (WRAP + "mk(n='taken')\n", "taken"),
-    "a literal default": ("def mk(n='taken'):\n    return fixture(name=n)\n\n\nmk()\n", "taken"),
-    "a keyword-only parameter": (
-        "def mk(*, n):\n    return fixture(name=n)\n\n\nmk(n='taken')\n",
-        "taken",
-    ),
-    "a second hop with a literal": (
-        WRAP + "def hop(m):\n    return mk(m)\n\n\nhop('taken')\n",
-        "taken",
-    ),
-    "a keyword-only literal default": (
-        "def mk(*, n='taken'):\n    return fixture(name=n)\n\n\nmk()\n",
-        "taken",
-    ),
-    "two literal calls": (WRAP + "mk('a')\nmk('b')\n", "b"),
-    "an attribute call with a literal": (WRAP + "h.mk('taken')\n", "taken"),
-    "a nested wrapper": (
-        "def outer():\n    def mk(n):\n        return fixture(name=n)\n    mk('taken')\n",
-        "taken",
-    ),
-}
 
 
 @pytest.mark.parametrize("shape", list(REFUSED))
@@ -205,6 +182,48 @@ def test_pytests_own_factory_keeps_its_exemption():
     assert _registered(ast.parse(text)) <= {"fixture", "fn", "name", "kw"}
 
 
+PRE = "import pytest\n\n\n"
+FACTORY = "def fixture(fn=None, *, name=None):\n    return pytest.fixture(fn, name=name)\n"
+NOT_TOP_LEVEL = {  # a `def fixture` that is not the module's top-level one is not the exemption
+    "a def inside a function": "def outer():\n"
+    + "".join("    " + ln + "\n" for ln in FACTORY.splitlines()),
+    "a method of a class": (
+        "class C:\n    def fixture(self, fn=None, *, name=None):\n"
+        "        return pytest.fixture(fn, name=name)\n"
+    ),
+    "a top-level one plus a method that forwards another parameter": (
+        "def fixture(fn=None, **kw):\n    return pytest.fixture(fn, **kw)\n\n\n"
+        "class C:\n    def fixture(self, n):\n        return pytest.fixture(name=n)\n"
+    ),
+    "an async def inside an async function": (
+        "async def outer():\n    async def fixture(name=None):\n"
+        "        return pytest.fixture(name=name)\n"
+    ),
+}
+TOP_LEVEL = {  # the exemption survives where the `def fixture` still runs at module level
+    "a plain top-level def with **kw": (
+        "def fixture(fn=None, *, name=None, **kw):\n"
+        "    return pytest.fixture(fn, name=name, **kw)\n"
+    ),
+    "a def under an if": "if True:\n" + "".join("    " + ln + "\n" for ln in FACTORY.splitlines()),
+    "a def in a try's else": (
+        "try:\n    pass\nexcept E:\n    pass\nelse:\n"
+        + "".join("    " + ln + "\n" for ln in FACTORY.splitlines())
+    ),
+}
+
+
+@pytest.mark.parametrize("shape", list(NOT_TOP_LEVEL))
+def test_only_the_top_level_def_fixture_is_exempt(shape):
+    with pytest.raises(dt.TestCommitRejected, match="not a string literal"):
+        _registered(ast.parse(PRE + NOT_TOP_LEVEL[shape]))
+
+
+@pytest.mark.parametrize("shape", list(TOP_LEVEL))
+def test_a_def_fixture_that_runs_at_module_level_keeps_the_exemption(shape):
+    _registered(ast.parse(PRE + TOP_LEVEL[shape]))
+
+
 def _helper(body: str) -> dict[str, str]:
     return {
         ABOVE: "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent))\n"
@@ -219,7 +238,7 @@ OTHER = "import pytest\n\n\n@pytest.fixture\ndef other():\n    return 1\n"
 
 @pytest.mark.parametrize("call", ["mk('taken')\n", "mk(make())\n", ""])
 def test_a_wrapper_in_the_base_refuses_every_candidate_end_to_end(repo, call):
-    with pytest.raises(dt.TestCommitRejected):
+    with pytest.raises(dt.TestCommitRejected, match="not a string literal"):
         _check(repo, {CONFTEST: OTHER}, path=CONFTEST, base_files=_helper(WRAP + call))
 
 
