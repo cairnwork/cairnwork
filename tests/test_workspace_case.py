@@ -141,6 +141,27 @@ def test_case_collisions_match_on_either_key():
         assert _case_collisions([one, two]) == [sorted([one, two])]
 
 
+def test_case_collisions_chain_three_names_through_both_keys():
+    # a-b share the NFC key only, b-c share the case fold only: one group of three, either order
+    marks = ["\u0345", "\u0301", "\u0323", "\u0307"]
+    names = {"a" + "".join(order) for order in itertools.permutations(marks)}
+    names |= {n.replace("\u0345", "\u03b9") for n in list(names)}
+    fold = {n: n.casefold() for n in names}
+    triple = next(
+        (a, b, c)
+        for a, b, c in itertools.permutations(sorted(names), 3)
+        if _nfc_key(a) == _nfc_key(b)
+        and fold[a] != fold[b]
+        and fold[b] == fold[c]
+        and _nfc_key(b) != _nfc_key(c)
+        and _nfc_key(a) != _nfc_key(c)
+        and fold[a] != fold[c]
+    )
+    expected = [sorted(triple)]
+    assert _case_collisions(list(triple)) == expected
+    assert _case_collisions(list(reversed(triple))) == expected
+
+
 def test_the_detail_caps_groups_and_lists_every_kind_of_difference():
     groups = [[f"{c}.txt", f"{c.upper()}.txt"] for c in "abcd"]
     differences = [f"extra ::{n}" for n in range(7)]
