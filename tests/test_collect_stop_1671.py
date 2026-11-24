@@ -204,18 +204,19 @@ def test_a_stop_ends_the_group_early_and_is_not_a_timeout(tmp_path):
     assert not timed_out and code == -9 and int(survivors) == 0 and seconds < 60
 
 
-@pytest.mark.parametrize(("reaped", "expected"), [(1, 0), (3, 2), (0, 0)])
-def test_a_main_process_ended_by_a_stop_is_not_a_survivor_but_others_are(
-    tmp_path, reaped, expected
-):
-    out, _ = _sleeper(tmp_path, reap=lambda: reaped, stop=lambda: True)
-    assert int(out[2]) == expected
+@pytest.mark.parametrize(("reaped", "expected"), [(0, 0), (1, 1), (3, 3)])
+def test_the_main_process_is_handed_to_the_reap_not_subtracted_here(tmp_path, reaped, expected):
+    """Review of #1698: confined never subtracts from the reap's number (1 can mean "cannot
+    tell"); it tells the reap which process it ends on purpose and takes the answer as it is."""
+    seen = []
+    out, _ = _sleeper(tmp_path, reap=lambda main=0: seen.append(main) or reaped, stop=lambda: True)
+    assert seen == [1] and int(out[2]) == expected
 
 
 def test_without_a_stop_the_reaped_count_is_unchanged(tmp_path):
     env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: "t" * 32}
     out = confined.execute([sys.executable, "-c", "pass"], tmp_path, env, 60, tmp_path / "log",
-                           reap=lambda: 1, stop=lambda: False)  # fmt: skip
+                           reap=lambda main=0: 1, stop=lambda: False)  # fmt: skip
     assert out[0] == 0 and not out[1] and int(out[2]) == 1
 
 
@@ -281,3 +282,41 @@ def test_the_run_directory_name_is_opaque_and_recovery_still_finds_it():
         assert re.fullmatch(rf"{attempt}-x-v\d{{16}}", name) and "x" in RUN_TAGS
     assert re.fullmatch(r"a[0-9a-f]{16}-x-v\d{16}", verifiers.opaque_clone_id(""))
     assert recovery._RUN_TAGS == RUN_TAGS and proc_cwd.RUN_TAGS == RUN_TAGS
+
+
+# ---- the account's reap: an unknown count is never turned into "nothing escaped" -------------
+
+
+@pytest.mark.parametrize(
+    ("before", "left", "main", "expected"),
+    [
+        (1, 0, 1, 0),
+        (3, 0, 1, 2),
+        (0, 0, 1, 0),
+        (-1, 0, 1, 1),
+        (1, 1, 1, 2),
+        (1, -1, 1, 2),
+        (1, 0, 0, 1),
+    ],
+)
+def test_reap_takes_the_known_main_process_off_only_a_known_count(
+    monkeypatch, before, left, main, expected
+):
+    import cairnwork.verifier_account as va
+
+    account = va.VerifierAccount(user="nobody")
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda *a, **k: before)
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda *a, **k: left)
+    assert account.reap(main) == expected
+
+
+def test_reap_unknown_with_a_running_main_process_stays_a_survivor(monkeypatch):
+    import cairnwork.verifier_account as va
+
+    account = va.VerifierAccount(user="nobody")
+
+    def boom(*a, **k):
+        raise subprocess.SubprocessError("ps")
+
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", boom)
+    assert account.reap(1) >= 1

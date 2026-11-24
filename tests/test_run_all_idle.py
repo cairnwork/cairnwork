@@ -69,7 +69,8 @@ def test_account_requires_idle_before_each_spec_after_first(tmp_path, monkeypatc
 
 def test_leftover_work_directory_is_workspace_error(tmp_path, monkeypatch):
     _stub_run(monkeypatch)
-    work = tmp_path / "run-v0.work"
+    monkeypatch.setattr(verifiers, "opaque_clone_id", lambda attempt_id: "run-x-v0")  # #1698
+    work = tmp_path / "run-x-v0.work"
     work.mkdir()
     with pytest.raises(WorkspaceError, match="leftover work directory"):
         verifiers._run_all(_batch(tmp_path), _specs(1), "run")
@@ -82,6 +83,8 @@ def test_owner_mode_never_requires_idle(tmp_path, monkeypatch):
 
 def test_leftover_work_directory_message_escapes_control_characters(tmp_path, monkeypatch):
     _stub_run(monkeypatch)
+    # the clone id is opaque now (#1698): the control characters come from the stubbed name
+    monkeypatch.setattr(verifiers, "opaque_clone_id", lambda attempt_id: "r\n::error::x-v0")
     (tmp_path / "r\n::error::x-v0.work").mkdir()
     with pytest.raises(WorkspaceError) as caught:
         verifiers._run_all(_batch(tmp_path), _specs(1), "r\n::error::x")

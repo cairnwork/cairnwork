@@ -17,6 +17,7 @@ import re
 import stat
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -95,6 +96,23 @@ def _config():
     return None
 
 
+def _private(phase):
+    # what shows beside HOME: the private directory's names, whether the Core run's mark exists
+    # (a plain stat, which the sandbox allows), and the names of the run root above it
+    try:
+        private = Path(os.environ["HOME"]).parents[1]
+    except Exception as exc:  # noqa: BLE001
+        _put(phase, "private", "ERR " + type(exc).__name__)
+        return
+    _put(phase, "private-evidence-exists", repr((private / ".evidence").exists()))
+    for label, directory in (("private-names", private), ("run-root-names", private.parent)):
+        try:
+            names = sorted({_norm(name) for name in os.listdir(directory)})
+        except Exception as exc:  # noqa: BLE001
+            names = ["ERR " + type(exc).__name__]
+        _put(phase, label, repr(names))
+
+
 def observe(phase, config):
     if config is not None:
         manager = config.pluginmanager
@@ -157,6 +175,7 @@ def observe(phase, config):
     _put(phase, "paths", repr([os.getcwd(), os.path.realpath(os.getcwd()), __file__,
                                os.environ.get("HOME"), os.environ.get("TMPDIR"), sys.path]))
     _put(phase, "threads", repr(sorted(t.name for t in threading.enumerate())))
+    _private(phase)  # the run's private directory sits two levels above HOME (#1698)
     _put(phase, "modules", repr(sorted(n for n in sys.modules if "cairnwork" in n.lower())))
 
 

@@ -16,19 +16,23 @@ from conftest import commit_change
 
 from cairnwork import report_channel, report_guard, verifiers
 from cairnwork.collect_reader import read_collected
+from cairnwork.run_tags import EVIDENCE_MARK
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 from cairnwork.verify_context import VerifyContext
 
 sandbox = pytest.mark.sandbox
 PATH = "tests/test_probe.py"
-QUIET, REAL = ("x-fct0", True), ("x-b", False)
+ATTEMPT = "a0123456789abcdef"
+# a Core-shaped real run (<attempt>-v: it keeps its verify log, so recovery marks its private
+# directory) against the quiet collect run of the same attempt, as in production
+QUIET, REAL = (f"{ATTEMPT}-fct0", True), (f"{ATTEMPT}-v", False)
 
 
 def _pair(repo, tmp_path, files=None, patch=None):
     """(quiet run, real run) of the probe over one commit; ``patch(quiet)`` runs before each."""
     head = commit_change(repo, files or {PATH: PROBE})
-    ctx = VerifyContext(repo, tmp_path / "runs", python=sys.executable)
+    ctx = VerifyContext(repo, tmp_path / "runs", ATTEMPT, python=sys.executable)
     runs = []
     for run_id, quiet in (QUIET, REAL):
         if patch:
@@ -55,6 +59,32 @@ def test_the_quiet_collect_run_and_a_real_run_show_the_code_under_test_the_same_
     assert quiet.returncode == 0 and quiet.recorded and quiet.collection_finished
     assert _differences(quiet, real) == []
     assert read_collected(quiet).ids and not read_collected(quiet).unusable
+
+
+@sandbox
+def test_the_probe_sees_a_mark_beside_home_made_before_the_run(repo, tmp_path, monkeypatch):
+    """Sensitivity control (review of #1698): a mark in the private directory before the child
+    starts, as the Core run once had, shows to the code under test."""
+    current = {"quiet": True}
+    prepare = verifiers._prepare_run
+
+    def marked(private, *args, **kwargs):
+        if not current["quiet"]:
+            (private / EVIDENCE_MARK).touch()
+        return prepare(private, *args, **kwargs)
+
+    monkeypatch.setattr(verifiers, "_prepare_run", marked)
+    quiet, real = _pair(repo, tmp_path, patch=lambda q: current.update(quiet=q))
+    assert read_collected(quiet).ids, quiet.why
+    assert any("private-evidence-exists" in item for item in _differences(quiet, real))
+
+
+@sandbox
+def test_the_core_runs_mark_comes_after_the_child_has_ended(repo, tmp_path):
+    quiet, real = _pair(repo, tmp_path)
+    marks = list((tmp_path / "runs").glob(f"{ATTEMPT}-x-v*.*/{EVIDENCE_MARK}"))
+    assert len(marks) == 1 and real.ran, real.why  # only the Core-shaped run is marked, at its end
+    assert not [p for p in real.collected if "private-evidence-exists=" in p and "True" in p]
 
 
 def _leaky(monkeypatch, code, current):

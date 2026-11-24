@@ -120,7 +120,8 @@ def test_verifier_checkout_is_kept_only_on_an_interrupt(monkeypatch, ctx, end):
     monkeypatch.setattr(verifiers, "_run_one", _raise(end))
     with pytest.raises(type(end)):
         verifiers.run_verifiers(context, head, SPEC, "a1-v")
-    assert (context.run_root / "a1-v-v0.work").exists() is _kept(end)
+    works = list(context.run_root.glob("*.work"))  # #1698: the name is opaque, find it by suffix
+    assert bool(works) is _kept(end) and len(works) <= 1
 
 
 @pytest.mark.parametrize("end", ENDS, ids=type)
@@ -129,7 +130,7 @@ def test_verifier_scratch_is_kept_only_on_an_interrupt(monkeypatch, ctx, end):
     monkeypatch.setattr(verifiers, "_run_one_in", _fill_private_then_raise(end))
     with pytest.raises(type(end)):
         verifiers.run_verifiers(context, head, SPEC, "a1-v")
-    (private,) = [p for p in context.run_root.glob("a1-v-v0.*") if p.suffix != ".work"]
+    (private,) = [p for p in context.run_root.glob("*-x-v*.*") if p.suffix != ".work"]
     assert (private / "run").exists() is _kept(end)
 
 
