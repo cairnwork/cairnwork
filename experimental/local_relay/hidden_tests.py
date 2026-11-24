@@ -52,6 +52,7 @@ def load_hidden(data: dict[str, Any], root: Path) -> HiddenTests | None:
     if not isinstance(raw, str) or not os.path.isabs(raw):
         raise ValueError("fixture hidden_tests_dir must be an absolute path")
     directory = Path(raw)
+    _refuse_symlink_components(directory)
     info = directory.lstat() if directory.exists() or directory.is_symlink() else None
     if info is None or not stat.S_ISDIR(info.st_mode):
         raise ValueError("fixture hidden_tests_dir must be a real directory")
@@ -61,6 +62,17 @@ def load_hidden(data: dict[str, Any], root: Path) -> HiddenTests | None:
     if real == root_real or root_real in real.parents or real in root_real.parents:
         raise ValueError("fixture hidden_tests_dir must be outside the fixture repository")
     return HiddenTests(directory, _collect(directory), python)
+
+
+def _refuse_symlink_components(directory: Path) -> None:
+    """No path component may be a symlink, except root-owned ones (macOS /var, /tmp)."""
+    for part in (*reversed(directory.parents), directory):
+        try:
+            info = part.lstat()
+        except OSError:
+            return  # a missing path is refused with its own message
+        if stat.S_ISLNK(info.st_mode) and info.st_uid != 0:
+            raise ValueError("fixture hidden_tests_dir must not contain symlinks in its path")
 
 
 def _collect(directory: Path) -> tuple[str, ...]:

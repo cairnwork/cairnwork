@@ -165,3 +165,20 @@ def test_runtime_checks_hidden_target_in_private_dir_not_base(tmp_path):
     data["verifiers"] = [["python3", "-m", "pytest", "-q", "tests/test_absent.py"]]
     with pytest.raises(Exception, match="TASK_VERIFIER_TARGET_MISSING"):
         runtime._validate_task(data, repo)
+
+
+def test_symlink_in_a_parent_path_component_is_refused(tmp_path):
+    repo, _base = _repo(tmp_path)
+    parent = tmp_path / "real_parent"
+    parent.mkdir()
+    _hidden_at(parent / "private")
+    (tmp_path / "alias").symlink_to(parent)
+    with pytest.raises(ValueError, match="symlink"):
+        load_hidden({"hidden_tests_dir": str(tmp_path / "alias" / "private")}, repo)
+    assert load_hidden({"hidden_tests_dir": str(parent / "private")}, repo) is not None
+
+
+def _hidden_at(path: Path) -> Path:
+    path.mkdir(mode=0o700)
+    (path / "test_hidden.py").write_text("def test_h():\n    assert False\n")
+    return path
