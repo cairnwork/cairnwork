@@ -30,7 +30,16 @@ HELPERS = (
 )
 
 
-def collect(tmp_path: Path, body: str, *, fail_hook: str = "", extra=(), cap=None, pair_cap=None):
+def collect(
+    tmp_path: Path,
+    body: str,
+    *,
+    fail_hook: str = "",
+    extra=(),
+    collect_files=(),
+    cap=None,
+    pair_cap=None,
+):
     test_file = tmp_path / TARGET
     test_file.parent.mkdir(parents=True, exist_ok=True)
     test_file.write_text(body)
@@ -82,6 +91,7 @@ def collect(tmp_path: Path, body: str, *, fail_hook: str = "", extra=(), cap=Non
             "-p",
             report_guard.MODULE,
             TARGET,
+            *collect_files,
         ],
         cwd=tmp_path,
         env=env,

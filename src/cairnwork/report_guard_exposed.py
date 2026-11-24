@@ -109,17 +109,18 @@ def _exposed_uncollected(session):
                         callable(value) or issubclass(type(value), (staticmethod, classmethod))):
                     continue
                 origin = modules.get(_origin_module(value))
-                node_path = origin if origin is not None else path
-                if node_path is None:
+                node_paths = {candidate for candidate in (path, origin) if candidate is not None}
+                if not node_paths:
                     continue
-                node = f"{node_path}::{owner}::{name}"
-                if node not in collected and node not in result:
-                    result.add(node)
-                    total += len(node)
-                    if len(node) > _EXPOSED_NAME or len(result) > _EXPOSED_COUNT:
-                        return None
-                    if total > _EXPOSED_TOTAL:
-                        return None
+                for node_path in node_paths:
+                    node = f"{node_path}::{owner}::{name}"
+                    if node not in collected and node not in result:
+                        result.add(node)
+                        total += len(node)
+                        if len(node) > _EXPOSED_NAME or len(result) > _EXPOSED_COUNT:
+                            return None
+                        if total > _EXPOSED_TOTAL:
+                            return None
     return sorted(result)
 
 
