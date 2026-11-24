@@ -41,6 +41,16 @@ def _reach(text):
             id="with_call",
         ),
         pytest.param("pytest_plugins.append(f())\n", id="method_call_arg"),
+        pytest.param(
+            "def f():\n    global pytest_plugins\n    from plist import P as pytest_plugins\nf()\n",
+            id="global_function_import",
+        ),
+        pytest.param("def h():\n    import pytest_plugins\n", id="function_import_plain"),
+        pytest.param("class K:\n    from plist import pytest_plugins\n", id="class_import"),
+        pytest.param(
+            "def f():\n    global pytest_plugins\n    import plist as pytest_plugins\n",
+            id="global_function_import_as",
+        ),
         pytest.param("pytest_plugins = list(('safe',))\n", id="builtin_conversion"),
         pytest.param("pytest_plugins = sorted(['safe'])\n", id="builtin_sorted"),
         pytest.param(
@@ -114,8 +124,6 @@ def test_unreadable_binding_is_refused(text):
         "pytest_plugins = ['safe', x]\n",
         "match x:\n    case ['safe'] as pytest_plugins:\n        pass\n",
         "pytest_plugins = PLUGINS\n",
-        "def h():\n    import pytest_plugins\n",
-        "class K:\n    from plist import pytest_plugins\n",
         "import plist\n",
         "from plist import P\n",
     ],

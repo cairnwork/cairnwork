@@ -15,20 +15,14 @@ _NAME = "pytest_plugins"
 
 
 def imported_plugins(tree: ast.Module) -> bool:
-    """An import statement at module level (inside ``if``, ``try`` or ``with`` too, not inside a
-    ``def``, ``class`` or ``lambda``, where the name is local) that binds the name
+    """An import statement anywhere (a ``def``, ``class`` or ``lambda`` body too: ``global
+    pytest_plugins`` makes a function-level import bind the module name) that binds the name
     ``pytest_plugins``: the name taken from a module, or any import renamed to it."""
-    todo: list[ast.AST] = [tree]
-    while todo:
-        node = todo.pop()
-        if isinstance(node, ast.Import | ast.ImportFrom):
-            if any((a.asname or a.name.split(".")[0]) == _NAME for a in node.names):
-                return True
-        elif not isinstance(
-            node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda
-        ):
-            todo += ast.iter_child_nodes(node)
-    return False
+    return any(
+        isinstance(node, ast.Import | ast.ImportFrom)
+        and any((a.asname or a.name.split(".")[0]) == _NAME for a in node.names)
+        for node in ast.walk(tree)
+    )
 
 
 def unreadable(node: ast.AST, values: Sequence[ast.AST | None]) -> bool:
