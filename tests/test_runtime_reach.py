@@ -4,13 +4,14 @@ The record is built by hand, with a real checkout directory so realpath and syml
 Every refusal is TEST_COMMIT_CONFTEST_STATIC; every doubt leaves the existing verdict alone.
 """
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from cairnwork.collected_names import CollectedRecord
 from cairnwork.deferred_overlay import TestCommitRejected
-from cairnwork.runtime_reach import check_runtime_reach
+from cairnwork.runtime_reach import check_runtime_reach, resolve_record
 
 
 @pytest.fixture
@@ -134,3 +135,64 @@ def test_no_record_or_no_root_or_nothing_changed_refuses_nothing(root):
 def test_a_bad_entry_shape_does_not_raise_anything_but_a_refusal(root):
     record = rec(root, plugins=[("p", "\0bad")], sys_path=["\0bad"], finish=[""])
     check_runtime_reach(record, ["plug/helper.py"])
+
+
+# review round 2: resolve while the checkout exists, and compare every prefix, folded
+def _gone(record, root):
+    """The record as the verifier hands it on: resolved once, then the checkout is removed."""
+    record = resolve_record(record, root)
+    shutil.rmtree(root)
+    return record
+
+
+def _links(root):
+    (root / "data" / "real").mkdir(parents=True)
+    (root / "data" / "real.zip").write_bytes(b"")
+    (root / "data" / "link.zip").symlink_to(root / "data" / "real.zip")
+    (root / "data" / "dirlink").symlink_to(root / "data" / "real")
+    (root / "plug" / "real.py").write_text("")
+    (root / "plug" / "alias.py").symlink_to(root / "plug" / "real.py")
+    (root / "plug" / "pkg").mkdir()
+    (root / "plug" / "pkg" / "__init__.py").write_text("")
+    (root / "plug" / "pkglink").symlink_to(root / "plug" / "pkg")
+
+
+def test_a_symlinked_entry_is_matched_after_the_checkout_is_removed(root):
+    _links(root)
+    kinds = {
+        "link": (rec(root, sys_path=[str(root / "data" / "link.zip")]), "data/real.zip"),
+        "plugin": (rec(root, plugins=[("p", str(root / "plug" / "alias.py"))]), "plug/real.py"),
+        "package": (
+            rec(root, plugins=[("p", str(root / "plug" / "pkglink" / "__init__.py"))]),
+            "plug/pkg/__init__.py",
+        ),
+        "dir": (rec(root, finish=[str(root / "data" / "dirlink" / ".." / "real.zip")]),
+                "data/real.zip"),
+    }  # fmt: skip
+    for record, changed in kinds.values():
+        refused(resolve_record(record, root), [changed])
+    record, changed = kinds["link"]
+    gone = _gone(record, root)
+    refused(gone, [changed])
+
+
+@pytest.mark.parametrize(
+    ("entry", "changed"),
+    [
+        ("data/LIB.zip", "data/lib.zip"),
+        ("data/lib.zip/pkg/sub", "data/lib.zip"),
+        ("data/Café.zip", "data/Café.zip"),
+        ("data/lib.zip", "data/Lib.ZIP"),
+    ],
+)
+def test_a_case_unicode_or_inside_variant_of_a_changed_entry_is_refused(root, entry, changed):
+    refused(rec(root, sys_path=[entry]), [changed])
+
+
+def test_a_prefix_that_is_not_a_changed_file_is_not_refused(root):
+    check_runtime_reach(rec(root, sys_path=["data/other.zip/pkg"]), ["data/lib.zip"])
+    check_runtime_reach(rec(root, sys_path=["data/lib.zip2"]), ["data/lib.zip"])
+
+
+def test_a_file_less_plugin_named_after_a_changed_conftest_is_left_to_the_conftest_rules(root):
+    check_runtime_reach(rec(root, plugins=[("sub.conftest", None)]), ["sub/conftest.py"])

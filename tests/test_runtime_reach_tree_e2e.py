@@ -5,6 +5,8 @@ that is not reached at run time; the twin is accepted. Sandbox rows: CAIRNWORK_R
 """
 
 # ruff: noqa: F811  (a pytest fixture is used by its argument name)
+import os
+
 import pytest
 from conftest import commit_change
 from conftest_scenarios import BASE_CONFTEST, project  # noqa: F401  (the fixture)
@@ -119,3 +121,42 @@ def test_a_module_beside_that_plugin_that_is_not_a_plugin_is_accepted(project, t
         extra=("tests/b/test_b.py", "tests/lib/other_mod.py"),
     )  # fmt: skip
     accepted(result)
+
+
+# review round 2: a symlink, a case variant or a path inside the archive reaches the same file
+def _entry(expr):
+    return (
+        "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent / "
+        + expr
+        + "))\n"
+    )
+
+
+REACH = {  # name: (the conftest's path expression, symlinks to make: link -> target)
+    "a symlink": ("'data' / 'link.zip'", (("tests/a/data/link.zip", "lib.zip"),)),
+    "a case variant": ("'data' / 'LIB.zip'", ()),
+    "a path inside the archive": ("'data' / ('lib' + '.zip') / 'pkg'", ()),
+}
+
+
+def _reach_go(project, tmp_path, name, test_files):
+    expr, links = REACH[name]
+    for link, target in links:
+        (project / link).parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(target, project / link)
+    base = {**SIBLING, **ZIPS, "tests/a/conftest.py": _entry(expr), Z: OK}
+    return go(project, tmp_path, base, {**test_files, Z: OK + "# e\n"}, extra=(Z,))
+
+
+@pytest.mark.parametrize("name", REACH)
+def test_an_archive_reached_by_a_symlink_a_case_variant_or_a_path_inside_it_is_refused(
+    project, tmp_path, name
+):
+    refused(_reach_go(project, tmp_path, name, {"tests/a/data/lib.zip": "z2"}))
+
+
+@pytest.mark.parametrize("name", REACH)
+def test_the_same_symlink_case_or_inside_layouts_with_an_archive_off_sys_path_are_accepted(
+    project, tmp_path, name
+):
+    accepted(_reach_go(project, tmp_path, name, {"tests/a/data/other.zip": "o2"}))
