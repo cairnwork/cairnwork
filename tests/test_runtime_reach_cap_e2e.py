@@ -1,7 +1,8 @@
 """#1820 review: many edited base files, and a lone broken tree file, through the real sandbox.
 
 Each refusal row has a twin with the same layout and the same edits whose only difference is a
-file that is not reached at run time; the twin is accepted. Sandbox rows: CAIRNWORK_REQUIRE_SANDBOX=1.
+file that is not reached at run time; the twin is accepted.
+Sandbox rows (CAIRNWORK_REQUIRE_SANDBOX=1).
 """
 
 # ruff: noqa: F811  (a pytest fixture is used by its argument name)
