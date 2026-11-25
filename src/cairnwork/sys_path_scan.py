@@ -238,6 +238,7 @@ def _plain_encoding(data: bytes) -> bool:
 
 def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
+    relative_ok = not any(_names_resolution_attrs(node) for node in nodes)
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     from_modules = set()  # names a ``from`` import binds that are spelled like a module
     runners = Runners()  # unittest's and pytest's entry points as this file names them
@@ -257,7 +258,7 @@ def _uses_import_system(tree: ast.AST) -> bool:
             from_modules.update(
                 alias.asname or alias.name for alias in node.names if alias.name.islower()
             )
-            if _imports_held(node.module, names, node.level):  # ``from logging import sys``
+            if _imports_held(node.module, names, node.level, relative_ok):  # ``from logging ...``
                 return True
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):
@@ -335,10 +336,27 @@ def _held(node: ast.Attribute, roots: set[str]) -> bool:
     return _named(base, roots)
 
 
-def _imports_held(module: str | None, names: list[str], level: int = 0) -> bool:
+_RESOLUTION_WORDS = ("__package__", "__spec__")
+
+
+def _names_resolution_attrs(node: ast.AST) -> bool:
+    """Whether any text field of node (a name, attribute, alias, argument, pattern capture or
+    string constant) holds __package__ or __spec__. Such a file can repoint a relative import at
+    the standard library (``__package__ = "unittest"``), so its relative imports are scanned as
+    absolute ones (#1807). Comments are not in the tree and do not count."""
+    for value in ast.iter_fields(node):
+        for text in value[1] if isinstance(value[1], list) else [value[1]]:
+            if isinstance(text, str) and any(word in text for word in _RESOLUTION_WORDS):
+                return True
+    return False
+
+
+def _imports_held(
+    module: str | None, names: list[str], level: int = 0, relative_ok: bool = False
+) -> bool:
     """Whether ``from module import names`` takes sys, os or an IMPORT_MODULES module, or a
-    DYNAMIC name, from another module (a relative module is never os, and is not compared with
-    IMPORT_MODULES: ``from .types import x`` names the package's own module, #1807)."""
+    DYNAMIC name, from another module (a relative module is never os; when relative_ok it is not
+    compared with IMPORT_MODULES either: ``from .types import x`` is the package's own, #1807)."""
     for name in names:
         bare = name.lstrip("_")
         if bare in HELD - {"sys", "os", "posix", "nt"} or name in DYNAMIC_NAMES | DYNAMIC_ATTRS:
@@ -347,7 +365,7 @@ def _imports_held(module: str | None, names: list[str], level: int = 0) -> bool:
             return True
         if bare in {"sys", "os", "posix", "nt"} and (level or module not in _OS_MODULES):
             return True  # ``from logging import sys``, ``from random import _os``
-        if module and not level and _is_import_module(f"{module}.{name}"):
+        if module and not (level and relative_ok) and _is_import_module(f"{module}.{name}"):
             return True  # a relative module is a package sibling, not the stdlib module (#1807)
     return False
 
