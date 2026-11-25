@@ -16,10 +16,11 @@ value, held as a field, tested bare in an ``if`` whose body only calls ``append`
 put in an f-string that is an argument of such a logging call; a bare call argument is refused
 because the callee could be len, bool or re.match. An alias of the ``denied`` attribute is
 tracked through assignment, tuple, walrus and loop targets (#1797) and refused as a keyword value;
-an attribute store (``self.x = ev.denied``) marks its base name (``self``); also followed: ``async for``, ``with``/``async with`` targets,
-``except ... as``, ``match`` captures, ``f(*d)``, and ``.eperm_paths`` (the same dict as ``.denied``,
-readable only in the files of EPERM_READERS). Not followed: a class attribute, a function return,
-``map``/``partial`` positional hand-off, a default argument, ``vars()``/``__dict__``.
+an attribute store (``self.x = ev.denied``) marks its base name (``self``). Also followed:
+``async for``, ``with``/``async with`` targets, ``except ... as``, ``match`` captures, ``f(*d)``,
+and ``.eperm_paths`` (the same dict as ``.denied``, readable only in the files of EPERM_READERS).
+Not followed: a class attribute, a function return, ``map``/``partial`` positional hand-off, a
+default argument, ``vars()``/``__dict__``.
 """
 
 import ast
