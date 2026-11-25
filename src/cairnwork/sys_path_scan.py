@@ -28,7 +28,8 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   (``m.__dict__``, ``pkgutil.resolve_name``, ``discover``), or calls monkeypatch's string-target
   ``setattr``/``delattr``, or uses unittest's ``main``/``TestProgram`` other than in a call with a
   string module, or pytest's ``main`` at all (``sys_path_runners``), or
-- imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule,
+- imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule (a
+  relative import is exempt only where ``relative_import_scope`` proves it the package's own),
   takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
   a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
   class pattern, or any ``from`` import of one), uses an imported module but through its
@@ -69,7 +70,7 @@ from cairnwork.sys_path_names import (
     IMPORT_MODULES,
     PATH_WORDS,
     SAFE_SYS,
-    names_resolution_attrs,
+    RelativeTarget,
 )
 from cairnwork.sys_path_runners import RUNNERS, Runners
 
@@ -205,12 +206,13 @@ def _mentions(data: bytes) -> bool:
     return _scan_blob(data) is not False
 
 
-def scan_sys_path_blob(data: bytes) -> bool | None:
-    """Return a signal, or None when encoding/parsing prevents a trustworthy scan."""
-    return _scan_blob(data)
+def scan_sys_path_blob(data: bytes, relative_target: RelativeTarget = None) -> bool | None:
+    """Return a signal, or None when encoding/parsing prevents a trustworthy scan. A relative
+    import is the package's own module only when relative_target(level, module) says so."""
+    return _scan_blob(data, relative_target)
 
 
-def _scan_blob(data: bytes) -> bool | None:
+def _scan_blob(data: bytes, relative_target: RelativeTarget = None) -> bool | None:
     """Scan one source blob; None distinguishes unreadable input from a detected signal."""
     if any(word in data for word in _WORDS):
         return True
@@ -224,7 +226,7 @@ def _scan_blob(data: bytes) -> bool | None:
             tree = ast.parse(data)
     except (SyntaxError, ValueError, RecursionError, MemoryError):
         return None  # callers fail closed when changed input cannot be parsed
-    return _uses_import_system(tree)
+    return _uses_import_system(tree, relative_target)
 
 
 def _plain_encoding(data: bytes) -> bool:
@@ -237,9 +239,8 @@ def _plain_encoding(data: bytes) -> bool:
         return False
 
 
-def _uses_import_system(tree: ast.AST) -> bool:
+def _uses_import_system(tree: ast.AST, relative_target: RelativeTarget = None) -> bool:
     nodes = list(ast.walk(tree))
-    relative_ok = not any(names_resolution_attrs(node) for node in nodes)
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     from_modules = set()  # names a ``from`` import binds that are spelled like a module
     runners = Runners()  # unittest's and pytest's entry points as this file names them
@@ -259,7 +260,8 @@ def _uses_import_system(tree: ast.AST) -> bool:
             from_modules.update(
                 alias.asname or alias.name for alias in node.names if alias.name.islower()
             )
-            if _imports_held(node.module, names, node.level, relative_ok):  # ``from logging ...``
+            own = bool(node.module and relative_target and relative_target(node.level, node.module))
+            if _imports_held(node.module, names, node.level, own):  # ``from logging ...``
                 return True
             if node.level == 0 and node.module == "sys":
                 if any(name not in SAFE_SYS for name in names):

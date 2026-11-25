@@ -56,8 +56,9 @@ from cairnwork.candidate_statements import (
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.gitcmd import GitCommandError
+from cairnwork.relative_import_scope import RelativeScope
 from cairnwork.sys_path_names import DYNAMIC_ATTRS, DYNAMIC_NAMES
-from cairnwork.sys_path_scan import scan_sys_path_blob
+from cairnwork.sys_path_scan import RelativeTarget, scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
@@ -176,9 +177,12 @@ def refuse_new_sys_path_mutation(
         shadowed = _same_name_modules(e.path for e in changes.entries) | _rebound_elsewhere(
             repo, candidate, [e.path for e in changes.entries if e.change_type in _OWN_KINDS]
         )
+        scope = RelativeScope(
+            repo, candidate, [e.path for e in changes.entries if e.change_type in _OWN_KINDS]
+        )
         for path in changed:
             signal = path.endswith(".py") and _blob_signal(
-                repo, base, candidate, path, changed, shadowed
+                repo, base, candidate, path, changed, shadowed, scope.resolver(path)
             )
             if signal:  # a base signal is no exemption: it may be a comment next to a redirect
                 if signal == _MACHINERY:  # an in-process swap needs no file (#303 SWAP, finders)
@@ -248,12 +252,13 @@ def _blob_signal(
     path: str,
     changed: dict[str, str],
     shadowed: frozenset[str] = frozenset(),
+    relative_target: RelativeTarget = None,
 ) -> str:
     """Read and scan one committed blob: "" (none), _REDIRECT (a path or program launch, which
     needs a shadow file) or _MACHINERY (an added or removed statement reaches machinery).
     Unreadable or unparseable candidate source fails closed."""
     data = read_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}")
-    signal = scan_sys_path_blob(data)
+    signal = scan_sys_path_blob(data, relative_target)
     if signal is None:
         raise ValueError(f"{commit}:{path} could not be parsed or decoded")
     added = changed[path] == "ADD"

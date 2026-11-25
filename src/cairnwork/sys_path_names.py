@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
 # Ways Python code can put a directory on sys.path, or start Python with another sys.path.
 PATH_WORDS = (
@@ -95,6 +96,7 @@ HELD_IF_IMPORTED = frozenset(
 )  # fmt: skip
 
 
+RelativeTarget = Callable[[int, str], bool] | None  # is this relative import the package's own
 _RESOLUTION_WORDS = ("__package__", "__spec__", "__name__")
 
 
