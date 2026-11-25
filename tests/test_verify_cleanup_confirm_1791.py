@@ -2,6 +2,7 @@
 gone; otherwise the marker stays so a later run tries again, and the attempt is reported as kept."""
 
 import os
+import shutil
 
 import pytest
 
@@ -43,6 +44,45 @@ def test_the_kept_attempt_is_cleaned_by_a_later_run_once_it_can_go(tmp_path):
     os.chmod(inner, 0o700)
     assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
     assert not marker.exists() and not scratch.exists()
+
+
+def _kept_with_parent_mode(tmp_path, mode):
+    marker, scratch, _ = _orphan(tmp_path, stuck=False)
+    parent = scratch.parent
+    os.chmod(parent, mode)  # the scratch path cannot be looked at: not seen is not gone
+    try:
+        out = module.cleanup(Intake(tmp_path))
+        assert out["cleaned"] == []
+        assert out["kept"] == [AID]
+        assert marker.exists()
+    finally:
+        os.chmod(parent, 0o700)
+    assert scratch.exists()
+
+
+def test_a_scratch_that_cannot_be_examined_is_kept(tmp_path):
+    _kept_with_parent_mode(tmp_path, 0o600)
+
+
+def test_a_scratch_whose_parent_allows_nothing_is_kept(tmp_path):
+    _kept_with_parent_mode(tmp_path, 0o000)
+
+
+def test_a_dangling_symlink_at_the_scratch_path_is_kept(tmp_path):
+    marker, scratch, _ = _orphan(tmp_path, stuck=False)
+    shutil.rmtree(scratch)
+    scratch.symlink_to(tmp_path / "nowhere")
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == []
+    assert out["kept"] == [AID]
+    assert marker.exists() and scratch.is_symlink()
+
+
+def test_a_scratch_that_is_absent_is_cleaned(tmp_path):
+    marker, scratch, _ = _orphan(tmp_path, stuck=False)
+    shutil.rmtree(scratch)
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert not marker.exists()
 
 
 def test_a_scratch_that_goes_is_cleaned_and_its_marker_removed(tmp_path):
