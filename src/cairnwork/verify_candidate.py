@@ -32,7 +32,7 @@ from typing import Any
 from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
-from cairnwork.confined import ATTEMPT_ENV, sweep_marked
+from cairnwork.confined import ATTEMPT_ENV, confirm_gone, sweep_marked
 from cairnwork.deferred_store import USED_DIR, consume
 from cairnwork.deferred_tests import (
     OVERLAY_RULE,
@@ -49,7 +49,7 @@ from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import TaskRejected, TaskResult, TaskSpec, tests_with_teeth
 from cairnwork.pipeline_judge import judge_candidate
-from cairnwork.recovery import _remove_leftovers
+from cairnwork.recovery import _remove_leftovers, path_absent
 from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_before_clone,
@@ -363,16 +363,9 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
         os.close(fd)
 
 
-def _absent(path: Path) -> bool:
-    try:
-        os.lstat(path)
-    except OSError as exc:  # only "no such file" is gone; any other error: still there
-        return isinstance(exc, (FileNotFoundError, NotADirectoryError))
-    return False
-
-
 def cleanup(intake: Intake) -> dict[str, Any]:
-    """Remove what dead runs left behind; a marker goes only once its scratch is known gone."""
+    """Remove what dead runs left behind. A marker goes, and the attempt counts as cleaned, only
+    once its processes are shown gone, its scratch is gone and the marker is removed."""
     markers = intake.state / "verify-runs"
     out: dict[str, list[str]] = {"cleaned": []}
     for marker in sorted(markers.iterdir()) if markers.is_dir() else []:
@@ -387,12 +380,17 @@ def cleanup(intake: Intake) -> dict[str, Any]:
             _gap()
             if not _same_file(fd, marker):
                 continue  # replaced by a run that started meanwhile
-            sweep_marked(ATTEMPT_ENV, marker.name)
+            look = partial(sweep_marked, ATTEMPT_ENV, marker.name)
+            swept = confirm_gone(look(), look)
             _remove_leftovers(intake.run_root, marker.name)
             shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
-            if gone := _absent(work):  # not known gone: keep the marker, a later run retries
-                marker.unlink(missing_ok=True)
-            out.setdefault("cleaned" if gone else "kept", []).append(marker.name)
+            done = swept.gone and path_absent(work)  # not confirmed: keep the marker, retry later
+            if done:
+                try:
+                    marker.unlink(missing_ok=True)
+                except OSError:
+                    done = False  # a marker that stays is retried, it must not abort the run
+            out.setdefault("cleaned" if done else "kept", []).append(marker.name)
         except BlockingIOError:
             pass  # alive: it holds the lock
         finally:

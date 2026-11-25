@@ -67,7 +67,8 @@ def main(argv: list[str] | None = None) -> int:
         return _emit({"error": exc.code, "detail": exc.detail}, 2)
     try:
         if args.command == "cleanup":
-            return _emit(cleanup(intake), 0)
+            report = cleanup(intake)
+            return _emit(report, 1 if report.get("kept") else 0)  # 1: something was kept
         if args.command == "migrate-notary":  # the only path that upgrades a notary (#343)
             return _emit(_migrate(intake), 0)
         if args.command == "import-tests":

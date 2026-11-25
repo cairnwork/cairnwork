@@ -312,6 +312,16 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
                 pass  # a leftover directory is disk space, not a wrong status
 
 
+def path_absent(path: Path) -> bool:
+    """True only when lstat says nothing is there (no such file, or a parent that is not a
+    directory: nothing can exist below it). Any other error is "cannot see", never "gone"."""
+    try:
+        os.lstat(path)
+    except OSError as exc:
+        return isinstance(exc, (FileNotFoundError, NotADirectoryError))
+    return False
+
+
 def _unlink(path: Path) -> None:
     try:
         path.unlink(missing_ok=True)
