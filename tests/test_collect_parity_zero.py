@@ -14,6 +14,7 @@ from conftest import commit_change
 from test_collect_parity_files import _case
 
 from cairnwork.collect_parity import _counted, _dirs, _ignored, _may_have_tests, _shown
+from cairnwork.verifier_spec import VerifierRejected, parse_verifier
 
 EMPTY_HOOK = (
     "import pytest\n"
@@ -213,16 +214,9 @@ def test_a_hook_that_empties_a_module_with_tests_is_refused(repo, tmp_path):
     assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
 
 
-@pytest.mark.sandbox
-def test_a_hidden_root_test_file_is_refused(repo, tmp_path):
-    result = _case(repo, tmp_path, EMPTY_HOOK, {"test_hidden.py": TESTS["function"]})
-    assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
-
-
-@pytest.mark.sandbox
-def test_a_plain_root_test_file_is_not_refused(repo, tmp_path):
-    result = _case(repo, tmp_path, "", {"test_plain.py": TESTS["function"]})
-    assert result.status == "COMPLETED" and result.verified, result.reason
+def test_a_root_test_file_cannot_be_a_check_target_so_no_run_reads_it():
+    with pytest.raises(VerifierRejected):
+        parse_verifier("pytest", ["python3", "-m", "pytest", "-q", "test_calc.py::test_mul"])
 
 
 HIDDEN = {
