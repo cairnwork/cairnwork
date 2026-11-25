@@ -42,6 +42,12 @@ class Verdict:
     data_refused: tuple[str, ...] = ()  # #850: declared data the data-exec hook refused to run
     uncollected_exposed: tuple[str, ...] | None = None
 
+    @property
+    def eperm_paths(self) -> dict[str, str]:
+        """#1781: the report plugin's EPERM paths (node -> path), for the failure wording only.
+        Not deny-channel evidence, so it never goes through ``Evidence.denial_of`` (#995)."""
+        return self.denied
+
     def not_run(self, targets) -> tuple[str, ...]:
         """The named ``targets`` (``path`` or ``path::node``) that own no recorded test, then the
         collectors skipped while collecting: a run that leaves any of them is not a pass, whatever

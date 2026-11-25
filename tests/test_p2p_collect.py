@@ -98,6 +98,7 @@ def test_an_unreadable_collect_run_is_uncomparable(monkeypatch, tmp_path):
     task: Any = SimpleNamespace(repo=Path("/r"), base_commit="b" * 40, test_commit="c" * 40)
     log = tmp_path / "run" / "log"
     log.parent.mkdir()
+    monkeypatch.setattr(p2p_collect, "file_parity", lambda *a: None)  # #1768: tested on its own
     monkeypatch.setattr(p2p_collect, "_present", lambda task, files: files)
     monkeypatch.setattr(
         p2p_collect, "run_verifiers", lambda *a, **k: [SimpleNamespace(log_path=str(log))]
@@ -120,6 +121,7 @@ def test_a_base_test_in_a_file_that_failed_to_collect_is_refused_not_removed(mon
     task: Any = SimpleNamespace(repo=Path("/r"), base_commit="b" * 40, test_commit="c" * 40)
     files: Any = {kind: ("tests/test_calc.py",)}
     got = Collected(ids=(), exposed=(), **files)
+    monkeypatch.setattr(p2p_collect, "file_parity", lambda *a: None)  # #1768: tested on its own
     monkeypatch.setattr(p2p_collect, "_present", lambda task, files: files)
     monkeypatch.setattr(p2p_collect, "_collect", lambda *a: got)
     with pytest.raises(TestCommitRejected) as caught:

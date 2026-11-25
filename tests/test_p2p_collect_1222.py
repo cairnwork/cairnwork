@@ -144,6 +144,7 @@ def test_collected_side_keeps_present_literal_path_and_detects_deleted_control(
         return Collected(ids=tuple(f"{path}::test_case" for path in files), exposed=())
 
     monkeypatch.setattr(p2p_collect, "_collect", collect)
+    monkeypatch.setattr(p2p_collect, "file_parity", lambda *a: None)  # #1768: tested on its own
     monkeypatch.setattr(p2p_collect, "changed_tests", lambda *args: set())
     task = SimpleNamespace(repo=Path(repo), base_commit=base_commit, test_commit=test_commit)
     base_ids = {f"{present}::test_case", "deleted_test.py::test_case"}
