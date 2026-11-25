@@ -155,15 +155,17 @@ STATIC_REFUSED = SHAPES["#984 a helper bound through globals()"]
 
 @pytest.fixture
 def spy(monkeypatch):
-    """What ``collect`` returned for the run (a one-item list)."""
+    """The names the base run recorded (a one-item list; None when none were obtained)."""
     seen: list = []
-    real = base_fixture_names.collect
+    real = base_fixture_names._probe
 
-    def collect(*args, **kwargs):
-        seen.append(real(*args, **kwargs))
-        return seen[-1]
+    def probe(*args, **kwargs):
+        result = real(*args, **kwargs)
+        run = result[0]
+        seen.append(None if run is None else run.fixture_names)
+        return result
 
-    monkeypatch.setattr(base_fixture_names, "collect", collect)
+    monkeypatch.setattr(base_fixture_names, "_probe", probe)
     return seen
 
 
