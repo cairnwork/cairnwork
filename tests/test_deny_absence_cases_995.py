@@ -176,3 +176,29 @@ def test_the_stale_check_passes_when_every_entry_is_used(tmp_path):
     _write(tmp_path, "cairnwork/verifier_exec.py", "from cairnwork import deny_channel\n")
     names = {"deny_evidence": {"cairnwork/verifiers.py"}}
     assert stale(tmp_path, names, {"cairnwork/verifier_exec.py"}) == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "if run.deny_evidence:\n    logs.append('x')\n    ok = False\n",
+        "if run.deny_evidence:\n    logs.append('x')\n    return\n",
+    ],
+)
+def test_an_if_body_that_does_more_than_log_is_refused(tmp_path, code):
+    _write(tmp_path, "cairnwork/pipeline_judge.py", code)
+    assert scan(tmp_path), code
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "x = Foo(k=run.deny_evidence) == 1\n",
+        "x = Foo(k=run.deny_evidence).value\n",
+        "x = Foo(k=run.deny_evidence)[0]\n",
+        "x = bool(Foo(k=run.deny_evidence))\n",
+    ],
+)
+def test_a_builder_result_that_is_read_on_is_refused(tmp_path, code):
+    _write(tmp_path, "cairnwork/verifiers.py", code)
+    assert scan(tmp_path), code
