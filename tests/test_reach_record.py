@@ -319,5 +319,6 @@ def test_the_base_file_list_is_read_with_the_option_terminator(task, monkeypatch
     seen = []
     real = bfn.run_git_bytes
     monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: seen.append(a) or real(*a))
-    assert "tests/test_a.py" in bfn._base_paths(task)
+    paths = bfn._base_paths(task)
+    assert paths is not None and "tests/test_a.py" in paths
     assert seen[0][-2:] == (task.base_commit, "--")
