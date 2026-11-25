@@ -9,6 +9,7 @@ listing cannot see that (#1279 review). A deleted link is not counted (``exclude
 
 from __future__ import annotations
 
+from cairnwork.collect_parity import nested_naming
 from cairnwork.gitcmd import run_git_bytes
 
 SYMLINK_MODE = b"120000"
@@ -21,9 +22,11 @@ def _reaches_root(path: str, roots: tuple[str, ...]) -> bool:
     return any(low == r or low.startswith(f"{r}/") or r.startswith(f"{low}/") for r in roots)
 
 
-def base_tree(task, exclude=frozenset()) -> tuple[bytes, list[str]]:
+def base_tree(task, exclude=frozenset(), strict=False) -> tuple[bytes, list[str]]:
     """The base's tracked names (NUL-joined) and its symlink entries at, above or under the test
     roots, not counting the deleted ones."""
+    if strict:  # #1768: a config below the root that sets the naming keys
+        nested_naming(task)
     raw = run_git_bytes(task.repo, "ls-tree", "-r", "-z", task.base_commit, "--")
     roots = tuple(root.casefold() for root in task.test_roots)
     names, links = [], []

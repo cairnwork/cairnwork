@@ -95,7 +95,7 @@ def _base_tests(task, exclude: frozenset[str], strict=True) -> tuple[str, ...]:
     """Base test files under the roots that are plain targets and match python_files (#956)."""
     try:
         target, is_test = test_target(task.test_roots), test_file_rule(task.repo, task.base_commit)
-        raw, links = base_tree(task, exclude)  # #1000: a symlink under a root is doubt
+        raw, links = base_tree(task, exclude, strict)  # #1000: a symlink under a root is doubt
         paths = [p for p in under_roots(raw, task.test_roots) if p not in exclude and is_test(p)]
         odd = [p for p in paths if not target.fullmatch(p)] + links  # #930, #997: no exemption
     except (GitCommandError, PytestConfigError) as exc:
