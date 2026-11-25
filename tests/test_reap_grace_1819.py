@@ -1,0 +1,102 @@
+"""#1819 grace: a short-lived process (the collector's own exit, a one-line child) must not refuse
+a harmless change, while anything still there when the grace ends is refused as before.
+
+Seams: ``_escaped_count`` (counts in order), ``_kill_until_clean``, a fake clock on ``va.time``.
+"""
+
+from pathlib import Path
+
+import cairnwork.verifier_account as va
+import cairnwork.verifier_seen as vs
+
+LISTING = (("python R 00.01 ppid=9/-",), ("account-escaped",))
+
+
+def _world(monkeypatch, counts, kill_left=0):
+    """Counts are handed out in order (the last one repeats). Returns (acct, log, clock)."""
+    log, clock = [], {"now": 0.0}
+    seq = list(counts)
+
+    def count(self, deadline=None, attempts=1):
+        log.append("count")
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    def kill(self, attempts, deadline):
+        log.append("kill")
+        return kill_left
+
+    def sleep(seconds):
+        log.append("sleep")
+        clock["now"] += seconds
+
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", count)
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", kill)
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout: LISTING)
+    monkeypatch.setattr(va.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(va.time, "sleep", sleep)
+    return va.VerifierAccount(user="x", root=Path("/tmp/none")), log, clock
+
+
+def test_the_grace_is_a_named_cap_of_two_seconds_in_quarter_second_steps():
+    assert va.GRACE_SECONDS == 2.0 and va.GRACE_INTERVAL == 0.25
+
+
+def test_a_child_gone_inside_the_grace_counts_zero(monkeypatch):
+    acct, _, _ = _world(monkeypatch, [2, 1])  # main + a short-lived child, then only main
+    assert acct.reap(1) == 0
+
+
+def test_a_process_alive_past_the_grace_is_refused_with_its_listing(monkeypatch):
+    acct, _, clock = _world(monkeypatch, [2])
+    got = acct.reap(1)
+    assert got == 1 and got.argv == LISTING[0] and "account-escaped" in got.reasons
+    assert clock["now"] <= va.GRACE_SECONDS + 1e-9  # the cap is spent, not exceeded
+
+
+def test_a_relay_of_changing_processes_is_refused(monkeypatch):
+    acct, _, _ = _world(monkeypatch, [2, 3, 2, 3, 2, 3, 2, 3, 2, 3])  # never "nothing there"
+    assert acct.reap(1) >= 1
+
+
+def test_a_daemon_still_present_when_the_grace_ends_is_refused(monkeypatch):
+    acct, _, _ = _world(monkeypatch, [4, 3, 2])  # detached daemon never leaves, main excluded
+    assert acct.reap(1) >= 1
+
+
+def test_the_default_path_takes_no_grace_and_no_extra_count(monkeypatch):
+    acct, log, clock = _world(monkeypatch, [1])
+    assert acct.reap(1) == 0
+    assert log == ["count", "kill"] and clock["now"] == 0.0
+
+
+def test_nothing_counted_takes_no_grace(monkeypatch):
+    acct, log, _ = _world(monkeypatch, [0])
+    assert acct.reap() == 0 and log == ["count", "kill"]
+
+
+def test_an_unknown_count_is_refused_without_spending_the_grace(monkeypatch):
+    acct, log, clock = _world(monkeypatch, [-1])
+    assert acct.reap(1) == 1 and "sleep" not in log and clock["now"] == 0.0
+
+
+def test_the_grace_is_spent_before_the_last_kill(monkeypatch):
+    """Everything a short-lived process did is read after the last kill: the kill must come after
+    the grace, so swapping the order turns this red."""
+    acct, log, _ = _world(monkeypatch, [2, 1])
+    acct.reap(1)
+    assert log.index("kill") > max(i for i, e in enumerate(log) if e == "sleep")
+    assert log[-1] == "kill"
+
+
+def test_a_kill_that_leaves_something_still_refuses_after_a_clean_grace(monkeypatch):
+    acct, _, _ = _world(monkeypatch, [2, 1], kill_left=1)
+    assert acct.reap(1) >= 1
+
+
+def test_main_gone_with_one_resident_left_is_refused_with_its_listing(monkeypatch):
+    """pre-existing hole: ``main`` is a plain number. If the main run already exited and one
+    resident process remains, count - main must not read as zero."""
+    acct, _, _ = _world(monkeypatch, [1])
+    monkeypatch.setattr(va.VerifierAccount, "_pid_alive", lambda self, pid: False, raising=False)
+    got = acct.reap(1, main_pid=4242)
+    assert got == 1 and got.argv == LISTING[0]
