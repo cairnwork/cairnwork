@@ -8,7 +8,7 @@ from typing import Any
 from cairnwork.deferred_tests import OVERLAY_RULE
 from cairnwork.gitcmd import run_git
 from cairnwork.notary_verify import binding_extras
-from cairnwork.workspace import WorkspaceError, remove_attempt_clone
+from cairnwork.workspace import WorkspaceError
 
 
 def binding_of(task, head: str, test_files: tuple[str, ...], judged: str, plan) -> dict[str, Any]:
@@ -23,8 +23,9 @@ def binding_of(task, head: str, test_files: tuple[str, ...], judged: str, plan) 
     }  # fmt: skip
 
 
-def remove_clone(run_root, result) -> None:
+def remove_clone(remover, run_root, result) -> None:
+    """remover is workspace.remove_attempt_clone, passed in by the caller (tests patch it there)."""
     try:
-        remove_attempt_clone(run_root, result.attempt_id)
+        remover(run_root, result.attempt_id)
     except WorkspaceError as exc:  # keep the run's own outcome; note the leftover
         result.logs.append(f"cleanup failed: {exc}")

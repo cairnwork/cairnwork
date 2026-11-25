@@ -66,6 +66,7 @@ from cairnwork.workspace import (
     WorkspaceError,
     check_candidate_commit,
     create_attempt_clone,
+    remove_attempt_clone,
     unless_interrupted,
 )
 
@@ -283,7 +284,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
     run_root = ctx.run_root
     check_before_clone(task, candidate, verifier_interpreter(ctx))  # base roots, then #488
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
-    with unless_interrupted(partial(remove_clone, run_root, result)):
+    with unless_interrupted(partial(remove_clone, remove_attempt_clone, run_root, result)):
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
         check_candidate_commit(
             task.repo, attempt, candidate, task.allowed_files, python=verifier_interpreter(ctx)
