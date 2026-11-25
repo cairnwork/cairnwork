@@ -15,19 +15,22 @@ early return before it), and base machinery reached through aliases, registries 
 not hot; broader lexical matching raised hot statements in real signalling files, so these are
 left to the blackbox and verifier checks.
 Exact names (#1779): vars, globals, locals, exec, eval, compile, breakpoint, marshal and pickle
-count only as a bare name, an import of that name, a string that is the word or a dotted path
-with the word as one segment (prose, log lines and docstrings are not hits), or an
-attribute reached from a receiver that is not a plain chain of names or that mentions builtins
-(or a same-file alias of it). A longer identifier (``evaluate``, ``compiled``) or ``re.compile`` is
-not a hit; the receiver of ``.compile`` is still rebindable, which only the later checks see.
+are matched as whole words, not as substrings. An identifier (name, attribute, def, argument,
+import name) is split into snake_case and camelCase words and hits when any word is one of them
+(``subprocess_exec``, ``compile_command``); ``evaluate``, ``executor`` and ``compiled`` do not. An
+attribute with such a word hits whatever its receiver is, except the fixed pairs in ``_SAFE_ATTRS``
+(``re.compile``) when the file imports the module plainly, never rebinds that name, and the change
+adds no module of that name. A string hits when a component split on ``.``, ``:`` and ``/`` is
+one of the words. Every other word keeps the substring match.
 """
 
 from __future__ import annotations
 
 import ast
 import copy
+import re
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 
 _BLOCKS = ("body", "orelse", "finalbody", "handlers", "cases")
@@ -40,25 +43,31 @@ _EXACT = frozenset(
 )
 
 
+# Attribute reads that stay honest on a plain ``import <module>`` (#1779); widening needs numbers.
+_SAFE_ATTRS = {"re": "compile", "regex": "compile"}
+_WORD_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
+
+
 @dataclass(frozen=True)
 class _Words:
-    """A word table split into substring words and exact-name words, plus the file's aliases."""
+    """A word table split into substring words and whole-word words, plus the names that may
+    read one safe attribute in this file (name -> attribute)."""
 
     sub: tuple[bytes, ...]
-    exact: tuple[str, ...]
-    aliases: frozenset[str]
+    exact: frozenset[str]
+    safe: Mapping[str, str]
 
     @classmethod
-    def make(cls, words: tuple[bytes, ...], aliases: frozenset[str]) -> _Words:
+    def make(cls, words: tuple[bytes, ...], safe: Mapping[str, str]) -> _Words:
         names = [word.decode() for word in words]
         return cls(
             tuple(w for w, n in zip(words, names, strict=True) if n not in _EXACT),
-            tuple(n for n in names if n in _EXACT),
-            aliases,
+            frozenset(n for n in names if n in _EXACT),
+            safe,
         )
 
     def without(self, *dropped: bytes) -> _Words:
-        return _Words(tuple(w for w in self.sub if w not in dropped), self.exact, self.aliases)
+        return _Words(tuple(w for w in self.sub if w not in dropped), self.exact, self.safe)
 
 
 def machinery_changed(
@@ -67,13 +76,19 @@ def machinery_changed(
     words: tuple[bytes, ...],
     reach: tuple[bytes, ...],
     denylist: frozenset[str],
+    shadowed: frozenset[str] = frozenset(),
 ) -> bool:
     """True when an added or removed statement is hot. ``old`` None means the file is new; an
-    unparseable base trusts nothing. Raises ValueError when ``new`` cannot be parsed."""
-    after = _hot_statements(new, words, reach, denylist)
+    unparseable base trusts nothing. ``shadowed`` names the safe-attribute modules the change set
+    adds a file for. Raises ValueError when ``new`` cannot be parsed."""
+    after = _hot_statements(new, words, reach, denylist, shadowed)
     if after is None:
         raise ValueError("candidate source could not be parsed")
-    before = (Counter(), set()) if old is None else _hot_statements(old, words, reach, denylist)
+    before = (
+        (Counter(), set())
+        if old is None
+        else _hot_statements(old, words, reach, denylist, shadowed)
+    )
     if before is None:  # nothing in an unparseable base is trusted
         before = (Counter(), set())
     added = after[0] - before[0]
@@ -82,15 +97,19 @@ def machinery_changed(
 
 
 def _hot_statements(
-    data: bytes, words: tuple[bytes, ...], reach: tuple[bytes, ...], denylist: frozenset[str]
+    data: bytes,
+    words: tuple[bytes, ...],
+    reach: tuple[bytes, ...],
+    denylist: frozenset[str],
+    shadowed: frozenset[str],
 ) -> tuple[Counter[Key], set[Key]] | None:
     try:
         tree = ast.parse(data)
-        aliases = _builtins_aliases(tree)
-        hot_names = _hot_defs(tree, _Words.make(reach, aliases))
+        safe = _safe_roots(tree, shadowed)
+        hot_names = _hot_defs(tree, _Words.make(reach, safe))
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", _Words.make(words, aliases), hot_names, denylist, found, hot)
+        _visit(list(tree.body), "", _Words.make(words, safe), hot_names, denylist, found, hot)
     except _PARSE_ERRORS:
         return None
     return found, hot
@@ -244,109 +263,66 @@ def _has_word(text: str, words: tuple[bytes, ...]) -> bool:
 
 
 def _hit(node: ast.AST, words: _Words) -> bool:
-    """Substring words match the unparsed text as before; exact-name words match by AST form."""
+    """Substring words match the unparsed text as before; whole-word words match by AST form."""
     if _has_word(ast.unparse(node), words.sub):
         return True
     for sub in ast.walk(node):
-        if isinstance(sub, ast.Name) and sub.id in words.exact:
-            return True
-        if isinstance(sub, ast.Constant) and isinstance(sub.value, (str, bytes)):
-            if _names_word(_as_text(sub.value), words.exact):
+        if isinstance(sub, ast.Constant):
+            if isinstance(sub.value, (str, bytes)) and _string_hit(sub.value, words.exact):
                 return True
-        if isinstance(sub, (ast.Import, ast.ImportFrom)):
-            names = [a.name for a in sub.names] + [a.asname or "" for a in sub.names]
-            if any(
-                w in n for n in (*names, getattr(sub, "module", None) or "") for w in words.exact
-            ):
+        elif isinstance(sub, ast.Attribute):
+            if _word_hit(sub.attr, words.exact) and not _safe_read(sub, words.safe):
                 return True
-        if isinstance(sub, ast.Attribute) and sub.attr in words.exact:
-            if _reaches_builtins(sub.value, words.aliases):
-                return True
-    return False
-
-
-def _names_word(text: str, exact: tuple[str, ...]) -> bool:
-    """A string names a word only as a whole (``"exec"``) or as one segment of a dotted path
-    (``"builtins.exec"``); prose, log lines and docstrings that merely contain it do not."""
-    parts = text.strip().split(".")
-    return all(p.isidentifier() for p in parts) and any(p in exact for p in parts)
-
-
-def _as_text(value: str | bytes) -> str:
-    return value if isinstance(value, str) else value.decode("latin-1")
-
-
-def _reaches_builtins(receiver: ast.AST, aliases: frozenset[str]) -> bool:
-    """A receiver is trusted only as a plain chain of names that never mentions builtins or an
-    alias of it; a call, subscript or literal in front of the attribute could return anything."""
-    for part in ast.walk(receiver):
-        if isinstance(part, ast.Name):
-            ident = part.id
-        elif isinstance(part, ast.Attribute):
-            ident = part.attr
-        elif isinstance(part, ast.expr_context):
-            continue
-        else:
-            return True
-        if "builtins" in ident or ident in aliases:
+        elif any(_word_hit(name, words.exact) for name in _identifiers(sub)):
             return True
     return False
 
 
-def _mentions_builtins(node: ast.AST, aliases: set[str]) -> bool:
-    for part in ast.walk(node):
-        if isinstance(part, ast.Name):
-            ident = part.id
-        elif isinstance(part, ast.Attribute):
-            ident = part.attr
-        elif isinstance(part, ast.Constant) and isinstance(part.value, str):
-            ident = part.value
-        else:
-            continue
-        if "builtins" in ident or ident in aliases:
-            return True
-    return False
+def _word_hit(identifier: str, exact: frozenset[str]) -> bool:
+    return any(word.lower() in exact for word in _WORD_RE.findall(identifier))
 
 
-def _bindings(tree: ast.Module) -> Iterator[tuple[list[ast.AST], ast.AST | None]]:
-    """(targets, value) pairs for every form that binds a name from an expression."""
+def _string_hit(value: str | bytes, exact: frozenset[str]) -> bool:
+    """A string hits when a component split on ``. : /`` is a word (``"exec"``, ``"a.pickle"``,
+    ``"marshal:loads"``, ``"x/exec"``, ``"pickle."``); prose, log lines and docstrings do not."""
+    text = value if isinstance(value, str) else value.decode("latin-1")
+    return any(part.strip() in exact for part in re.split(r"[.:/]", text))
+
+
+def _identifiers(node: ast.AST) -> Iterator[str]:
+    """Identifiers a node introduces or reads, besides attribute names."""
+    if isinstance(node, ast.Name):
+        yield node.id
+    elif isinstance(node, ast.ImportFrom):
+        yield from (node.module or "").split(".")
+        yield from _bound_identifiers(node)
+    elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+        yield node.name
+    else:
+        yield from _bound_identifiers(node)
+
+
+def _safe_read(node: ast.Attribute, safe: Mapping[str, str]) -> bool:
+    return isinstance(node.value, ast.Name) and safe.get(node.value.id) == node.attr
+
+
+def _safe_roots(tree: ast.Module, shadowed: frozenset[str]) -> dict[str, str]:
+    """Names bound only by a plain ``import re`` / ``import regex`` (alias allowed) that nothing in
+    the file rebinds, mapped to the one attribute they may read; empty after a star import."""
+    bound: dict[str, str] = {}
+    other: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Assign):
-            yield list(node.targets), node.value
-        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
-            yield [node.target], node.value
-        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
-            yield [node.target], node.iter
-        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-            yield [node.optional_vars], node.context_expr
-        elif isinstance(node, ast.arguments):
-            args = [*node.posonlyargs, *node.args]
-            pairs = zip(args[len(args) - len(node.defaults) :], node.defaults, strict=True)
-            kw = ((a, d) for a, d in zip(node.kwonlyargs, node.kw_defaults, strict=True) if d)
-            for arg, default in (*pairs, *kw):
-                yield [arg], default
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+        if isinstance(node, ast.Import):
             for alias in node.names:
-                src = f"{getattr(node, 'module', None) or ''}.{alias.name}"
-                yield [ast.Name(alias.asname or alias.name.split(".")[0])], ast.Constant(src)
-
-
-def _builtins_aliases(tree: ast.Module) -> frozenset[str]:
-    """Names bound anywhere in the file to a value that mentions builtins, or to another alias."""
-    pairs = list(_bindings(tree))
-    aliases: set[str] = set()
-    grew = True
-    while grew:
-        before = len(aliases)
-        for targets, value in pairs:
-            if value is not None and _mentions_builtins(value, aliases):
-                for target in targets:
-                    for part in ast.walk(target):
-                        if isinstance(part, ast.Name):
-                            aliases.add(part.id)
-                        elif isinstance(part, ast.Attribute):
-                            aliases.add(part.attr)
-                        elif isinstance(part, ast.arg):
-                            aliases.add(part.arg)
-        grew = len(aliases) > before
-    return frozenset(aliases)
+                if alias.name in _SAFE_ATTRS and alias.name not in shadowed:
+                    bound[alias.asname or alias.name] = _SAFE_ATTRS[alias.name]
+                else:
+                    other.update(alias.name.split("."))
+                    other.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            return {}
+        else:
+            other.update(_bound_identifiers(node))
+            if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+                other.add(node.id)
+    return {name: attr for name, attr in bound.items() if name not in other}

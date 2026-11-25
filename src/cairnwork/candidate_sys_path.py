@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 
 from cairnwork.candidate_alias import (
@@ -46,6 +47,7 @@ from cairnwork.candidate_alias import (
     runtime_shadow_added,
 )
 from cairnwork.candidate_shadow import find_shadow_file
+from cairnwork.candidate_statements import _SAFE_ATTRS as _SAFE_MODULES
 from cairnwork.candidate_statements import machinery_changed
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.git_read_cap import read_git_bytes
@@ -66,14 +68,19 @@ _REACH_WORDS = tuple(
         "sys.modules", "meta_path", "path_hooks", "path_importer_cache", "importlib", "runpy",
         "pytest_plugins", "__import__", "getmembers", "getattr_static",
         "marshal", "pickle", "FunctionType", "CodeType", "copyreg",
+        "pickler", "Pickler", "unpickl", "jsonpickle",
     )
 )  # fmt: skip
-# Names that embed a word candidate_statements matches by exact name (#1779) but are machinery.
+# Names that embed a word candidate_statements matches by whole word (#1779) in a way the word
+# split misses (one lowercase run) but are machinery: exec launchers, decoders, compile helpers,
+# remote gateways, C-compiler factories.
 _EMBEDDED_WORDS = tuple(
     word.encode()
     for word in (
         "os.exec", "execv", "execl", "py_compile", "compileall", "breakpointhook", "_pickle",
         "cloudpickle", "read_pickle", "allow_pickle", "executable",
+        "codeop", "InteractiveInterpreter", "InteractiveConsole", "execnet", "makegateway",
+        "ccompiler", "CCompiler", "new_compiler",
     )
 )  # fmt: skip
 _MACHINERY_WORDS = (
@@ -161,8 +168,11 @@ def refuse_new_sys_path_mutation(
             for e in changes.entries
             if e.change_type in _OWN_KINDS and e.path in own
         }
+        shadowed = _same_name_modules(e.path for e in changes.entries)
         for path in changed:
-            signal = path.endswith(".py") and _blob_signal(repo, base, candidate, path, changed)
+            signal = path.endswith(".py") and _blob_signal(
+                repo, base, candidate, path, changed, shadowed
+            )
             if signal:  # a base signal is no exemption: it may be a comment next to a redirect
                 if signal == _MACHINERY:  # an in-process swap needs no file (#303 SWAP, finders)
                     raise CandidateRejected(
@@ -197,7 +207,24 @@ def refuse_new_sys_path_mutation(
         raise CandidateRejected("UNREADABLE_CHANGE", detail) from exc
 
 
-def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[str, str]) -> str:
+def _same_name_modules(paths: Iterable[str]) -> frozenset[str]:
+    """Safe-attribute modules (``re``, ``regex``) the change set adds a file or package for."""
+    return frozenset(
+        part.removesuffix(".py")
+        for path in paths
+        for part in path.split("/")
+        if part.removesuffix(".py") in _SAFE_MODULES
+    )
+
+
+def _blob_signal(
+    repo: Path,
+    base: str,
+    commit: str,
+    path: str,
+    changed: dict[str, str],
+    shadowed: frozenset[str] = frozenset(),
+) -> str:
     """Read and scan one committed blob: "" (none), _REDIRECT (a path or program launch, which
     needs a shadow file) or _MACHINERY (an added or removed statement reaches machinery).
     Unreadable or unparseable candidate source fails closed."""
@@ -217,7 +244,9 @@ def _blob_signal(repo: Path, base: str, commit: str, path: str, changed: dict[st
         return _MACHINERY
     if not signal:  # a frozen file stays frozen even when the candidate text loses its signal
         return _RUNTIME if frozen_search_path_change(old, data) else ""
-    if machinery_changed(old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST):
+    if machinery_changed(
+        old, data, _MACHINERY_WORDS, _REACH_WORDS, DYNAMIC_ACCESS_DENYLIST, shadowed
+    ):
         return _MACHINERY
     if runtime_shadow_added(old, data):
         return _RUNTIME
