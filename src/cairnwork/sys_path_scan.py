@@ -337,7 +337,8 @@ def _held(node: ast.Attribute, roots: set[str]) -> bool:
 
 def _imports_held(module: str | None, names: list[str], level: int = 0) -> bool:
     """Whether ``from module import names`` takes sys, os or an IMPORT_MODULES module, or a
-    DYNAMIC name, from another module (a relative module is never os)."""
+    DYNAMIC name, from another module (a relative module is never os, and is not compared with
+    IMPORT_MODULES: ``from .types import x`` names the package's own module, #1807)."""
     for name in names:
         bare = name.lstrip("_")
         if bare in HELD - {"sys", "os", "posix", "nt"} or name in DYNAMIC_NAMES | DYNAMIC_ATTRS:
@@ -346,8 +347,8 @@ def _imports_held(module: str | None, names: list[str], level: int = 0) -> bool:
             return True
         if bare in {"sys", "os", "posix", "nt"} and (level or module not in _OS_MODULES):
             return True  # ``from logging import sys``, ``from random import _os``
-        if module and _is_import_module(f"{module}.{name}"):
-            return True
+        if module and not level and _is_import_module(f"{module}.{name}"):
+            return True  # a relative module is a package sibling, not the stdlib module (#1807)
     return False
 
 

@@ -63,8 +63,6 @@ PASS = [
     "from ..types import type_ok",
     "from .types import type_ok as ok",
     "from .types.sub import thing",
-    "from . import types",  # empty module part: a sibling module, pinned as accepted
-    "from . import types as t",
 ]
 
 
@@ -87,6 +85,16 @@ BLOCK = [
 
 @pytest.mark.parametrize("line", BLOCK)
 def test_relative_import_that_brings_in_a_held_name_stays_refused(tmp_path, line):
+    base, new = _pair(line)
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+# Decision (#1807): with an empty module part the imported name alone is checked, and a name such
+# as ``types`` is held when it arrives through a from-import (HELD_IF_IMPORTED): the scan cannot
+# tell a sibling module from an object of that name. This Issue does not touch that rule, so it
+# stays refused; the fix covers the module part of ``from .types import x`` only.
+@pytest.mark.parametrize("line", ["from . import types", "from . import types as t"])
+def test_from_dot_import_of_a_held_if_imported_name_stays_refused(tmp_path, line):
     base, new = _pair(line)
     assert _verdict(tmp_path, base, new) == REFUSED
 
