@@ -69,6 +69,7 @@ from cairnwork.sys_path_names import (
     IMPORT_MODULES,
     PATH_WORDS,
     SAFE_SYS,
+    names_resolution_attrs,
 )
 from cairnwork.sys_path_runners import RUNNERS, Runners
 
@@ -238,7 +239,7 @@ def _plain_encoding(data: bytes) -> bool:
 
 def _uses_import_system(tree: ast.AST) -> bool:
     nodes = list(ast.walk(tree))
-    relative_ok = not any(_names_resolution_attrs(node) for node in nodes)
+    relative_ok = not any(names_resolution_attrs(node) for node in nodes)
     sys_names, os_names, modules, roots = {"sys"}, set(_OS_MODULES), set(), set()
     from_modules = set()  # names a ``from`` import binds that are spelled like a module
     runners = Runners()  # unittest's and pytest's entry points as this file names them
@@ -334,21 +335,6 @@ def _held(node: ast.Attribute, roots: set[str]) -> bool:
     while isinstance(base, ast.Attribute):
         base = base.value
     return _named(base, roots)
-
-
-_RESOLUTION_WORDS = ("__package__", "__spec__")
-
-
-def _names_resolution_attrs(node: ast.AST) -> bool:
-    """Whether any text field of node (a name, attribute, alias, argument, pattern capture or
-    string constant) holds __package__ or __spec__. Such a file can repoint a relative import at
-    the standard library (``__package__ = "unittest"``), so its relative imports are scanned as
-    absolute ones (#1807). Comments are not in the tree and do not count."""
-    for value in ast.iter_fields(node):
-        for text in value[1] if isinstance(value[1], list) else [value[1]]:
-            if isinstance(text, str) and any(word in text for word in _RESOLUTION_WORDS):
-                return True
-    return False
 
 
 def _imports_held(

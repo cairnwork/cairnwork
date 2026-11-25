@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import ast
+
 # Ways Python code can put a directory on sys.path, or start Python with another sys.path.
 PATH_WORDS = (
     "sys.path",  # also sys.path_hooks, sys.path_importer_cache
@@ -91,3 +93,22 @@ HELD_IF_IMPORTED = frozenset(
      "bootstrap", "bootstrap_external", "process", "context", "reduction", "reducer", "config",
      "mock", "sh", "macholib", "dyld", "dylib", "framework"}
 )  # fmt: skip
+
+
+_RESOLUTION_WORDS = ("__package__", "__spec__", "__name__")
+
+
+def names_resolution_attrs(node: ast.AST) -> bool:
+    """Whether any text field of node (a name, attribute, alias, argument, pattern capture or
+    string constant) holds __package__, __spec__ or __name__. Such a file can repoint a relative
+    import at the standard library (``__package__ = "unittest"``; run as a script, the parent
+    comes from ``__name__``), so its relative imports are scanned as absolute ones (#1807). A plain
+    read of ``__name__`` and comments do not count."""
+    read = isinstance(node, ast.Name) and node.id == "__name__" and isinstance(node.ctx, ast.Load)
+    for value in ast.iter_fields(node):
+        for text in value[1] if isinstance(value[1], list) else [value[1]]:
+            if isinstance(text, str) and any(
+                word in text for word in _RESOLUTION_WORDS if not (read and word == "__name__")
+            ):
+                return True
+    return False
