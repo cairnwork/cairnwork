@@ -1,5 +1,5 @@
-"""#1814 (follow-ups of #1812's review): the Linux sweep reads the mount table as bytes, so a mount
-path that is not valid UTF-8 cannot crash it (unknown stays "restricted", never "ours"), and the
+"""#1814 (follow-ups of #1812's review): the Linux sweep decodes the mount table with errors=replace, so a
+mount path that is not valid UTF-8 cannot crash it (unknown stays "restricted", never "ours"), and the
 DISPATCHED mark is read in the one spelling the journal writes (``<boot id> <repr(float)>``), as
 the start mark of #1802. Fake mountinfo and a fake /proc only."""
 
@@ -55,7 +55,7 @@ CANONICAL = ["10000.0", "0.5", "12345.678901", "1.0", "9999999999.123456"]
 LOOSE = [
     "+10000.0", "-10000.0", "1e4", "1.0e4", "1E4", "1_0000.0", "10_000.5", "10000", "10000.",
     ".5", "007.5", "٣٢.٥", "10000.0\n", " 10000.0", "10000.0 ", "10000.0\t", "1 0.0",
-    "nan", "inf", "-inf", "1e400", "0x10.0", "",
+    "nan", "inf", "-inf", "1e400", "0x10.0", "", "9" * 400 + ".0",
 ]  # fmt: skip
 
 
@@ -75,3 +75,15 @@ def test_every_other_spelling_is_refused_so_the_strict_rule_holds(tmp_path, linu
     proc = _fake_proc(tmp_path / "proc", rows=[(41, 1.0)])
     assert proc_start._dispatched(f"{BOOT} {at}", proc) is None
     assert proc_start.not_older([41], f"{BOOT} {at}", 0.0, proc) == [41]  # still counted
+
+
+@pytest.mark.parametrize("seconds", [0.5, 1.0, 123.456, 86400.25, 3.0e6 + 0.125])
+def test_what_boot_mark_writes_matches_the_canonical_spelling(
+    tmp_path, linux, monkeypatch, seconds
+):
+    proc = _fake_proc(tmp_path / "proc")
+    monkeypatch.setattr(proc_start.time, "CLOCK_BOOTTIME", 7, raising=False)
+    monkeypatch.setattr(proc_start.time, "clock_gettime", lambda _clock: seconds)
+    mark = proc_start.boot_mark(proc)
+    assert mark.startswith(f"{BOOT} ")
+    assert proc_start._dispatched(mark, proc) == seconds
