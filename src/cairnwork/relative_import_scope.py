@@ -2,7 +2,7 @@
 
 ``from .types import x`` in ``pkg/validator.py`` is the sibling ``pkg/types.py``, not the stdlib
 ``types``, so the scan does not compare it with ``IMPORT_MODULES``. That holds only when the
-judged trees prove it, by tree resolution alone (no file is read, only ``git ls-tree``):
+judged trees prove it (``git ls-tree``, plus a read of the chain's ``__init__.py`` files):
 
 - from the importing file's directory up to the top-level package, every directory has a tracked
   regular ``__init__.py`` (mode 100644/100755, no symlink) in BOTH the base and the candidate
@@ -10,7 +10,10 @@ judged trees prove it, by tree resolution alone (no file is read, only ``git ls-
 - ``level`` stays inside the top-level package; each step of the module path but the last is a
   package, and the last is a regular ``.py`` file or a package, in the candidate tree;
 - the top-level package is not named like a standard-library module and is not one of
-  ``candidate_shadow._ALWAYS_SHADOW`` (``pytest``, ``_pytest``, ``pluggy``, ``conftest``, ``py``).
+  ``candidate_shadow._ALWAYS_SHADOW`` (``pytest``, ``_pytest``, ``pluggy``, ``conftest``, ``py``);
+- no ``__init__.py`` of the chain (either tree) can rewrite the package search path
+  (``__path__``, ``extend_path``, ``setattr``/``globals()`` writes; unreadable or unparseable
+  counts as yes), since a moved path loads a module from elsewhere.
 
 If either tree cannot be listed nothing resolves: the old rule applies. Anything else keeps the
 module part compared with ``IMPORT_MODULES``.
@@ -28,6 +31,7 @@ installed in the target environment.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import pkgutil
 import sys
@@ -42,6 +46,34 @@ from cairnwork.sys_path_names import IMPORT_MODULES
 
 _REGULAR = ("100644", "100755")
 _BARRED = {n.casefold() for n in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
+
+
+_MOVERS = {
+    "__path__", "extend_path", "submodule_search_locations", "__dict__", "__spec__", "setattr",
+    "globals", "vars", "exec", "eval", "__import__",
+}  # fmt: skip
+
+
+def _moves_search_path(data: bytes) -> bool:
+    """Whether an ``__init__.py`` can rewrite its package's search path: it names ``__path__``,
+    ``extend_path``, ``__spec__``, ``__dict__`` or a name-built write (``setattr``, ``globals``,
+    ``vars``, ``exec``, ``eval``, ``__import__``), as a name, attribute, import or string value.
+    A docstring or comment does not count; a file that cannot be parsed does."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return True
+    docs = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id in _MOVERS:
+            return True
+        if isinstance(node, ast.alias) and node.name.split(".")[-1] in _MOVERS:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in _MOVERS:
+            return True
+        if isinstance(node, ast.Constant) and node.value in _MOVERS and id(node) not in docs:
+            return True
+    return False
 
 
 @cache
@@ -67,10 +99,24 @@ class RelativeScope:
     def __init__(self, repo: Path, base: str, candidate: str) -> None:
         self._repo, self._base, self._candidate = repo, base, candidate
         self._trees: tuple[set[str], set[str]] | None = None  # tracked regular files
+        self._moves: dict[str, bool] = {}
 
     def resolver(self, path: str) -> Callable[[int, str], bool]:
         """The check the scan calls for each relative import (level, module) of file ``path``."""
         return lambda level, module: self._resolves(path, level, module)
+
+    def _init_moves(self, init: str) -> bool:
+        """Whether either version of the chain's ``init`` can rewrite the search path (unreadable:
+        yes). Read through ``git show`` with the capped reader, one file per chain step."""
+        if init not in self._moves:
+            try:
+                self._moves[init] = any(
+                    _moves_search_path(read_git_bytes(self._repo, "show", f"{commit}:{init}"))
+                    for commit in (self._base, self._candidate)
+                )
+            except (GitCommandError, OSError, ValueError):
+                self._moves[init] = True
+        return self._moves[init]
 
     def _files(self) -> tuple[set[str], set[str]]:
         if self._trees is None:
@@ -102,6 +148,9 @@ class RelativeScope:
             return False  # no package here
         if dirs[top].casefold() in _BARRED:
             return False
+        chain = ("/".join([*dirs[:i], "__init__.py"]) for i in range(top + 1, len(dirs) + 1))
+        if any(self._init_moves(init) for init in chain):
+            return False  # an __init__ can move the search path: not provably the sibling
         start = len(dirs) - (level - 1)
         if start <= top:
             return False  # level climbs out of the top-level package
