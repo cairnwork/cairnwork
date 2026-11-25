@@ -18,6 +18,7 @@ FILES = {
     "tests/sib/test_s.py": "",
     "tests/data/lib.zip": "z",
     "tests/lib/helper_mod.py": "",
+    "tests/test_sig.py": "import sys\nsys.path.insert(0, 'x')\n",
 }
 TREE = ("tests/sib/test_s.py", "tests/test_a.py")
 
@@ -125,11 +126,19 @@ def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, 
     assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py"), ("tests/test_a.py",)]
 
 
-def test_a_record_without_the_changed_file_is_incomplete_and_refuses(task, monkeypatch):
-    """Fail closed (review, round 1): the rerun without the edited file saw nothing of it."""
+def test_a_dropped_file_with_no_path_signal_is_accepted_as_the_old_head_did(task, monkeypatch):
+    """Layer1 ruling 2: a broken base test that touches no sys.path or plugin is not a refusal."""
+    runs = Runs(monkeypatch, [None, _record(task)])
+    check(task, ("tests/sib/test_s.py",))
+    assert len(runs.targets) == 2
+
+
+@pytest.mark.parametrize("dropped", ["tests/test_sig.py", "tests/gone.py"])
+def test_a_dropped_file_with_a_path_signal_or_no_base_text_is_refused(task, monkeypatch, dropped):
+    """Fail closed: the rerun saw nothing of a file that may add to sys.path, or cannot be read."""
     Runs(monkeypatch, [None, _record(task)])
     with pytest.raises(TestCommitRejected) as caught:
-        check(task, ("tests/sib/test_s.py",))
+        check(task, (dropped,))
     assert caught.value.code == CODE
 
 
@@ -139,14 +148,32 @@ def test_a_failed_run_with_no_changed_py_file_is_not_repeated(task, monkeypatch)
     assert len(runs.targets) == 1
 
 
-def test_a_base_with_more_files_than_the_cap_is_incomplete_and_refuses(task, monkeypatch):
-    """Fail closed: one tree file is not the base's tree."""
+def test_a_base_over_the_cap_runs_one_test_file_per_conftest_directory(task, monkeypatch):
+    """Layer1 ruling 2 (d): every base conftest is loaded; no mass refusal of a big repo."""
     monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
     runs = Runs(monkeypatch, [_record(task)])
-    with pytest.raises(TestCommitRejected) as caught:
-        check(task, ("tests/lib/helper_mod.py",))
-    assert caught.value.code == CODE
+    check(task, ("tests/lib/helper_mod.py",))
     assert runs.targets == [("tests/lib/helper_mod.py", "tests/sib/test_s.py")]
+
+
+def test_a_base_over_the_cap_still_refuses_a_changed_archive_a_conftest_puts_on_sys_path(
+    task, monkeypatch
+):
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
+    Runs(monkeypatch, [_record(task, sys_path=("tests/data/lib.zip",))])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/lib/helper_mod.py", "tests/data/lib.zip"))
+    assert caught.value.code == CODE
+
+
+def test_a_base_over_the_cap_with_no_conftest_directory_target_is_incomplete_and_refuses(
+    task, monkeypatch
+):
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
+    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: ())
+    Runs(monkeypatch, [_record(task)])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/lib/helper_mod.py",))
 
 
 def test_an_unreadable_tree_is_incomplete_and_refuses(task, monkeypatch):

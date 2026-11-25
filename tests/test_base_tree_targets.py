@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork import base_fixture_names as bfn
-from cairnwork.base_tree_targets import base_tree_targets
+from cairnwork.base_tree_targets import base_tree_targets, conftest_dir_targets
 
 FILES = {
     "tests/conftest.py": "",
@@ -171,3 +171,19 @@ def test_a_failing_log_handler_does_not_change_the_names(task, monkeypatch):
     monkeypatch.setattr(bfn.LOG, "handlers", [Boom()])
     monkeypatch.setattr(bfn.LOG, "log", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     assert bfn.collect(CTX, task, PATHS, "r") == frozenset({"n"})
+
+
+def test_conftest_dir_targets_name_one_test_file_under_each_conftest_directory(tmp_path):
+    files = {
+        "tests/conftest.py": "",
+        "tests/test_a.py": "",
+        "tests/sib/conftest.py": "",
+        "tests/sib/test_s.py": "",
+        "tests/sib/deep/test_d.py": "",
+        "tests/quiet/test_q.py": "",
+        "tests/empty/conftest.py": "",
+    }
+    task = _repo(tmp_path, files)
+    got = conftest_dir_targets(task.repo, task.base_commit, ("tests",))
+    assert got == ("tests/sib/deep/test_d.py",)  # sib/deep is the least file under sib and tests
+    assert conftest_dir_targets(task.repo, "no-such-commit", ("tests",)) is None
