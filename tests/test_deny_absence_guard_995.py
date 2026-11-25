@@ -16,7 +16,8 @@ value, held as a field, tested bare in an ``if`` whose body only calls ``append`
 put in an f-string that is an argument of such a logging call; a bare call argument is refused
 because the callee could be len, bool or re.match. An alias of the ``denied`` attribute is
 tracked through assignment, tuple, walrus and loop targets (#1797) and refused as a keyword value;
-not followed: a class attribute, a function return, an attribute store (``self.x = ev.denied``).
+an attribute store (``self.x = ev.denied``) marks its base name (``self``); not followed: a class
+attribute, a function return.
 """
 
 import ast
@@ -187,12 +188,17 @@ def _denied_aliases(tree):
     while True:
         before = len(found)
         for n in ast.walk(tree):
-            if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr) and n.value is not None:
+            if (
+                isinstance(n, ast.Assign | ast.AnnAssign | ast.AugAssign | ast.NamedExpr)
+                and n.value is not None
+            ):
                 pairs = [
                     (t, n.value) for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
                 ]
             elif isinstance(n, ast.For | ast.comprehension):
                 pairs = [(n.target, n.iter)]
+            elif isinstance(n, ast.withitem) and n.optional_vars is not None:
+                pairs = [(n.optional_vars, n.context_expr)]
             else:
                 continue
             for target, value in pairs:
@@ -340,6 +346,10 @@ MUST_BLOCK = [  # #1797: an alias of the deny-evidence attribute read as a keywo
     "d = ev.denied\nf(x=[d])",  # inside a container value
     "d = ev.denied\ne = (d,)\nf(x=e)",
     "d = ev.denied\nf(**{'x': d})",  # splatted into keywords
+    "d = {}\nd |= ev.denied\nf(x=d)",  # augmented assignment
+    "d = []\nd += [ev.denied]\nf(x=d[0])",
+    "with hold(ev.denied) as d:\n    f(x=d)",  # a with target
+    "e = d\nd = ev.denied\nf(x=e)",  # the alias is written before its source
 ]
 MUST_PASS = [  # today's legal shapes: no alias, or never a keyword value
     "f(ev.denial_of('open', '/x'))",
@@ -348,6 +358,10 @@ MUST_PASS = [  # today's legal shapes: no alias, or never a keyword value
     "f(denied=3)",  # a keyword that is merely named denied
     "x = 1\nd = ev.denied\ny = x\nf(k=y)",  # y never came from the attribute
     "a, b = ev.denied, 1\nf(x=b)",  # the other half of a tuple pair
+    "d = 0\nd += 1\nf(x=d)",  # an augmented assignment of something else
+    "f(denied=other)",
+    "f(x=v.setup_denied)",
+    "f(x=ev.denial_of('open', p))",
 ]
 
 
@@ -359,3 +373,12 @@ def test_an_alias_of_denied_read_as_a_keyword_value_is_found():
 def test_the_legal_shapes_stay_unflagged():
     wrongly = [s for s in MUST_PASS if _flags(s)]
     assert wrongly == []
+
+
+def test_an_augmented_or_with_alias_is_found():
+    for source in MUST_BLOCK[14:17]:
+        assert _flags(source), source
+
+
+def test_an_alias_bound_before_its_source_is_found():
+    assert _flags(MUST_BLOCK[17])
