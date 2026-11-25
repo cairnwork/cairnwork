@@ -142,7 +142,9 @@ SRC_BASE = {
     ),
     "src/miniscema/__init__.py": "",
     "src/miniscema/types.py": "def type_name(v):\n    return type(v).__name__\n",
-    "src/miniscema/validator.py": "from .types import type_ok, type_name\n\n\ndef check(v):\n    pass",
+    "src/miniscema/validator.py": (
+        "from .types import type_ok, type_name\n\n\ndef check(v):\n    pass"
+    ),
     "src/miniscema/report.py": "from .validator import v\n",
 }
 
