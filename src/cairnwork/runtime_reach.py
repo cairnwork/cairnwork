@@ -41,9 +41,11 @@ def check_runtime_reach(
     added: Iterable[str] = (),
     base_paths: Iterable[str] | None = None,
 ) -> None:
-    """Refuse when the record names a changed base file. ``added`` are the paths the test commit
-    adds: only a ``sys.path`` entry may match one (an entry the base named but did not have, which
-    the commit now supplies), or a ``.py`` file below a loaded plugin package. ``base_paths`` is
+    """Refuse when the record names a changed or added base file. ``changed_on_base`` and ``added``
+    are the paths the test commit changes in the base and adds. A ``sys.path`` entry matches either
+    (an added one is an entry the base named but did not have); so does a plugin file, a plugin
+    known only by its dotted name (``a/b.py``, ``a/b/__init__.py``, a bytecode file as its source,
+    any ``.py`` below that package) and any ``.py`` below a loaded plugin package. ``base_paths`` is
     every file the base has: a name that differs from a changed file only by case is the same file
     unless the base holds the exact spelling (None: unknown, so the folded match stands)."""
     changed, added = frozenset(changed_on_base), frozenset(added)
@@ -211,7 +213,7 @@ def _named(name: str, paths: Iterable[str], exact: frozenset[str] | None = None)
         return None
     tail = "/".join(name.split("."))
     sources: dict[str, str] = {}
-    for path in sorted(paths):
+    for path in sorted(paths, key=lambda p: (_source_of(p) != p, p)):  # a source file first
         sources.setdefault(_source_of(path), path)
     for want in (f"{tail}.py", f"{tail}/__init__.py"):
         for path, original in sources.items():

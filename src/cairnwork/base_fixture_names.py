@@ -99,6 +99,8 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
         for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
             if tag == "r2" and not edited:
                 break
+            if tag == "r" and len(edited) > MAX_TARGETS:
+                continue  # the run cannot name them all: drop them and read their text instead
             left = tuple(p for p in tree if p not in dropped)
             picked = pick_dir_targets(left, dirs) or ()
             base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]

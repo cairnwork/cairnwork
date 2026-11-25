@@ -350,10 +350,11 @@ def test_the_rerun_drops_every_changed_py_file_whatever_their_number(task, monke
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
     monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
     monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    runs = Runs(monkeypatch, [None, _record(task)])
+    first = [None] if count <= bfn.MAX_TARGETS else []  # over the cap the first run is skipped
+    runs = Runs(monkeypatch, [*first, _record(task)])
     check(task, changed)
-    assert not set(changed) & set(runs.targets[1])
-    assert "tests/test_a.py" in runs.targets[1]
+    assert not set(changed) & set(runs.targets[-1])
+    assert "tests/test_a.py" in runs.targets[-1]
 
 
 # #1809: a file the commit deletes is a changed base file for the reach check
@@ -382,3 +383,17 @@ def test_deleting_only_a_conftest_makes_no_run(task, monkeypatch):
     runs = Runs(monkeypatch, [_record(task)])
     check(task, (), deleted=("tests/sib/conftest.py",))
     assert runs.targets == []
+
+
+def test_more_changed_py_files_than_the_run_can_name_are_not_taken_as_covered(task, monkeypatch):
+    """The first run names only MAX_TARGETS of them; it must not stand as a full record."""
+    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(bfn.MAX_TARGETS + 1))
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
+    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
+    quiet = []
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: quiet.append(a) or False)
+    Runs(monkeypatch, [_record(task), _record(task)])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, changed)
+    assert caught.value.code == CODE
+    assert quiet
