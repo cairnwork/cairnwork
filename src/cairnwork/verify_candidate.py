@@ -11,9 +11,9 @@ verifier processes for a dead run's. Like ``submit`` it is refused while the sta
 is fetched into the scratch clone only, never into the shared mirror or the caller's repository. The
 Core record goes to the state's notary under a one-off ``verify-`` task id.
 
-A run marks itself with a locked file in ``<state>/verify-runs/``; the kernel drops the lock when
-the run dies, so ``cleanup`` (also at the start of every run) tells a dead run's leftovers
-(clones, baseline dirs, orphan processes) from a live run's.
+A run marks itself with a locked file in ``<state>/verify-runs/``; the kernel drops the
+lock when the run dies, so ``cleanup`` (also done at the start of every run) can tell a
+dead run's leftovers (clones, baseline dirs, orphan processes) from a live run's.
 """
 
 from __future__ import annotations
@@ -64,7 +64,8 @@ from cairnwork.verify_cleanup import (
     write_start_mark,
 )
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
-from cairnwork.verify_parts import binding_of, remove_clone
+
+from cairnwork.verify_parts import binding_of as _binding, remove_clone  # isort: skip
 from cairnwork.workspace import (
     ATTEMPT_ID,
     Attempt,
@@ -310,9 +311,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
             )
         with base_stage(ctx.account, ctx.python):
             plan = p2p_for(task, specs, test_files, result, ctx)
-        binding = (
-            binding_of(task, candidate, test_files, judged, plan) if task.test_commit else None
-        )
+        binding = _binding(task, candidate, test_files, judged, plan) if task.test_commit else None
         result.candidate_commit = judged
         digest = request_digest(task.request() | {"candidate": candidate})
         if binding:  # what a receiver can recompute, unlike the scratch paths in the request

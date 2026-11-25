@@ -351,13 +351,24 @@ def _remove_account_leftovers(account: VerifierAccount, attempt_id: str) -> None
         _remove_inside(root, target)
 
 
+UNSEARCHABLE = "run-root-unsearchable"  # named in place of what could not be looked for
+
+
 def _leftover_names(root: Path, attempt_id: str) -> list[str]:
     """Names (only) of the attempt's directories still under ``root`` after cleanup: anything
     that can hold laid-over hidden tests. A verify run's private dir is evidence and does not
     count, its ``run/`` scratch does. Re-scans from disk; it trusts nothing the removers said."""
-    if not _run_attempt(attempt_id) or not Path(root).is_dir():
+    if not _run_attempt(attempt_id):
         return []
     root = Path(root)
+    try:  # a root that exists but cannot be listed and searched is "cannot see", never "empty"
+        os.listdir(root)
+        if not os.access(root, os.X_OK):
+            raise PermissionError(root)
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+    except OSError:
+        return [UNSEARCHABLE]
     works, privates, clones = _run_dirs(root, attempt_id)
     own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
     names = {

@@ -231,3 +231,67 @@ def test_no_verifier_account_leaves_the_owner_side_result_unchanged(tmp_path, mo
     _orphan(tmp_path)
     _with_account(monkeypatch, None)
     assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+
+
+# a run root that exists but cannot be searched is "cannot see", not "nothing left"
+def _clone_in(root, aid=AID):
+    (root / aid / "tests").mkdir(parents=True)
+    (root / aid / "tests" / "hidden_test.py").write_text("x")
+    (root / f"{aid}-v-v0").mkdir()
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o200, 0o400, 0o600])
+@pytest.mark.parametrize("what", ["clone", "verifier_clone", "index", "tests_index"])
+def test_an_unsearchable_run_root_keeps_the_attempt(tmp_path, mode, what):
+    marker = _orphan(tmp_path)
+    root = tmp_path / "runs"
+    root.mkdir()
+    if what == "clone":
+        _clone_in(root)
+    elif what == "verifier_clone":
+        (root / f"{AID}-v-v0").mkdir()
+    else:
+        (root / f"{AID}{'.index' if what == 'index' else '.tests.index'}").write_text("x")
+    os.chmod(root, mode)
+    try:
+        out = module.cleanup(Intake(tmp_path))
+        from cairnwork.recovery import UNSEARCHABLE, _leftover_names, _remove_leftovers
+
+        _remove_leftovers(root, AID)
+        seen = _leftover_names(root, AID)
+    finally:
+        os.chmod(root, 0o700)
+    assert out["cleaned"] == [] and out["kept"] == [AID] and marker.exists()
+    assert out["leftovers"] == {AID: [UNSEARCHABLE]}
+    assert seen == [UNSEARCHABLE]  # what recover() counts: never a silent 0
+
+
+def test_a_run_root_that_is_absent_empty_or_read_only_and_empty_is_cleaned(tmp_path):
+    for mode in (None, 0o700, 0o500):
+        _orphan(tmp_path)
+        root = tmp_path / "runs"
+        if mode is not None:
+            root.mkdir(exist_ok=True)
+            os.chmod(root, mode)
+        try:
+            assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+        finally:
+            if mode is not None:
+                os.chmod(root, 0o700)
+
+
+def test_a_verify_log_directory_kept_as_evidence_does_not_block_cleaning(tmp_path):
+    _orphan(tmp_path)
+    log = tmp_path / "runs" / f"{AID}-v-v0.priv"
+    log.mkdir(parents=True)
+    (log / "verifier.log").write_text("log")
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert (log / "verifier.log").exists()
+
+
+def test_a_removable_clone_is_removed_and_the_attempt_cleaned(tmp_path):
+    _orphan(tmp_path)
+    root = tmp_path / "runs"
+    _clone_in(root)
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert not (root / AID).exists() and not (root / f"{AID}-v-v0").exists()
