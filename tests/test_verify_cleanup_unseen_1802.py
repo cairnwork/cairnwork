@@ -275,3 +275,60 @@ def test_a_searchable_verify_log_directory_is_judged_by_what_is_left(tmp_path, m
         os.chmod(log, 0o700)
     assert bool(out["cleaned"]) is (not left)  # 0o300 removes it; 0o100 cannot and says so
     assert left == bool(out.get("leftovers", {}).get(AID))
+
+
+# #1802 round 4: the marker directory and the state directory, on every Python version
+@pytest.mark.parametrize("mode", [0o400, 0o600, 0o000, 0o200, 0o100])
+def test_a_marker_directory_that_cannot_be_searched_is_kept_not_raised(tmp_path, mode):
+    marker = _orphan(tmp_path)
+    runs = marker.parent
+    os.chmod(runs, mode)
+    try:
+        out = module.cleanup(Intake(tmp_path))
+    finally:
+        os.chmod(runs, 0o700)
+    assert out["cleaned"] == [] and out["kept"] and marker.exists()
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o200, 0o400, 0o600])
+def test_a_state_directory_that_cannot_be_searched_is_kept_not_clean(tmp_path, mode):
+    marker = _orphan(tmp_path)
+    intake = Intake(tmp_path)
+    os.chmod(tmp_path, mode)
+    try:
+        out = module.cleanup(intake)
+    finally:
+        os.chmod(tmp_path, 0o700)
+    assert out["cleaned"] == [] and out["kept"] and marker.exists()
+
+
+@pytest.mark.parametrize("mode", [0o700, 0o500])
+def test_a_searchable_marker_directory_is_cleaned(tmp_path, mode):
+    marker = _orphan(tmp_path)
+    os.chmod(marker.parent, mode)
+    try:
+        out = module.cleanup(Intake(tmp_path))
+    finally:
+        os.chmod(marker.parent, 0o700)
+    assert out == {"cleaned": [AID]} or (mode == 0o500 and out["kept"] == [AID])  # 0o500: no unlink
+
+
+@pytest.mark.parametrize("state", ["absent", "empty"])
+def test_no_marker_directory_or_an_empty_one_has_nothing_to_clean(tmp_path, state):
+    if state == "empty":
+        (tmp_path / "verify-runs").mkdir()
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": []}
+
+
+@pytest.mark.parametrize("kind", ["dangling_symlink", "plain_file"])
+def test_an_account_root_that_is_not_a_directory_keeps_the_attempt(tmp_path, monkeypatch, kind):
+    marker = _orphan(tmp_path)
+    root = tmp_path / "acct-runs"
+    if kind == "plain_file":
+        root.write_text("x")
+    else:
+        root.symlink_to(tmp_path / "nowhere")
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: _Account(root))
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID] and marker.exists()
+    assert out["leftovers"] == {AID: ["verifier-account-root-unreadable"]}

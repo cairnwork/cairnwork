@@ -152,7 +152,8 @@ def _hidden_old_process(monkeypatch):
 @pytest.mark.parametrize(
     "mark",
     ["boot1 1_000.0", "boot1 1e3", "boot1 +1000.0", "boot1 １０００.０", "boot1 1000.0\n"]
-    + ["boot1 1000.0 ", "boot1 .5", "boot1 1000.", "boot1 0x10", "boot1 1,000.0"],
+    + ["boot1 1000.0 ", "boot1 .5", "boot1 1000.", "boot1 0x10", "boot1 1,000.0"]
+    + ["boot1 1000", "boot1 4999", "boot1 1000.50"],  # main's rule (#1814): repr() of a float only
 )
 def test_a_start_mark_in_any_other_spelling_keeps_the_marker(tmp_path, monkeypatch, mark):
     marker = _orphan(tmp_path, mark=mark)
@@ -161,9 +162,7 @@ def test_a_start_mark_in_any_other_spelling_keeps_the_marker(tmp_path, monkeypat
     assert marker.exists()
 
 
-@pytest.mark.parametrize(
-    "mark", ["boot1 1000.0", "boot1 1000", "boot1 4999", "boot1 4999.987654321"]
-)
+@pytest.mark.parametrize("mark", ["boot1 1000.0", "boot1 4999.987654321"])
 def test_a_canonical_start_mark_is_trusted(tmp_path, monkeypatch, mark):
     marker = _orphan(tmp_path, mark=mark)
     _hidden_old_process(monkeypatch)
