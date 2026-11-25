@@ -71,12 +71,9 @@ def ident(info):
 
 def bytecode(name, fd):
     """Whether the regular file ``name`` in directory ``fd`` starts with this Python's magic
-    number. A file closed to this user is not read: like one removed before the run ended, it is
-    the known gap of bytecode_roots.py."""
-    try:
-        handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
-    except PermissionError:
-        return False
+    number. A file that cannot be opened raises (an error row in opened), never "not bytecode"
+    (#1823); one removed before the run ended is the known gap of bytecode_roots.py."""
+    handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
     try:
         return stat.S_ISREG(os.fstat(handle).st_mode) and os.read(handle, len(MAGIC)) == MAGIC
     finally:

@@ -64,19 +64,31 @@ def check_runtime_reach(
 def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
     """The record with its checkout root and the realpath of every entry and plugin file, read
     while the checkout still exists (a symlink cannot be followed once it is removed)."""
-    root = os.path.realpath(checkout)
+    root = _real(os.fspath(checkout))
     paths = (*record.sys_path, *record.sys_path_finish, *(f for _, f in record.plugins if f))
     real = {}
     for path in paths:
         try:
-            real[path] = os.path.realpath(_full(root, path))
-        except (ValueError, OSError):
+            real[path] = _real(_full(root, path))
+        except ValueError:
             continue
     return replace(record, root=root, real=tuple(sorted(real.items())))
 
 
 def _refuse(why: str) -> None:
     raise TestCommitRejected(CODE, why)
+
+
+def _real(full: str) -> str:
+    """realpath where only "not found" means absent (then the lexical result, as before); any
+    other OSError (unsearchable parent, loop) refuses (#1823: 3.14 swallows them)."""
+    try:
+        return os.path.realpath(full, strict=True)
+    except (FileNotFoundError, NotADirectoryError):
+        return os.path.realpath(full)
+    except OSError as exc:
+        _refuse(f"cannot resolve a sys.path or plugin entry: {exc.strerror or exc.errno}")
+        raise
 
 
 def _key(path: str) -> str:
@@ -180,10 +192,10 @@ def _rels(root: str, path: str, real: dict[str, str]) -> tuple[str, ...]:
     checkout. A relative entry is read against the checkout."""
     try:
         full = _full(root, path)
-        found = {os.path.normpath(full), real.get(path) or os.path.realpath(full)}
+        found = {os.path.normpath(full), real.get(path) or _real(full)}
         rels = (os.path.relpath(p, root) for p in found if _within(root, p))
         return tuple(sorted(r.replace(os.sep, "/") for r in rels if r != "."))
-    except (ValueError, OSError):
+    except ValueError:
         return ()
 
 
