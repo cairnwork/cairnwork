@@ -253,7 +253,7 @@ BIG = "import pytest\n@pytest.mark.parametrize('i', range(100))\ndef test_x(i):\
 @pytest.mark.parametrize(
     ("big_path", "status", "degraded"),
     [
-        ("tests/big/test_big.py", "COMPLETED", "base-probe-report-over-cap"),
+        ("tests/big/test_big.py", "FAILED", "P2P_BASE_COLLECT_UNUSABLE"),
         ("tests/test_big.py", "FAILED", None),
     ],
     ids=["nested: degrades to module-dir", "flat: fails on the unchanged base"],
@@ -267,7 +267,7 @@ def test_a_suite_too_large_for_one_report_degrades_or_refuses_and_says_so(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite", extra={big_path: BIG}
     )
     assert result.status == status, result.reason
-    if degraded:  # #1768: the degraded run cannot tell which files the base collects: refused
+    if degraded:  # #1768/#1780: even the module dir's collect log overflows the cap: refused
         assert not result.verified and result.reason.startswith(f"{degraded}: collect-over-cap")
     else:
         # #234: flat, so the module-dir files overflow too, already on the unchanged base

@@ -101,7 +101,7 @@ def test_a_clean_run_gives_its_files():
         {"recorded": False}, {"collection_finished": False}, {"returncode": None},
         {"returncode": 2}, {"returncode": 3}, {"returncode": 4},
         {"collect_errors": ("tests/test_b.py",), "returncode": 2},
-        {"collect_skipped": ("tests/test_b.py",)}, {"outcomes": {"x": "passed"}},
+        {"outcomes": {"x": "passed"}},
     ],
 )  # fmt: skip
 def test_a_run_that_cannot_be_read_gives_no_files(kw):
@@ -114,7 +114,7 @@ def _parity(repo, tmp_path, monkeypatch, run):
     monkeypatch.setattr(collect_parity, "run_verifiers", lambda *a, **k: [run])
     run.log_path = str(tmp_path / "r" / "log")
     ctx = SimpleNamespace()
-    return lambda: file_parity(task, ctx, 60, "a1")
+    return lambda: file_parity(task, ("tests/test_b.py",), ctx, 60, "a1")
 
 
 def test_an_unreadable_run_is_refused_not_passed(repo, tmp_path, monkeypatch):

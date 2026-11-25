@@ -92,7 +92,7 @@ class CollectedSide:
 
 def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -> CollectedSide:
     """The test-commit side of the selected ``files``; see the module docstring."""
-    file_parity(task, ctx, budget, attempt_id)  # #1768: a counted file pytest never collects
+    file_parity(task, files, ctx, budget, attempt_id)  # #1768: a counted file pytest never collects
     base_ids = frozenset(outcomes)
     present = _present(task, files)
     test_ids: frozenset[str] = frozenset()
