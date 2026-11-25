@@ -149,3 +149,128 @@ def test_recover_listing_fails_between_checks_counts_a_leftover(project, tmp_pat
     (decision,) = recover(ledger=ledger, notary=notary, journal=journal, run_root=root)
     assert "RECOVERY_ERROR" not in decision.detail
     assert decision.leftover_run_dirs >= 1 and UNSEARCHABLE in decision.detail
+
+
+# #1802 round 3: a stat that fails (any error but "no such file") is "cannot see", never "absent"
+_SHAPES = ("work", "clone", "index", "private")
+
+
+def _lay(root, shape, ident=AID):
+    root.mkdir(exist_ok=True)
+    if shape == "work":
+        (root / f"{ident}-s-v1.work").mkdir(exist_ok=True)
+        (root / f"{ident}-s-v1.work" / "f").write_text("x")
+    elif shape == "clone":
+        (root / ident).mkdir(exist_ok=True)
+        (root / ident / "f").write_text("x")
+    elif shape == "index":
+        (root / f"{ident}.index").write_text("x")
+    else:
+        (root / f"{ident}-s-v1.priv" / "run").mkdir(parents=True, exist_ok=True)
+
+
+def _on_disk(root):
+    return [n for n in os.listdir(root) if n.startswith(AID)] if root.exists() else []
+
+
+def _stat_fails_once(monkeypatch, name, nth, root):
+    real, count = getattr(os, name), [0]
+
+    def flaky(path, *args, **kwargs):
+        if str(path).startswith(str(root) + os.sep):
+            count[0] += 1
+            if count[0] == nth:
+                raise PermissionError(13, "Permission denied", str(path))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, name, flaky)
+
+
+@pytest.mark.parametrize("nth", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("name", ["lstat", "stat"])
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_the_rescan_never_answers_empty_after_one_failed_stat(
+    tmp_path, monkeypatch, shape, name, nth
+):
+    from cairnwork.verify_cleanup import leftovers
+
+    root = tmp_path / "runs"
+    _lay(root, shape)
+    with monkeypatch.context() as patch:
+        _stat_fails_once(patch, name, nth, root)
+        seen = leftovers(root, AID)
+    assert seen or [n for n in os.listdir(root) if n.startswith(AID)] == []  # empty only if gone
+
+
+@pytest.mark.parametrize("nth", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("name", ["lstat", "stat"])
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_cleanup_never_calls_it_clean_after_one_failed_stat(
+    tmp_path, monkeypatch, shape, name, nth
+):
+    marker = _orphan(tmp_path)
+    root = tmp_path / "runs"
+    _lay(root, shape)
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: None)
+    with monkeypatch.context() as patch:
+        _stat_fails_once(patch, name, nth, root)
+        out = module.cleanup(Intake(tmp_path))
+    if out["cleaned"]:
+        assert _on_disk(root) == [] and not marker.exists()
+    else:
+        assert out["kept"] == [AID] and marker.exists() and out["leftovers"][AID]
+
+
+@pytest.mark.parametrize("nth", [1, 2, 3, 4, 5, 6])
+@pytest.mark.parametrize("name", ["lstat", "stat"])
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_recover_never_counts_zero_after_one_failed_stat(
+    project,
+    tmp_path,
+    monkeypatch,
+    shape,
+    name,
+    nth,  # noqa: F811
+):
+    crash(project, tmp_path, "WORKER_STARTED")
+    attempt = own_attempt(tmp_path)
+    root = tmp_path / "runs"
+    _lay(root, shape, attempt)
+    ledger, notary, journal = stores(tmp_path)
+    with monkeypatch.context() as patch:
+        _stat_fails_once(patch, name, nth, root)
+        (decision,) = recover(ledger=ledger, notary=notary, journal=journal, run_root=root)
+    if decision.leftover_run_dirs == 0:
+        assert "RECOVERY_ERROR" not in decision.detail
+        assert [n for n in os.listdir(root) if n.startswith(attempt)] == []
+
+
+@pytest.mark.parametrize("mode", [0o000, 0o200, 0o400, 0o600])
+def test_a_verify_log_directory_that_cannot_be_searched_names_its_run_dir(tmp_path, mode):
+    marker = _orphan(tmp_path)
+    root = tmp_path / "runs"
+    log = root / f"{AID}-v-v0.priv"
+    (log / "run").mkdir(parents=True)
+    os.chmod(log, mode)
+    try:
+        out = module.cleanup(Intake(tmp_path))
+    finally:
+        os.chmod(log, 0o700)
+    assert out["cleaned"] == [] and out["kept"] == [AID] and marker.exists()
+    assert out["leftovers"][AID] and (log / "run").exists()
+
+
+@pytest.mark.parametrize("mode", [0o100, 0o300])
+def test_a_searchable_verify_log_directory_is_judged_by_what_is_left(tmp_path, mode):
+    _orphan(tmp_path)
+    root = tmp_path / "runs"
+    log = root / f"{AID}-v-v0.priv"
+    (log / "run").mkdir(parents=True)
+    os.chmod(log, mode)
+    try:
+        out = module.cleanup(Intake(tmp_path))
+        left = (log / "run").exists()
+    finally:
+        os.chmod(log, 0o700)
+    assert bool(out["cleaned"]) is (not left)  # 0o300 removes it; 0o100 cannot and says so
+    assert left == bool(out.get("leftovers", {}).get(AID))
