@@ -56,7 +56,13 @@ from cairnwork.verify_candidate_checks import (
     require_core_ids,
     validate_import_paths,
 )
-from cairnwork.verify_cleanup import leftovers, path_absent, read_start_mark, write_start_mark
+from cairnwork.verify_cleanup import (
+    clear_account,
+    leftovers,
+    path_absent,
+    read_start_mark,
+    write_start_mark,
+)
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
 from cairnwork.verify_parts import binding_of, remove_clone
 from cairnwork.workspace import (
@@ -377,7 +383,7 @@ def cleanup(intake: Intake) -> dict[str, Any]:
             swept = confirm_gone(look(), look)
             _remove_leftovers(intake.run_root, marker.name)
             shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
-            left = leftovers(intake.run_root, marker.name)
+            left = leftovers(intake.run_root, marker.name) + clear_account(intake, marker.name)
             if left:  # a clone or index that would not go is named, not dropped
                 out.setdefault("leftovers", {})[marker.name] = left
             done = swept.gone and path_absent(work) and not left

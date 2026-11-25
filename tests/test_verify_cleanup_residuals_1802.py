@@ -10,6 +10,7 @@ from verify_helpers import VERIFY, base_of, candidate
 from cairnwork import confined, proc_start
 from cairnwork import verify_candidate as module
 from cairnwork.intake import Intake
+from cairnwork.intake_request import IntakeRefused
 
 AID = "a0123456789abcdef"
 LATER = "a1123456789abcdef"
@@ -218,7 +219,7 @@ def test_an_account_root_that_cannot_be_checked_keeps_the_attempt(tmp_path, monk
     marker = _orphan(tmp_path)
 
     def refused(self):
-        raise RuntimeError("BAD_VERIFIER_ACCOUNT: untrusted verifier root")
+        raise IntakeRefused("BAD_VERIFIER_ACCOUNT", "untrusted verifier root")
 
     monkeypatch.setattr(Intake, "verifier_account", refused)
     out = module.cleanup(Intake(tmp_path))

@@ -7,9 +7,12 @@ import os
 import re
 from contextlib import suppress
 from pathlib import Path
+from typing import Any
 
 from cairnwork import proc_start
-from cairnwork.recovery import _leftover_names
+from cairnwork.intake_request import IntakeRefused
+from cairnwork.recovery import _leftover_names, _remove_account_leftovers
+from cairnwork.verifier_account import VerifierAccountError
 
 _CANONICAL = re.compile(r"[0-9]+(\.[0-9]+)?", re.ASCII)  # one spelling: what boot_mark writes
 
@@ -56,3 +59,26 @@ def leftovers(run_root: Path, attempt_id: str) -> list[str]:
         if os.path.lexists(Path(run_root) / f"{attempt_id}{suffix}"):
             names.append(f"{attempt_id}{suffix}")
     return sorted(names)
+
+
+def clear_account(intake: Any, attempt_id: str) -> list[str]:
+    """Remove the attempt's directories under the verifier account's own run root and name what
+    is still there. With no account configured there is nothing to look at; an account whose
+    root cannot be checked is reported as a leftover, never as clean."""
+    try:
+        account = intake.verifier_account()
+        if account is None:
+            return []
+        _remove_account_leftovers(account, attempt_id)
+        if path_absent(account.run_root):
+            return []
+        if not account.run_root.is_dir():
+            return ["verifier-account-root-unreadable"]
+        return leftovers(account.run_root, attempt_id)
+    except (
+        IntakeRefused,
+        VerifierAccountError,
+        OSError,
+        ValueError,
+    ):  # an untrusted or unreadable account root: kept, retried later
+        return ["verifier-account-root-unreadable"]
