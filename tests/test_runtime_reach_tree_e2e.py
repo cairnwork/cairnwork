@@ -228,9 +228,9 @@ def test_the_same_directory_with_an_archive_off_sys_path_is_accepted(project, tm
 
 ROOT = {
     "conftest.py": "import sys, pathlib\n"
-    "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'data' / 'lib.zip'))\n",
-    "data/lib.zip": "z",
-    "data/other.zip": "o",
+    "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'tests' / 'data' / 'lib.zip'))\n",
+    "tests/data/lib.zip": "z",
+    "tests/data/other.zip": "o",
     "tests/x/test_x.py": OK,
     "tests/y/test_y.py": OK,
 }  # fmt: skip
@@ -239,10 +239,10 @@ ROOT = {
 def test_a_root_conftest_that_puts_an_archive_on_sys_path_loads_over_the_cap(
     project, tmp_path, over_cap
 ):
-    refused(go(project, tmp_path, ROOT, {"data/lib.zip": "z2"}))
+    refused(go(project, tmp_path, ROOT, {"tests/data/lib.zip": "z2"}))
 
 
 def test_the_same_root_conftest_layout_with_an_archive_off_sys_path_is_accepted(
     project, tmp_path, over_cap
 ):
-    accepted(go(project, tmp_path, ROOT, {"data/other.zip": "o2"}))
+    accepted(go(project, tmp_path, ROOT, {"tests/data/other.zip": "o2"}))
