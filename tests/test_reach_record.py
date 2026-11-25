@@ -323,6 +323,7 @@ def test_the_base_file_list_is_read_with_the_option_terminator(task, monkeypatch
     assert paths is not None and "tests/test_a.py" in paths
     assert seen[0][-2:] == (task.base_commit, "--")
 
+
 # #1809 (b): a rerun with nothing left to name still loads the root files
 def test_a_rerun_with_no_tree_file_and_no_conftest_directory_runs_the_test_roots(task, monkeypatch):
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/test_a.py",))
