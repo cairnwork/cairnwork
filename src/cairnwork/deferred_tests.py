@@ -41,7 +41,7 @@ from cairnwork.issue_task import test_target
 from cairnwork.node_ids import file_part
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
-from cairnwork.reasons import COLLECT_HINT, _names, skip_hint
+from cairnwork.reasons import COLLECT_HINT, _names, no_tests_hint, skip_hint
 from cairnwork.test_commit_paths import case_variant_clash, out_of_scope  # noqa: F401
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
@@ -347,7 +347,7 @@ def base_comparison(runs, targets: frozenset[str]) -> Comparison:
             f"{run.spec.verifier_id}: {code} (exit {run.returncode})"
             + _collection_error_detail(run, hidden)
             + (survivor_argv.listing(run.survivors) if code == "BASE_SURVIVORS" else "")
-            + skip_hint(run)
+            + no_tests_hint(run, code) + skip_hint(run)
             + (COLLECT_HINT if set(run.collect_errors) & files else "")
             for run, code in problems
         )  # fmt: skip
