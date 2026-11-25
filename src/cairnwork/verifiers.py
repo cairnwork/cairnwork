@@ -260,8 +260,12 @@ def _run_one(batch: _Batch, spec, checkout) -> VerifierRun:
     with unless_interrupted(partial(close_private, private, account)):
         try:
             run = _run_one_in(batch, spec, checkout, plugins, ini_text, private, channel)
-            names = fixture_probe.finish(spec, ctx, batch.candidate_commit, private, ini_text, run)
-            return replace(run, fixture_names=names)
+            got = fixture_probe.finish_record(
+                spec, ctx, batch.candidate_commit, private, ini_text, run
+            )
+            return replace(
+                run, fixture_names=None if got is None else got.names, collect_record=got
+            )
         finally:
             # After the child has ended (or the run failed): code under test must not see the mark
             # at Path(HOME).parents[1] (#1698). An interrupt still gets it before recovery looks.

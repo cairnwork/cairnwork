@@ -280,7 +280,7 @@ def test_a_directory_exactly_one_hour_old_is_kept(tmp_path, age, removed):
 
 
 @pytest.mark.parametrize("error, live", [(OverflowError, False), (OSError, True)])
-def test_an_owner_whose_state_is_unknown_is_kept(monkeypatch, error, live):
+def test_an_owner_check_that_cannot_run_reads_by_error_type(monkeypatch, error, live):
     """Flipped on purpose (#995): an OSError other than "no such process" used to read as not live,
     so the sweep removed a directory whose owner it could not see."""
 

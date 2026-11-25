@@ -27,7 +27,9 @@ def task(tmp_path):
         (tmp_path / "tests" / name).write_text("")
     git("add", "-A")
     git("commit", "-qm", "base")
-    return SimpleNamespace(repo=tmp_path, base_commit=git("rev-parse", "HEAD"), test_commit="t")
+    return SimpleNamespace(
+        repo=tmp_path, base_commit=git("rev-parse", "HEAD"), test_commit="t", test_roots=("tests",)
+    )
 
 
 def _calls(monkeypatch, result=None, error=None):
