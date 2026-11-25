@@ -260,7 +260,7 @@ _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.p
 def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list[Path]]:
     """The attempt's run directories under ``root``: verifier checkouts (``.work``), private
     run dirs (``.priv``...; a verify log stays as evidence, only its run/ goes) and clones.
-    One walk for the owner side and the verifier-account side, so the two cannot drift."""
+    One walk for both sides; raises OSError if ``root`` is unlistable."""
     # #1190: second-seed base runs made before the "s" tag used "-b2"
     patterns = (f"{attempt_id}-[{_RUN_TAGS}]-v*", f"{attempt_id}-b2-v*")
 
@@ -268,7 +268,7 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
     def real(p: Path) -> bool:
         return p.is_symlink() or p.is_dir()
 
-    listed = os.listdir(root)  # raises when the root cannot be listed: Path.glob answers [] (3.14)
+    listed = os.listdir(root)  # Path.glob would answer [] on 3.14
 
     def glob(pattern: str) -> list[Path]:
         return [root / n for n in listed if fnmatch.fnmatchcase(n, pattern)]
@@ -290,14 +290,11 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
 
 
 def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
-    """Attempt and verifier clones, a snapshot index, and verifier scratch (run/) dirs.
-    Verifier logs (the private dirs themselves) are kept as evidence."""
+    """Clones, snapshot indexes and verifier scratch (run/) dirs; verifier logs stay as evidence."""
     if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
-    try:
+    with suppress(OSError):  # a directory that cannot be listed or searched: the re-scan names it
         _remove_leftovers_in(Path(run_root), attempt_id)
-    except OSError:
-        pass  # a directory that cannot be listed or searched (any Python): the re-scan names it
 
 
 def _remove_leftovers_in(root: Path, attempt_id: str) -> None:
@@ -321,8 +318,7 @@ def _remove_leftovers_in(root: Path, attempt_id: str) -> None:
 
 
 def _index_names(attempt_id: str) -> list[str]:
-    """The snapshot index files of an attempt: removed by _remove_leftovers, looked for by
-    _leftover_names from this one list, so the two cannot drift."""
+    """Index files: one list for the remover and the re-scan, so they cannot drift."""
     return [f"{attempt_id}.index", f"{attempt_id}.tests.index"]
 
 
@@ -345,19 +341,12 @@ def _remove_inside(root: Path, target: Path) -> None:
 
 
 def _remove_account_leftovers(account: VerifierAccount, attempt_id: str) -> None:
-    """Remove the attempt's verifier run directories under the account's OWN run root.
-
-    When a verifier account is used the verifier clones and scratch live under
-    ``account.run_root`` and are owned by the account, so only ``account.remove`` (chmod + rm
-    as that account) can delete them — the owner-side ``_remove_leftovers`` cannot. This mirrors
-    normal cleanup (verifiers.py removes the same dirs with ``account.remove``) and keeps the
-    verify run's log directory as evidence, as ``_remove_leftovers`` does."""
+    """Remove the attempt's run directories under the account's OWN run root (owned by the
+    account, so only ``account.remove`` can delete them); verify logs stay as evidence."""
     if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
-    try:
+    with suppress(OSError):  # not listable or searchable: the re-scan names it
         _remove_account_in(account, attempt_id)
-    except OSError:
-        pass  # not listable or searchable: the re-scan names it
 
 
 def _remove_account_in(account: VerifierAccount, attempt_id: str) -> None:
@@ -365,12 +354,9 @@ def _remove_account_in(account: VerifierAccount, attempt_id: str) -> None:
     if not root.is_dir():
         return
     works, privates, clones = _run_dirs(root, attempt_id)
-    targets = works + privates + clones
-    for target in targets:
-        try:
+    for target in works + privates + clones:
+        with suppress(VerifierAccountError):  # the re-scan reports what is still there
             account.remove(target)
-        except VerifierAccountError:
-            pass  # the re-scan after cleanup reports what is still there (_leftover_names)
         # the verifier checkout and its work dir are the OWNER's (verifiers.py makes them), so
         # the account's rm cannot remove them: the owner finishes what the account could not
         _remove_inside(root, target)
@@ -386,33 +372,27 @@ def _leftover_names(root: Path, attempt_id: str) -> list[str]:
     if not _run_attempt(attempt_id):
         return []
     root = Path(root)
-    seen = _searchable(root)
-    if seen is None:
-        return []
-    if not seen:
-        return [UNSEARCHABLE]
+    if (seen := _searchable(root)) is not True:
+        return [] if seen is None else [UNSEARCHABLE]
     try:
         works, privates, clones = _run_dirs(root, attempt_id)
         own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
-        indexes = [
-            root / name for name in _index_names(attempt_id)
-        ]  # what _remove_leftovers unlinks
+        indexes = [root / name for name in _index_names(attempt_id)]
         names = {
             p.name if p.name != "run" else p.parent.name + "/run"
             for p in works + privates + clones + own + indexes
             if os.path.lexists(p)  # a dangling symlink is still a leftover
         }
-    except OSError:  # a directory below could not be listed or searched (pathlib raises < 3.14)
+    except OSError:  # the root or a directory below it could not be listed or searched
         return [UNSEARCHABLE]
     return sorted(names) if _searchable(root) else [UNSEARCHABLE]  # still searchable after the scan
 
 
 def _searchable(root: Path) -> bool | None:
-    """None: no such directory. False: exists but cannot be listed and searched ("cannot see",
-    never "empty"). True otherwise."""
+    """None: no such directory. False: cannot be listed and searched ("cannot see"). True."""
     try:
         os.listdir(root)
-        return True if os.access(root, os.X_OK) else False
+        return os.access(root, os.X_OK)
     except (FileNotFoundError, NotADirectoryError):
         return None
     except OSError:
