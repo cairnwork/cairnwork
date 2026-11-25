@@ -1,10 +1,14 @@
 import pytest
 
 from cairnwork.deferred_overlay import TestCommitRejected as CommitRejected
+from cairnwork.issue_task import IssueRefused
 from cairnwork.pipeline import TaskRejected
+from cairnwork.refusal_types import CandidateRejected
 
 
-@pytest.mark.parametrize("error_type", [TaskRejected, CommitRejected])
+@pytest.mark.parametrize(
+    "error_type", [TaskRejected, CommitRejected, CandidateRejected, IssueRefused]
+)
 @pytest.mark.parametrize(
     "detail, escaped",
     [
@@ -24,6 +28,8 @@ def test_typed_refusal_shows_hidden_detail_once(error_type, detail, escaped):
     assert str(error) == f"REJECTED: {escaped}"
 
 
-@pytest.mark.parametrize("error_type", [TaskRejected, CommitRejected])
+@pytest.mark.parametrize(
+    "error_type", [TaskRejected, CommitRejected, CandidateRejected, IssueRefused]
+)
 def test_typed_refusal_preserves_ordinary_detail(error_type):
     assert str(error_type("REJECTED", "ordinary path.py")) == "REJECTED: ordinary path.py"

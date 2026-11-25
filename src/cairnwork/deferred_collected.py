@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from contextvars import ContextVar
 from pathlib import Path
 
 from cairnwork import base_fixture_names
@@ -41,7 +42,9 @@ from cairnwork.verifiers import run_verifiers
 MAX_FILES = 50  # files per collect-only run; more changed files are collected in batches
 NONE = Collected()
 LOG = logging.getLogger(__name__)
-_WHY: dict[str, str] = {}  # run id -> why that run gave no record (a fixed word; #1792)
+# run id -> why that run gave no record (a fixed word; #1792). One dict per ``check`` call, held in
+# a context variable: concurrent checks never share it and nothing outlives the call.
+_WHY: ContextVar[dict[str, str] | None] = ContextVar("deferred_collected_why", default=None)
 
 
 def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> None:
@@ -52,11 +55,11 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> 
 
 def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
     """Refuse a new collected test that ``targets`` (``new_tests``) does not hold."""
+    token = _WHY.set({})
     try:
         _check(ctx, task, paths, targets, run_id)
-    finally:  # no exit leaves this run's reasons behind (#1792)
-        for key in [k for k in _WHY if k[: len(run_id) + 1] in {f"{run_id}{c}" for c in "tpb"}]:
-            del _WHY[key]
+    finally:  # no exit leaves this call's reasons behind (#1792, #1804)
+        _WHY.reset(token)
 
 
 def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
@@ -72,7 +75,7 @@ def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
         # here (e.g. a table plugin that fails to load): the base run reports UNCOMPARABLE (#804)
         if _collect_all(ctx, task.base_commit, _probe_files(task, on_base), f"{run_id}p") is None:
             return
-        why = _WHY.pop(f"{run_id}t", "collect-no-record")
+        why = _why().pop(f"{run_id}t", "collect-no-record")
         LOG.warning("DEFERRED_TESTS_COLLECT_FAILED: %s (%d files)", why, len(files))
         raise TestCommitRejected(
             "DEFERRED_TESTS_COLLECT_FAILED",
@@ -97,6 +100,12 @@ def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
         )
 
 
+def _why() -> dict[str, str]:
+    """This ``check`` call's reasons; a throwaway dict when ``_collect`` is called outside one."""
+    why = _WHY.get()
+    return {} if why is None else why
+
+
 def _collect_all(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected | None:
     """``_collect`` in batches of MAX_FILES, merged; None when any batch has no usable record."""
     parts = [
@@ -105,7 +114,7 @@ def _collect_all(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Colle
     ]
     if any(part is None for part in parts):
         first = next(f"{run_id}{i}" for i, part in enumerate(parts) if part is None)
-        _WHY[run_id] = _WHY.pop(first, "collect-no-record")
+        _why()[run_id] = _why().pop(first, "collect-no-record")
         return None
     got: list[Collected] = [p for p in parts if p is not None]
     return Collected(
@@ -121,7 +130,7 @@ def _collect(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected
         spec = VerifierSpec("collected-974", files, collect_only=True, announce=False)  # #1671
         runs = run_verifiers(ctx, commit, (spec,), run_id)
     except Exception:  # noqa: BLE001 - a fault leaves the static rule alone
-        _WHY[run_id] = "collect-fault"
+        _why()[run_id] = "collect-fault"
         return None
     try:
         got = read_collected(runs[0]) if len(runs) == 1 else None
@@ -129,7 +138,7 @@ def _collect(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected
         for run in runs:  # evidence for this check only, not for Core
             shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
     if got is None or got.unusable:
-        _WHY[run_id] = got.unusable if got else "collect-no-record"
+        _why()[run_id] = got.unusable if got else "collect-no-record"
         return None
     return got
 
