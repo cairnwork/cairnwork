@@ -344,7 +344,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     verdict, returncode = _read_verdict(
         channel, verdict_path, verdict_nonce, plugins, checkout, stop, returncode
     )
-    not_run, eperm = verdict.not_run(spec.targets), verdict.denied  # eperm: report-plugin paths
+    not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
     ran = profile is not None and verdict.ran and not not_run
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
@@ -380,8 +380,8 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
-        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big, eperm_paths=eperm,
-        notes=(profile.notes if profile else ()) + host_notes(),
+        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big,
+        notes=(profile.notes if profile else ()) + host_notes(), eperm_paths=verdict.eperm_paths,
         collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
         collected=verdict.collected, collect_skipped=verdict.collect_skipped, skips=verdict.skips,
