@@ -29,7 +29,8 @@ A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
   ``setattr``/``delattr``, or uses unittest's ``main``/``TestProgram`` other than in a call with a
   string module, or pytest's ``main`` at all (``sys_path_runners``), or
 - imports one of ``IMPORT_MODULES`` (``site``, ``runpy``, ``importlib.util``) or a submodule (a
-  relative import is exempt only where ``relative_import_scope`` proves it the package's own),
+  relative import is exempt only where ``relative_import_scope`` proves, by tree resolution, that
+  it is the package's own),
   takes sys, os or one of them from another object (``logging.os``, ``from random import _os``,
   a ``HELD`` or, on a chain from an imported module, a ``HELD_IF_IMPORTED`` name, also in a
   class pattern, or any ``from`` import of one), uses an imported module but through its

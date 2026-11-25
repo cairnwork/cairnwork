@@ -177,9 +177,7 @@ def refuse_new_sys_path_mutation(
         shadowed = _same_name_modules(e.path for e in changes.entries) | _rebound_elsewhere(
             repo, candidate, [e.path for e in changes.entries if e.change_type in _OWN_KINDS]
         )
-        scope = RelativeScope(
-            repo, candidate, [e.path for e in changes.entries if e.change_type in _OWN_KINDS]
-        )
+        scope = RelativeScope(repo, base, candidate)
         for path in changed:
             signal = path.endswith(".py") and _blob_signal(
                 repo, base, candidate, path, changed, shadowed, scope.resolver(path)

@@ -1,6 +1,7 @@
-"""Issue #1807: a relative import is exempt only when the judged tree proves its target (the
-chain of ``__init__.py`` files, a top-level package not named like the stdlib) and nothing in the
-changed files or the package can repoint it. Cases and helpers live in the sibling test file."""
+"""Issue #1807 (design C'): a relative import is exempt only when the judged tree proves its
+target (the chain of ``__init__.py`` files in both trees, a top-level package not named like the
+stdlib). Cases and helpers live in the sibling test file; init and symlink rows are in the
+chain file."""
 
 from __future__ import annotations
 
@@ -8,11 +9,8 @@ import pytest
 from conftest import git
 from test_candidate_relative_import_1807 import GUARD, MOCK, REFUSED, TYPES, _verdict
 
-from cairnwork import relative_import_scope as scope
 from cairnwork.sys_path_scan import may_edit_sys_path, scan_sys_path_blob
 
-# --- design (layer1 ruling): a relative import is the package's own only when the judged tree
-# proves it (A) and nothing in the changed files or the package can repoint it (B).
 CALL = "\n\ndef check(x):\n    return patch(x)\n"
 PATCH = "from .mock import patch" + CALL
 
@@ -71,49 +69,6 @@ def _own(tmp_path, base, new):
 def test_a_relative_import_the_tree_resolves_passes(tmp_path, layout):
     new = {path: text + "\nEXTRA = 1\n" for path, text in layout.items() if path.endswith(".py")}
     assert _verdict(tmp_path, layout, new) is None
-
-
-HELPERS = [
-    '__all__ = ["__package__"]\n__package__ = "unittest"\n',
-    '__all__ = ["__spec__"]\n__spec__ = None\n__package__ = "unittest"\n',
-    '__all__ = ["__name__"]\n__name__ = "unittest.zz"\n',
-    'globals().update({"__package__": "unittest"})\n',
-]
-
-
-@pytest.mark.parametrize("helper_changed", [False, True])
-@pytest.mark.parametrize("helper", HELPERS)
-def test_star_import_from_a_sibling_that_repoints_is_refused(tmp_path, helper, helper_changed):
-    base = {
-        "pkg/__init__.py": "",
-        "pkg/types.py": TYPES,
-        "pkg/mock.py": MOCK,
-        "pkg/helpers.py": helper,
-        "pkg/validator.py": "from .helpers import *\n" + PATCH,
-    }
-    new = {
-        "pkg/types.py": TYPES + "EXTRA = 1\n",
-        "pkg/validator.py": base["pkg/validator.py"] + "\n#\n",
-    }
-    if helper_changed:
-        new["pkg/helpers.py"] = helper + "\nEXTRA = 1\n"
-    assert _verdict(tmp_path, base, new) == REFUSED
-
-
-@pytest.mark.parametrize("cycle", ["v.__package__", "v.__spec__", "v.__name__"])
-def test_a_cycle_that_rewrites_the_importer_is_refused(tmp_path, cycle):
-    base = {
-        "pkg/__init__.py": "",
-        "pkg/types.py": TYPES,
-        "pkg/mock.py": MOCK,
-        "pkg/helper.py": f'import pkg.validator as v\n{cycle} = "unittest"\n',
-        "pkg/validator.py": "from . import helper\n" + PATCH,
-    }
-    new = {
-        "pkg/types.py": TYPES + "EXTRA = 1\n",
-        "pkg/validator.py": base["pkg/validator.py"] + "\n#\n",
-    }
-    assert _verdict(tmp_path, base, new) == REFUSED
 
 
 @pytest.mark.parametrize("top", ["unittest", "json", "logging", "email", "xml", "importlib", "os"])
@@ -181,29 +136,68 @@ def test_a_third_party_named_top_package_is_exempt_like_any_other(tmp_path, top)
     assert _verdict(tmp_path, base, new) is None
 
 
-SIZED = {
-    "pkg/__init__.py": "",
-    "pkg/types.py": TYPES,
-    "pkg/validator.py": "from .types import type_ok\n",
+SRC_BASE = {
+    "conftest.py": (
+        'import os, sys\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))\n'
+    ),
+    "src/miniscema/__init__.py": "",
+    "src/miniscema/types.py": "def type_name(v):\n    return type(v).__name__\n",
+    "src/miniscema/validator.py": "from .types import type_ok, type_name\n\n\ndef check(v):\n    pass",
+    "src/miniscema/report.py": "from .validator import v\n",
 }
-SIZED_NEW = {path: text + "\nEXTRA = 1\n" for path, text in SIZED.items()}
-SIZES = [len(text.encode()) for text in SIZED_NEW.values()]
 
 
-@pytest.mark.parametrize(
-    ("limit", "value", "refused"),
-    [
-        ("MAX_TOTAL_BYTES", sum(SIZES), False),
-        ("MAX_TOTAL_BYTES", sum(SIZES) - 1, True),
-        ("MAX_FILE_BYTES", max(SIZES), False),
-        ("MAX_FILE_BYTES", max(SIZES) - 1, True),
-    ],
-    ids=["total-at-limit", "total-over", "file-at-limit", "file-over"],
-)
-def test_the_package_read_is_bounded_and_over_the_bound_is_not_exempt(
-    tmp_path, monkeypatch, limit, value, refused
-):
-    monkeypatch.setattr(scope, "MAX_TOTAL_BYTES", 1 << 30)
-    monkeypatch.setattr(scope, "MAX_FILE_BYTES", 1 << 30)
-    monkeypatch.setattr(scope, limit, value)
-    assert (_verdict(tmp_path, SIZED, SIZED_NEW) == REFUSED) is refused
+def test_a_real_src_layout_edit_passes(tmp_path):
+    new = {
+        "src/miniscema/types.py": SRC_BASE["src/miniscema/types.py"] + "\nEXTRA = 1\n",
+        "src/miniscema/validator.py": SRC_BASE["src/miniscema/validator.py"] + "\nEXTRA = 1\n",
+    }
+    assert _verdict(tmp_path, SRC_BASE, new) is None
+
+
+def test_the_same_src_layout_with_a_conftest_sys_path_edit_is_refused(tmp_path):
+    new = {
+        "src/miniscema/types.py": SRC_BASE["src/miniscema/types.py"] + "\nEXTRA = 1\n",
+        "src/miniscema/validator.py": SRC_BASE["src/miniscema/validator.py"] + "\nEXTRA = 1\n",
+        "conftest.py": SRC_BASE["conftest.py"].replace('"src"', '"."'),
+    }
+    assert _verdict(tmp_path, SRC_BASE, new) == REFUSED
+
+
+def test_a_relative_import_with_a_same_file_sys_path_insert_is_refused(tmp_path):
+    base = {"pkg/__init__.py": "", "pkg/types.py": TYPES, "pkg/v.py": "X = 1\n"}
+    new = {
+        "pkg/types.py": TYPES + "\nEXTRA = 1\n",
+        "pkg/v.py": "import sys\nsys.path.insert(0, 'pkg')\nfrom .types import type_ok\n",
+    }
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_an_init_that_puts_its_directory_on_sys_path_next_to_a_shadow_file_is_refused(tmp_path):
+    base = {"pkg/__init__.py": "", "pkg/a.py": "X = 1\n"}
+    new = {
+        "pkg/__init__.py": "import os, sys\nsys.path.insert(0, os.path.dirname(__file__))\n",
+        "pkg/csv.py": "X = 2\n",
+    }
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_repointing_hole_is_the_pre_existing_one_tracked_in_1816(tmp_path):
+    """Passes here, main refuses it. Repointing ``__package__`` can only make a relative import
+    not load the candidate file; reaching a real stdlib module that way works without changing
+    any shadow file. This is the pre-existing hole tracked in Issue #1816, a documented
+    residual of design C' (no taint check)."""
+    base = {
+        "pkg/__init__.py": "",
+        "pkg/mock.py": MOCK,
+        "pkg/types.py": TYPES,
+        "pkg/validator.py": "X = 1\n",
+    }
+    new = {
+        "pkg/types.py": TYPES + "\nEXTRA = 1\n",
+        "pkg/validator.py": (
+            'import pkg.validator as me\nme.__setattr__("__pack" + "age__", "unittest")\n'
+            "from .mock import patch\n"
+        ),
+    }
+    assert _verdict(tmp_path, base, new) is None

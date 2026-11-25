@@ -153,83 +153,6 @@ def test_only_one_of_the_two_files_changed_passes_as_before(tmp_path):
     assert _verdict(tmp_path, base, only_types, "b") is None
 
 
-# A file that names __package__ or __spec__ can point a relative import at the standard library
-# (``__package__ = "unittest"`` then ``from .mock import patch``), so the exemption holds only
-# for a file whose syntax tree has neither word in any name, attribute or string.
-RESOLVING = [
-    '__package__ = "unittest"',
-    '__package__ += "x"',
-    '__package__: str = "unittest"',
-    "__spec__ = None",
-    'globals()["__package__"] = "unittest"',
-    'vars()["__spec__"] = None',
-    'setattr(me, "__package__", "unittest")',
-    "del __package__",
-    'NAME = "__package__"',
-    'NAME = "set __spec__ first"',
-    "from m import __package__ as p",
-    "from m import a as __spec__",
-    "import m as __package__",
-    "class __package__:\n    pass",
-    "def __spec__():\n    pass",
-    "for __package__ in items:\n    pass",
-    "with ctx() as __spec__:\n    pass",
-    "match value:\n    case __package__:\n        pass",
-    'obj.__package__ = "unittest"',
-    "def f(__package__):\n    pass",
-    "global __package__",
-]
-# Run as a script (``python s.py``), the parent package of a relative import comes from __name__
-# ("unittest.zz"): any write or naming of it counts, a plain read does not.
-NAME_WRITES = [
-    '__name__ = "unittest.zz"',
-    '__name__ += "x"',
-    '__name__: str = "unittest.zz"',
-    'globals()["__name__"] = "unittest.zz"',
-    'vars()["__name__"] = "unittest.zz"',
-    'locals()["__name__"] = "unittest.zz"',
-    'globals().update(__name__="unittest.zz")',
-    'globals().update({"__name__": "unittest.zz"})',
-    'setattr(me, "__name__", "unittest.zz")',
-    'delattr(me, "__name__")',
-    "del __name__",
-    'NAME = "__name__"',
-    "from m import __name__ as p",
-    "from m import a as __name__",
-    "import m as __name__",
-    "class __name__:\n    pass",
-    "def __name__():\n    pass",
-    "for __name__ in items:\n    pass",
-    "with ctx() as __name__:\n    pass",
-    "match value:\n    case __name__:\n        pass",
-    'obj.__name__ = "unittest.zz"',
-    "def f(__name__):\n    pass",
-    "global __name__",
-]
-RESOLVING += NAME_WRITES
-RELATIVE = [
-    "from .mock import patch",
-    "from ..mock import patch",
-    "from .mock import *",
-    "from .types import type_ok",
-    "from .types import *",
-]
-
-
-@pytest.mark.parametrize("relative", RELATIVE)
-@pytest.mark.parametrize("resolving", RESOLVING)
-def test_a_file_that_can_repoint_relative_imports_is_scanned_as_before(
-    tmp_path, resolving, relative
-):
-    base, new = _pair(resolving + "\n" + relative)
-    assert _verdict(tmp_path, base, new) == REFUSED
-
-
-def test_the_taint_added_by_the_candidate_counts_too(tmp_path):
-    base, new = _pair("from .mock import patch", validator_rest='\n__package__ = "unittest"\n')
-    assert _verdict(tmp_path, base, new) == REFUSED
-
-
 @pytest.mark.parametrize(
     "line",
     [
@@ -251,4 +174,35 @@ def test_a_comment_naming_the_words_does_not_block(tmp_path, line):
 )
 def test_a_plain_read_of_dunder_name_does_not_block(tmp_path, line):
     base, new = _pair(line)
+    assert _verdict(tmp_path, base, new) is None
+
+
+# Plain uses of the dunder names are ordinary code and never block the exemption (design C':
+# only the judged tree decides; no word list).
+DUNDER_READS = [
+    "class K:\n    def n(self):\n        return type(self).__name__\nfrom .types import type_ok",
+    "def deco(f):\n    wrap = f\n    wrap.label = f.__name__\nfrom .types import type_ok",
+    '"""Logs with getLogger(__name__)."""\nfrom .types import type_ok',
+    "def files(x):\n    return x\nDATA = files(__package__)\nfrom .types import type_ok",
+    "LOADED = __spec__ is not None\nfrom .types import type_ok",
+    "CLS = (1).__class__.__name__\nfrom .types import type_ok",
+    '__all__ = ["check"]\nfrom .types import type_ok',
+    '__version__ = "1.0"\nfrom .types import type_ok',
+    "def q():\n    return q.__qualname__\nfrom .types import type_ok",
+]
+
+
+@pytest.mark.parametrize("line", DUNDER_READS, ids=range(len(DUNDER_READS)))
+def test_ordinary_dunder_uses_in_the_importing_file_pass(tmp_path, line):
+    base, new = _pair(line)
+    assert _verdict(tmp_path, base, new) is None
+
+
+def test_a_changed_test_file_using_dunder_name_in_ids_passes(tmp_path):
+    base, new = _pair("from .types import type_ok")
+    base["tests/test_v.py"] = "def test_a():\n    pass\n"
+    new["tests/test_v.py"] = (
+        'import pytest\n\n\n@pytest.mark.parametrize("x", [1], ids=lambda f: f.__name__)\n'
+        "def test_a(x):\n    pass\n"
+    )
     assert _verdict(tmp_path, base, new) is None

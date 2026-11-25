@@ -1,120 +1,89 @@
-"""Which relative imports of a candidate name the package's own module (#1807).
+"""Which relative imports of a candidate name the package's own module (#1807, design C').
 
 ``from .types import x`` in ``pkg/validator.py`` is the sibling ``pkg/types.py``, not the stdlib
-``types``, so the scan does not compare it with ``IMPORT_MODULES``. That holds only when all of:
+``types``, so the scan does not compare it with ``IMPORT_MODULES``. That holds only when the
+judged trees prove it, by tree resolution alone (no file is read, only ``git ls-tree``):
 
-- the target is in the judged tree: walking from the importing file's directory, every level up
-  to the top-level package has a tracked regular ``__init__.py``, ``level`` stays inside it, and
-  each step of the module path is a tracked ``.py`` file or a tracked package;
-- the top-level package is not named like a standard-library module (a file at
-  ``unittest/x.py`` that says ``from .mock import patch`` runs against the real ``unittest``
-  under ``--import-mode=importlib``);
-- nothing can repoint the resolution: no changed Python file and no file of the top-level package
-  touches ``__package__``, ``__spec__`` or ``__name__`` other than as a plain read of ``__name__``
-  (``__package__ = "unittest"`` in a star-imported sibling, ``v.__package__ = ...`` through a
-  cycle, a script run with ``__name__`` set). A file that cannot be read or parsed counts, and
-  so does a package whose files together exceed ``MAX_TOTAL_BYTES`` (one file ``MAX_FILE_BYTES``)
-  or ``MAX_FILES``: the answer is then "not exempt", never a partial read.
+- from the importing file's directory up to the top-level package, every directory has a tracked
+  regular ``__init__.py`` (mode 100644/100755, no symlink) in BOTH the base and the candidate
+  tree, so an ``__init__.py`` the same change adds, deletes or renames does not count;
+- ``level`` stays inside the top-level package; each step of the module path but the last is a
+  package, and the last is a regular ``.py`` file or a package, in the candidate tree;
+- the top-level package is not named like a standard-library module and is not one of
+  ``candidate_shadow._ALWAYS_SHADOW`` (``pytest``, ``_pytest``, ``pluggy``, ``conftest``, ``py``).
 
-Anything else keeps the module part compared with ``IMPORT_MODULES``, as before. A comment that
-names the words does not count. The taint read covers every tracked file of the top-level
-package (unchanged ones too) and the changed files anywhere, for the words as names or literal
-strings. Not read: unchanged code outside the package, and an unchanged base file that sets those
-attributes through encoded bytes (``exec`` of a bytes constant): the base is the target
-repository's own, and the threat model is an untrusted candidate patch on a trusted base. A top
-level package named like a third-party module (``requests``) is exempt like any other (#1807).
+If either tree cannot be listed nothing resolves: the old rule applies. Anything else keeps the
+module part compared with ``IMPORT_MODULES``.
+
+Threat model: a relative import can only ever load ``top.sub.X``, never a top-level name. A
+changed package-internal file can therefore shadow a stdlib module only if its directory is on
+``sys.path`` or it runs as a script, and that comes from other signals, which still combine with
+shadow files as before. Repointing ``__package__``/``__spec__``/``__name__`` can only make a
+relative import not load the candidate file; reaching a real stdlib module through repointing is
+a pre-existing hole that works without changing any shadow file (Issue #1816), so no word-list
+taint check is made here. Residuals: that hole; base-only ``sys.path`` redirects (scripts,
+``pytest.ini``, ``conftest.py``, ``.pth``); a top-level name is not compared with the packages
+installed in the target environment.
 """
 
 from __future__ import annotations
 
-import ast
 import sys
-import warnings
-from collections.abc import Callable, Iterable
+from collections.abc import Callable
 from pathlib import Path
 
+from cairnwork.candidate_shadow import _ALWAYS_SHADOW  # pyright: ignore[reportPrivateUsage]
 from cairnwork.gitcmd import GitCommandError, run_git
-from cairnwork.sys_path_names import names_resolution_attrs
-from cairnwork.sys_path_scan import MAX_FILES, _read_blobs  # pyright: ignore[reportPrivateUsage]
 
-MAX_FILE_BYTES = 2 << 20  # one source file; a larger one is not read
-MAX_TOTAL_BYTES = 32 << 20  # all files read for one package's taint
 _REGULAR = ("100644", "100755")
-_SOURCE = (".py", ".pyw")
 
 
 class RelativeScope:
-    """Answers, for one judged commit, whether a relative import resolves to the package's own."""
+    """Answers, for one base/candidate pair, whether a relative import is the package's own."""
 
-    def __init__(self, repo: Path, commit: str, changed: Iterable[str]) -> None:
-        self._repo, self._commit = repo, commit
-        self._changed = [p for p in changed if p.endswith(_SOURCE)]
-        self._tree: dict[str, tuple[str, int]] | None = None  # tracked regular file -> (blob, size)
-        self._tainted: dict[str, bool] = {}
+    def __init__(self, repo: Path, base: str, candidate: str) -> None:
+        self._repo, self._base, self._candidate = repo, base, candidate
+        self._trees: tuple[set[str], set[str]] | None = None  # tracked regular files
 
     def resolver(self, path: str) -> Callable[[int, str], bool]:
         """The check the scan calls for each relative import (level, module) of file ``path``."""
         return lambda level, module: self._resolves(path, level, module)
 
-    def _files(self) -> dict[str, tuple[str, int]]:
-        if self._tree is None:
-            self._tree = {}
+    def _files(self) -> tuple[set[str], set[str]]:
+        if self._trees is None:
             try:
-                listing = run_git(
-                    self._repo, "ls-tree", "-r", "-l", "-z", "--full-tree", self._commit
-                )
-                for entry in filter(None, listing.split("\0")):
-                    meta, path = entry.split("\t", 1)
-                    mode, kind, oid, size = meta.split()
-                    if kind == "blob" and mode in _REGULAR and size.isdigit():
-                        self._tree[path] = (oid, int(size))
+                self._trees = (self._list(self._base), self._list(self._candidate))
             except (GitCommandError, OSError, ValueError):
-                self._tree = {}  # nothing resolves: every relative import is scanned as before
-        return self._tree
+                self._trees = (set(), set())  # nothing resolves: scanned as before
+        return self._trees
+
+    def _list(self, commit: str) -> set[str]:
+        listing = run_git(self._repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+        found: set[str] = set()
+        for entry in filter(None, listing.split("\0")):
+            meta, name = entry.split("\t", 1)
+            mode, kind, _oid = meta.split()
+            if kind == "blob" and mode in _REGULAR:
+                found.add(name)
+        return found
 
     def _resolves(self, path: str, level: int, module: str) -> bool:
-        tree, dirs = self._files(), path.split("/")[:-1]
+        base, cand = self._files()
+        dirs = path.split("/")[:-1]
         top = len(dirs)
-        while top > 0 and "/".join([*dirs[:top], "__init__.py"]) in tree:
+        while top > 0 and (init := "/".join([*dirs[:top], "__init__.py"])) in base and init in cand:
             top -= 1
-        if top == len(dirs) or dirs[top] in sys.stdlib_module_names or level < 1:
-            return False  # no package here, or the top-level package is named like the stdlib
-        base = len(dirs) - (level - 1)
-        if base <= top:
+        if top == len(dirs) or level < 1:
+            return False  # no package here
+        if dirs[top] in sys.stdlib_module_names or dirs[top] in _ALWAYS_SHADOW:
             return False
-        cur, parts = dirs[:base], module.split(".")
+        start = len(dirs) - (level - 1)
+        if start <= top:
+            return False  # level climbs out of the top-level package
+        cur, parts = dirs[:start], module.split(".")
         for part in parts[:-1]:
             cur = [*cur, part]
-            if "/".join([*cur, "__init__.py"]) not in tree:
+            if "/".join([*cur, "__init__.py"]) not in cand:
                 return False
         last = "/".join([*cur, parts[-1]])
-        found = f"{last}.py" in tree or f"{last}/__init__.py" in tree
-        return found and not self._taint("/".join(dirs[: top + 1]))
-
-    def _taint(self, package: str) -> bool:
-        """Whether a changed file or a file of ``package`` can repoint a relative import."""
-        if package not in self._tainted:
-            tree = self._files()
-            inside = [p for p in tree if p.startswith(package + "/") and p.endswith(_SOURCE)]
-            paths = sorted({*inside, *(p for p in self._changed if p in tree)})
-            sizes = [tree[p][1] for p in paths]
-            too_big = len(paths) > MAX_FILES or sum(sizes) > MAX_TOTAL_BYTES
-            too_big = too_big or any(size > MAX_FILE_BYTES for size in sizes)
-            self._tainted[package] = too_big or _repoints(self._repo, [tree[p][0] for p in paths])
-        return self._tainted[package]
-
-
-def _repoints(repo: Path, oids: list[str]) -> bool:
-    blobs = _read_blobs(repo, list(dict.fromkeys(oids)))
-    if blobs is None:
-        return True
-    for data in blobs:
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                tree = ast.parse(data)
-        except (SyntaxError, ValueError, RecursionError, MemoryError):
-            return True
-        if any(names_resolution_attrs(node) for node in ast.walk(tree)):
-            return True
-    return False
+        return f"{last}.py" in cand or f"{last}/__init__.py" in cand
