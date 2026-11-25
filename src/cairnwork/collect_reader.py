@@ -25,6 +25,8 @@ from dataclasses import dataclass
 from cairnwork import survivor_argv
 from cairnwork.node_file import file_part, name_part
 
+SURVIVORS_WHY = "collect-survivors"
+
 
 @dataclass(frozen=True)
 class Collected:
@@ -41,7 +43,7 @@ def read_collected(run) -> Collected:
         raise ValueError(f"{run.spec.verifier_id}: not a collect-only run")
     why = _unclean(run)
     if why:
-        if why == "collect-survivors":  # #1819: name what outlived collection (text only)
+        if why == SURVIVORS_WHY:  # #1819: name what outlived collection (text only)
             why += survivor_argv.listing(run.survivors)
         return Collected(unusable=why)
     targets = frozenset(run.spec.targets)
@@ -92,7 +94,7 @@ def _unclean(run) -> str:
     for why, bad in (
         ("collect-forged", run.forged),
         ("collect-timeout", run.timed_out),
-        ("collect-survivors", run.survivors),
+        (SURVIVORS_WHY, run.survivors),
         ("collect-mutated", run.mutated),
         ("collect-over-cap", run.report_too_big or run.log_too_big),
         ("collect-not-recorded", not run.recorded),

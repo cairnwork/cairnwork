@@ -21,9 +21,17 @@ def test_a_survivor_count_without_evidence_keeps_the_bare_reason(survivors):
 
 
 @pytest.mark.parametrize(
-    "change",
-    [{"timed_out": True}, {"forged": ("x",)}, {"mutated": ("src/a.py",)}, {"returncode": 1}],
+    ("change", "why"),
+    [
+        ({"timed_out": True}, "collect-timeout"),
+        ({"forged": ("x",)}, "collect-forged"),
+        ({"mutated": ("src/a.py",)}, "collect-mutated"),
+        ({"returncode": 1}, "collect-rc-1"),
+    ],
 )
-def test_other_refusals_never_carry_a_survivor_listing(change):
-    got = read_collected(fake(survivors=Survivors(0, ("sleep 30",), ("alive",)), **change))
-    assert "argv" not in got.unusable
+@pytest.mark.parametrize("count", [0, 2])
+def test_other_refusals_keep_their_own_word_and_no_listing(change, why, count):
+    got = read_collected(fake(survivors=Survivors(count, ("sleep 30",), ("alive",)), **change))
+    if count and why in ("collect-mutated", "collect-rc-1"):  # survivors rank before these
+        why = "collect-survivors (argv: sleep 30; reason: alive)"
+    assert got.unusable == why
