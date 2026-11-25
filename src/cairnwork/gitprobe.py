@@ -35,7 +35,11 @@ DEFAULT_PROTOCOLS = ("https", "ssh")
 def fetch_commit(origin: str | None, oid: str, *, protocols=DEFAULT_PROTOCOLS) -> Path:
     """Fetch an object in verifier-owned storage and return its bare repo path."""
     if not origin:
-        raise OSError("no verifier-owned origin configured")
+        raise OSError(
+            "no verifier-owned origin configured: set origin_url in the state config.json, or "
+            "import the tests first (cairnwork-verify import-tests); the repo's own remote "
+            "is not used"
+        )
     root = Path(tempfile.mkdtemp(prefix="cairnwork-test-fetch-"))
     try:
         options = ["-c", "core.hooksPath=/dev/null", "-c", "protocol.allow=never"]
