@@ -61,12 +61,16 @@ class VerifierSpec:
     # it when it reads the guard's collection record (collect_stop.py), so a test cannot tell it
     # from the run that executes it
     announce: bool = True
+    # #1768: directories a collect-only run leaves out (--ignore), so a directory target brings in
+    # only the files the P2P run covers; never set on a run that executes tests
+    ignore: tuple[str, ...] = ()
 
     def flags(self) -> tuple[str, ...]:
         """The pytest options these two fields add to the verifier's command line."""
         return (
             *(("--collect-only",) if self.collect_only and self.announce else ()),
             *(("--continue-on-collection-errors",) if self.continue_on_collect_errors else ()),
+            *(f"--ignore={d}" for d in self.ignore),
         )
 
 

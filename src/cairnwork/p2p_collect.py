@@ -41,6 +41,7 @@ from pathlib import Path
 
 from cairnwork import p2p_classify_child as _classify_child
 from cairnwork.child_run import GAUGE_FAILED, run_child
+from cairnwork.collect_parity import file_parity
 from cairnwork.collect_reader import _valid_exposed_id, read_collected
 from cairnwork.conftest_check import conftest_of
 from cairnwork.deferred_tests import BaseUncomparable, Comparison, TestCommitRejected
@@ -91,6 +92,7 @@ class CollectedSide:
 
 def collected_side(task, files, outcomes, test_files, ctx, budget, attempt_id) -> CollectedSide:
     """The test-commit side of the selected ``files``; see the module docstring."""
+    file_parity(task, files, ctx, budget, attempt_id)  # #1768: a counted file pytest never collects
     base_ids = frozenset(outcomes)
     present = _present(task, files)
     test_ids: frozenset[str] = frozenset()
