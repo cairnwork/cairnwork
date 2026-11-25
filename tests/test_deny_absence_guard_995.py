@@ -5,22 +5,20 @@ tables below list every file under ``src/`` that may touch it today, and how. A 
 here on purpose: ask ``Evidence.denial_of(operation, target)`` (DENIED or UNKNOWN) and add the file
 to the tables with a reason, in the change that lets a verdict read the channel.
 The scan is syntactic: it cannot follow a value through every indirection, so it is a tripwire for
-the usual shapes (and fails closed on the carrier names), not a proof. Not covered: a name built
-at run time (getattr(ev, 'den' + 'ied')), a CLEAN set imported from another module, a helper
-that tests its own argument, ``from x import *``, and presence-style reads that name no CLEAN
-(``ev.state != 'DENIED'``, ``ev.detail == ''``), evidence turned into text another way
-(``f'{ev}'``, ``repr(ev)``, ``format(ev)``, ``'%s' % ev``), a CLEAN held as a default, loop
-variable, walrus or class attribute, ``''.join([...])`` or ``f'CL{"EAN"}'``, and a helper that
-returns ``e.state``. A carrier name may be passed as a keyword value to a call that builds a
-value, held as a field, tested bare in an ``if`` whose body only calls ``append`` or a logger, or
-put in an f-string that is an argument of such a logging call; a bare call argument is refused
-because the callee could be len, bool or re.match. An alias of the ``denied`` attribute is
-tracked through assignment, tuple, walrus and loop targets (#1797) and refused as a keyword value;
-an attribute store (``self.x = ev.denied``) marks its base name (``self``). Also followed:
-``async for``, ``with``/``async with`` targets, ``except ... as``, ``match`` captures, ``f(*d)``,
-and ``.eperm_paths`` (the same dict as ``.denied``, readable only in the files of EPERM_READERS).
-Not followed: a class attribute, a function return, ``map``/``partial`` positional hand-off, a
-default argument, ``vars()``/``__dict__``.
+the usual shapes (and fails closed on the carrier names), not a proof. Not covered: a name built at
+run time (getattr(ev, 'den' + 'ied')), a CLEAN set imported from another module, a helper that tests
+its own argument, ``from x import *``, and presence-style reads that name no CLEAN (``ev.state !=
+'DENIED'``, ``ev.detail == ''``), evidence turned into text another way (``f'{ev}'``, ``repr(ev)``,
+``format(ev)``, ``'%s' % ev``), a CLEAN held as a default, loop variable, walrus or class attribute,
+``''.join([...])`` or ``f'CL{"EAN"}'``, and a helper that returns ``e.state``. A carrier name may be
+passed as a keyword value to a call that builds a value, held as a field, tested bare in an ``if``
+whose body only calls ``append`` or a logger, or put in an f-string that is an argument of such a
+logging call; a bare call argument is refused because the callee could be len, bool or re.match. An
+alias of ``denied`` is tracked through assignment (also tuple, augmented, walrus), ``for``/``async
+for``, ``with``/``async with``, ``except ... as`` and ``match`` captures (#1797), and refused as a
+keyword value or in ``f(*d)``; ``self.x = ev.denied`` marks ``self``. ``.eperm_paths`` is the same
+dict: readable only in the files of EPERM_READERS. Not followed: a class attribute, a function
+return, ``map``/``partial`` positional hand-off, a default argument, ``vars()``/``__dict__``.
 """
 
 import ast
@@ -37,14 +35,13 @@ NAMES = {  # carrier name -> files that may hold it (record, pass on, log), neve
         "cairnwork/pipeline_judge.py",  # logs it only
     },
 }
-# Verdict.eperm_paths is the same dict as .denied under another name (#1781): the same rules apply,
-# except in the files that may touch it. Only base_teeth.py reads it (it words BASE_ENV_ERROR).
+# Verdict.eperm_paths is .denied under another name (#1781): same rules, except in these files.
 EPERM_READERS = {
     "cairnwork/base_teeth.py": "words a BASE_ENV_ERROR; never decides a verdict",
     "cairnwork/verdict_record.py": "defines the property",
     "cairnwork/verifiers.py": "copies it into the run record, no judgment",
 }
-IMPORTS = {"cairnwork/verifier_exec.py"}  # who may import a deny_* module (it records)
+IMPORTS = {"cairnwork/verifier_exec.py"}  # who may import a deny_* module
 LOGGERS = {"log", "append", "warning", "info", "debug", "error", "exception", "critical"}
 READERS = {  # calls that read what they are given: a carrier never goes to these by keyword
     *("str", "bool", "len", "sorted", "dict", "frozenset", "set", "list", "tuple", "repr"),
@@ -194,12 +191,9 @@ def _has_denied(node, names, attrs=("denied",)):
 
 def _captures(match):
     """The names a ``match`` statement's patterns bind."""
-    return [
-        name
-        for n in ast.walk(match)
-        for name in (getattr(n, "name", None), getattr(n, "rest", None))
-        if isinstance(n, ast.MatchAs | ast.MatchStar | ast.MatchMapping) and isinstance(name, str)
-    ]
+    kinds = ast.MatchAs | ast.MatchStar | ast.MatchMapping
+    names = [getattr(n, "name", None) or getattr(n, "rest", None) for n in ast.walk(match)]
+    return [c for n, c in zip(ast.walk(match), names, strict=True) if isinstance(n, kinds) and c]
 
 
 def _denied_aliases(tree, attrs=("denied",)):
@@ -265,13 +259,9 @@ def _findings(tree, rel):
         elif name in NAMES and isinstance(node, ast.Attribute | ast.Name | ast.Constant):
             if not _allowed_use(node, parent):
                 add(node, f"reads {name} beyond passing it on")
-        if isinstance(node, ast.keyword) and kept and _has_denied(node.value, kept, attrs):
-            add(node.value, "hands denied to a caller")  # #1797: an alias as a keyword value
-        if isinstance(node, ast.Call) and kept:  # f(*d): a spread reads it too
-            if any(
-                isinstance(a, ast.Starred) and _has_denied(a.value, kept, attrs) for a in node.args
-            ):
-                add(node, "hands denied to a caller")
+        if kept and isinstance(node, ast.keyword | ast.Starred):  # #1797: f(x=d), f(*d)
+            if _has_denied(node.value, kept, attrs):
+                add(node.value, "hands denied to a caller")
         if rel not in EPERM_READERS and (
             (isinstance(node, ast.Attribute) and node.attr == "eperm_paths")
             or (isinstance(node, ast.Constant) and node.value == "eperm_paths")
@@ -356,9 +346,7 @@ def test_every_table_entry_is_still_used():
 
 
 def test_the_exempt_files_exist():
-    assert all((SRC / rel).is_file() for rel in EXEMPT), (
-        "a renamed file would hand its exemption on"
-    )
+    assert all((SRC / rel).is_file() for rel in EXEMPT), "a rename would hand its exemption on"
 
 
 def _flags(source):
@@ -366,55 +354,34 @@ def _flags(source):
 
 
 MUST_BLOCK = [  # #1797: an alias of the deny-evidence attribute read as a keyword value
-    "d = ev.denied\nf(x=d)",
-    "d = ev.denied\ne = d\nf(x=e)",  # alias of an alias
-    "a, b = ev.denied, 1\nf(x=a)",  # tuple target
-    "d = ev.denied if ok else None\nf(x=d)",
-    "d = [ev.denied]\nf(x=d[0])",  # held in a list, read by index
-    "d = {'k': ev.denied}\nf(x=d['k'])",
-    "(d := ev.denied)\nf(x=d)",
-    "for d in (ev.denied,):\n    f(x=d)",
-    "d = ev.denied\nf(x=d if ok else None)",  # inside a conditional value
-    "d = ev.denied\nf(x=(d))",
-    "d = ev.denied\nf(x=lambda o, t: d(o, t))",
-    "d = ev.denied\nf(x=[d])",  # inside a container value
-    "d = ev.denied\ne = (d,)\nf(x=e)",
-    "d = ev.denied\nf(**{'x': d})",  # splatted into keywords
-    "f(x=v.eperm_paths)",  # the same dict under another name
-    "d = v.eperm_paths\nf(x=d)",
-    "x = v.eperm_paths",  # outside the table, any read
-    "async def g():\n    async for d in src(ev.denied):\n        f(x=d)",
-    "async def g():\n    async with hold(ev.denied) as d:\n        f(x=d)",
-    "try:\n    pass\nexcept ev.denied as d:\n    f(x=d)",
-    "match ev.denied:\n    case d:\n        f(x=d)",
-    "d = ev.denied\nf(*d)",
-    "d = {}\nd |= ev.denied\nf(x=d)",  # augmented assignment
-    "d = []\nd += [ev.denied]\nf(x=d[0])",
-    "with hold(ev.denied) as d:\n    f(x=d)",  # a with target
-    "e = d\nd = ev.denied\nf(x=e)",  # the alias is written before its source
-]
+    'd = ev.denied\nf(x=d)', 'd = ev.denied\ne = d\nf(x=e)', 'a, b = ev.denied, 1\nf(x=a)',
+    'd = ev.denied if ok else None\nf(x=d)', 'd = [ev.denied]\nf(x=d[0])',
+    "d = {'k': ev.denied}\nf(x=d['k'])", '(d := ev.denied)\nf(x=d)',
+    'for d in (ev.denied,):\n    f(x=d)', 'd = ev.denied\nf(x=d if ok else None)',
+    'd = ev.denied\nf(x=(d))', 'd = ev.denied\nf(x=lambda o, t: d(o, t))',
+    'd = ev.denied\nf(x=[d])', 'd = ev.denied\ne = (d,)\nf(x=e)', "d = ev.denied\nf(**{'x': d})",
+    'f(x=v.eperm_paths)', 'd = v.eperm_paths\nf(x=d)', 'x = v.eperm_paths',
+    'async def g():\n    async for d in src(ev.denied):\n        f(x=d)',
+    'async def g():\n    async with hold(ev.denied) as d:\n        f(x=d)',
+    'try:\n    pass\nexcept ev.denied as d:\n    f(x=d)',
+    'match ev.denied:\n    case d:\n        f(x=d)', 'd = ev.denied\nf(*d)',
+    'd = {}\nd |= ev.denied\nf(x=d)', 'd = []\nd += [ev.denied]\nf(x=d[0])',
+    'with hold(ev.denied) as d:\n    f(x=d)', 'e = d\nd = ev.denied\nf(x=e)',
+]  # fmt: skip
 MUST_PASS = [  # today's legal shapes: no alias, or never a keyword value
-    "f(ev.denial_of('open', '/x'))",
-    "d = ev.denied\nf(d)",  # positional (verifiers.py hands the report plugin's record on so)
-    "d = other.value\nf(x=d)",  # an alias of something else
-    "f(denied=3)",  # a keyword that is merely named denied
-    "x = 1\nd = ev.denied\ny = x\nf(k=y)",  # y never came from the attribute
-    "a, b = ev.denied, 1\nf(x=b)",  # the other half of a tuple pair
-    "d = 0\nd += 1\nf(x=d)",  # an augmented assignment of something else
-    "f(denied=other)",
-    "f(x=v.setup_denied)",
+    "f(ev.denial_of('open', '/x'))", 'd = ev.denied\nf(d)', 'd = other.value\nf(x=d)',
+    'f(denied=3)', 'x = 1\nd = ev.denied\ny = x\nf(k=y)', 'a, b = ev.denied, 1\nf(x=b)',
+    'd = 0\nd += 1\nf(x=d)', 'f(denied=other)', 'f(x=v.setup_denied)',
     "f(x=ev.denial_of('open', p))",
-]
+]  # fmt: skip
 
 
 def test_an_alias_of_denied_read_as_a_keyword_value_is_found():
-    missed = [s for s in MUST_BLOCK if not _flags(s)]
-    assert missed == []
+    assert [s for s in MUST_BLOCK if not _flags(s)] == []
 
 
 def test_the_legal_shapes_stay_unflagged():
-    wrongly = [s for s in MUST_PASS if _flags(s)]
-    assert wrongly == []
+    assert [s for s in MUST_PASS if _flags(s)] == []
 
 
 def test_an_augmented_or_with_alias_is_found():
@@ -423,7 +390,7 @@ def test_an_augmented_or_with_alias_is_found():
 
 
 def test_an_alias_bound_before_its_source_is_found():
-    assert _flags("e = d\nd = ev.denied\nf(x=e)")
+    assert _flags("e = d\nd = ev.denied\nf(x=e)")  # the loop must run a second round
 
 
 def test_eperm_paths_is_read_only_where_the_table_says():
@@ -431,9 +398,3 @@ def test_eperm_paths_is_read_only_where_the_table_says():
     assert not [f for f in _findings(ast.parse(src), "cairnwork/base_teeth.py") if "denied" in f]
     assert _flags(src)  # the same line anywhere else is refused
     assert all((SRC / rel).is_file() for rel in EPERM_READERS)
-
-
-def test_async_and_with_and_match_aliases_are_found():
-    for source in MUST_BLOCK:
-        if "async" in source or "except" in source or "match" in source or "*d" in source:
-            assert _flags(source), source
