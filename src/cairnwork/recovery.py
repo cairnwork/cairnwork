@@ -37,6 +37,7 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -267,9 +268,14 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
     def real(p: Path) -> bool:
         return p.is_symlink() or p.is_dir()
 
-    works = [w for pattern in patterns for w in root.glob(f"{pattern}.work") if real(w)]
+    listed = os.listdir(root)  # raises when the root cannot be listed: Path.glob answers [] (3.14)
+
+    def glob(pattern: str) -> list[Path]:
+        return [root / n for n in listed if fnmatch.fnmatchcase(n, pattern)]
+
+    works = [w for pattern in patterns for w in glob(f"{pattern}.work") if real(w)]
     privates = []
-    for private in (p for pattern in patterns for p in root.glob(f"{pattern}.*")):  # P2P too
+    for private in (p for pattern in patterns for p in glob(f"{pattern}.*")):  # P2P too
         if private.suffix == ".work" or not real(private):
             continue
         # a base-test or P2P run is not Core evidence and would show the tests: all of it goes
@@ -278,7 +284,7 @@ def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list
         )  # #1698: run directories no longer carry the run id; the Core run's has a mark
         privates.append(private / "run" if keep_log else private)
     clones = sorted(
-        p for pattern in patterns for p in root.glob(pattern) if real(p) and "." not in p.name
+        p for pattern in patterns for p in glob(pattern) if real(p) and "." not in p.name
     )
     return works, privates, clones
 

@@ -103,3 +103,49 @@ def test_no_verifier_account_leaves_the_result_unchanged(tmp_path, monkeypatch):
     _orphan(tmp_path)
     monkeypatch.setattr(Intake, "verifier_account", lambda self: None)
     assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+
+
+# the root can be searched before and after, but the listing itself fails once in between
+def _listing_fails(monkeypatch):
+    import sys
+
+    from cairnwork import recovery
+
+    real = os.listdir
+
+    def listdir(path="."):
+        frame = sys._getframe(1)
+        while frame is not None:
+            if frame.f_code.co_name == "_run_dirs":
+                raise PermissionError(13, "Permission denied", str(path))
+            frame = frame.f_back
+        return real(path)
+
+    monkeypatch.setattr(recovery.os, "listdir", listdir)
+
+
+def test_a_listing_that_fails_between_two_good_checks_is_a_leftover_not_clean(
+    tmp_path, monkeypatch
+):
+    marker = _orphan(tmp_path)
+    root = tmp_path / "runs"
+    (root / f"{AID}-v-v0").mkdir(parents=True)
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: None)  # only the owner's root
+    _listing_fails(monkeypatch)
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID] and marker.exists()
+    assert out["leftovers"] == {AID: [UNSEARCHABLE]}
+    assert _leftover_names(root, AID) == [UNSEARCHABLE]
+
+
+def test_recover_listing_fails_between_checks_counts_a_leftover(project, tmp_path, monkeypatch):  # noqa: F811
+    crash(project, tmp_path, "WORKER_STARTED")
+    attempt = own_attempt(tmp_path)
+    root = tmp_path / "runs"
+    root.mkdir(exist_ok=True)
+    (root / f"{attempt}-v-v0").mkdir()
+    _listing_fails(monkeypatch)
+    ledger, notary, journal = stores(tmp_path)
+    (decision,) = recover(ledger=ledger, notary=notary, journal=journal, run_root=root)
+    assert "RECOVERY_ERROR" not in decision.detail
+    assert decision.leftover_run_dirs >= 1 and UNSEARCHABLE in decision.detail
