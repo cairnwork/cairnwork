@@ -168,3 +168,65 @@ def test_a_canonical_start_mark_is_trusted(tmp_path, monkeypatch, mark):
     _hidden_old_process(monkeypatch)
     assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
     assert not marker.exists()
+
+
+# the verifier account's own run root: clones made by the account are looked for there too
+class _Account:
+    def __init__(self, run_root):
+        self.run_root = run_root
+        self.removed = []
+
+    def remove(self, path):
+        import shutil
+
+        self.removed.append(path)
+        shutil.rmtree(path, ignore_errors=True)
+
+
+def _with_account(monkeypatch, account):
+    monkeypatch.setattr(Intake, "verifier_account", lambda self: account)
+
+
+def test_an_account_side_clone_that_cannot_be_removed_keeps_the_attempt(tmp_path, monkeypatch):
+    marker = _orphan(tmp_path)
+    runs = tmp_path / "acct-runs"
+    clone = runs / f"{AID}-v-v0"
+    (clone / "inner").mkdir(parents=True)
+    os.chmod(runs, 0o500)  # nothing under it can be deleted
+    _with_account(monkeypatch, _Account(runs))
+    try:
+        out = module.cleanup(Intake(tmp_path))
+    finally:
+        os.chmod(runs, 0o700)
+    assert out["cleaned"] == [] and out["kept"] == [AID]
+    assert out["leftovers"] == {AID: [f"{AID}-v-v0"]}
+    assert marker.exists()
+
+
+def test_an_account_side_clone_that_is_removed_lets_the_attempt_be_cleaned(tmp_path, monkeypatch):
+    marker = _orphan(tmp_path)
+    runs = tmp_path / "acct-runs"
+    (runs / f"{AID}-v-v0" / "inner").mkdir(parents=True)
+    (runs / f"{AID}-v-v0.work").mkdir()
+    account = _Account(runs)
+    _with_account(monkeypatch, account)
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert not marker.exists() and not (runs / f"{AID}-v-v0").exists() and account.removed
+
+
+def test_an_account_root_that_cannot_be_checked_keeps_the_attempt(tmp_path, monkeypatch):
+    marker = _orphan(tmp_path)
+
+    def refused(self):
+        raise RuntimeError("BAD_VERIFIER_ACCOUNT: untrusted verifier root")
+
+    monkeypatch.setattr(Intake, "verifier_account", refused)
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID] and marker.exists()
+    assert AID in out["leftovers"]
+
+
+def test_no_verifier_account_leaves_the_owner_side_result_unchanged(tmp_path, monkeypatch):
+    _orphan(tmp_path)
+    _with_account(monkeypatch, None)
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
