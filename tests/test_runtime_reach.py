@@ -198,7 +198,7 @@ def test_a_file_less_plugin_named_after_a_changed_conftest_is_left_to_the_confte
     check_runtime_reach(rec(root, plugins=[("sub.conftest", None)]), ["sub/conftest.py"])
 
 
-# review round 4 (cross-family): case folding only where the base has no exact file; packages; messages
+# review round 4: case folds only where the base has no exact file; plugin packages; messages
 LIB, UP = "data/lib.zip", "data/Lib.zip"
 BOTH = frozenset({LIB, UP, "plug/helper.py"})  # a case-sensitive base holding both spellings
 
@@ -224,14 +224,18 @@ def refused_with(record, changed, base_paths, added=()):
     return str(caught.value)
 
 
-@pytest.mark.parametrize("changed", ["vendor/PKG/HELPER.py", "vendor/pkg/Helper.py", "PKG/helper.py"])
+@pytest.mark.parametrize(
+    "changed", ["vendor/PKG/HELPER.py", "vendor/pkg/Helper.py", "PKG/helper.py"]
+)
 def test_a_file_less_plugin_matches_a_case_variant_of_its_file(root, changed):
     refused_with(rec(root, plugins=[("pkg.helper", None)]), [changed], frozenset({changed}))
 
 
 def test_a_file_less_plugin_passes_a_case_variant_when_the_exact_file_exists_too(root):
     both = frozenset({"vendor/pkg/helper.py", "vendor/PKG/HELPER.py"})
-    check_runtime_reach(rec(root, plugins=[("pkg.helper", None)]), ["vendor/PKG/HELPER.py"], base_paths=both)
+    check_runtime_reach(
+        rec(root, plugins=[("pkg.helper", None)]), ["vendor/PKG/HELPER.py"], base_paths=both
+    )
     refused_with(rec(root, plugins=[("pkg.helper", None)]), ["vendor/pkg/helper.py"], both)
 
 

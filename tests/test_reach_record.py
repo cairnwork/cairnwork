@@ -305,3 +305,11 @@ def test_a_changed_conftest_the_base_ran_as_a_plugin_is_left_to_the_conftest_rul
     """Pins runtime_reach's conftest exclusion through the whole path."""
     Runs(monkeypatch, [_record(task, plugin="tests/conftest.py")])
     check(task, ("tests/conftest.py", "tests/data/lib.zip"))
+
+
+def test_the_base_file_list_reaches_the_reach_check(task, monkeypatch):
+    seen = []
+    monkeypatch.setattr(bfn, "check_runtime_reach", lambda *a: seen.append(a))
+    Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/data/lib.zip",))
+    assert "tests/data/lib.zip" in seen[0][3] and "tests/test_a.py" in seen[0][3]

@@ -56,9 +56,18 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
     record, complete = reach_record(ctx, task, on_base, run_id)
     if record is None:
         return  # no run, no evidence: the static verdict stands
-    check_runtime_reach(record, on_base, added)
+    check_runtime_reach(record, on_base, added, _base_paths(task))
     if not complete:  # fail closed: a record that left out a changed file or part of the tree
         raise TestCommitRejected(CODE, "the base run did not cover every changed or base test file")
+
+
+def _base_paths(task) -> tuple[str, ...] | None:
+    """Every file of the base (None when unreadable: a case variant then counts as the same file)."""
+    try:
+        raw = run_git_bytes(task.repo, "ls-tree", "-r", "--name-only", "-z", task.base_commit)
+        return tuple(p for p in raw.decode("utf-8", "surrogateescape").split("\0") if p)
+    except Exception:  # noqa: BLE001 - unknown base: the folded match stands
+        return None
 
 
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
