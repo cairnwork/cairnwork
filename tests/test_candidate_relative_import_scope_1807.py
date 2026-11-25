@@ -184,22 +184,70 @@ def test_an_init_that_puts_its_directory_on_sys_path_next_to_a_shadow_file_is_re
     assert _verdict(tmp_path, base, new) == REFUSED
 
 
-def test_repointing_hole_is_the_pre_existing_one_tracked_in_1816(tmp_path):
-    """Passes here, main refuses it. Repointing ``__package__`` can only make a relative import
-    not load the candidate file; reaching a real stdlib module that way works without changing
-    any shadow file. This is the pre-existing hole tracked in Issue #1816, a documented
-    residual of design C' (no taint check)."""
+_PK = {"pkg/__init__.py": "", "pkg/mock.py": MOCK, "pkg/types.py": TYPES}
+_EDIT = {"pkg/types.py": TYPES + "\nEXTRA = 1\n"}
+
+
+@pytest.mark.parametrize(
+    ("validator", "also_edit_types"),
+    [
+        (
+            'import pkg.validator as me\nme.__setattr__("__pack" + "age__", "unittest")\n'
+            "from .mock import patch\n",
+            True,
+        ),
+        (
+            "from . import validator as _me\n"
+            'setattr(_me, "__" + "package__", "unittest")\nfrom .mock import patch\n',
+            True,
+        ),
+        (
+            "from . import validator as _me\n"
+            'setattr(_me, "__" + "package__", "unittest")\nfrom .mock import patch\n',
+            False,
+        ),
+        ('__package__ = "unittest"\nfrom .mock import patch\n', True),
+        ('__package__ = "asyncio"\nfrom .subprocess import create_subprocess_exec\n', True),
+    ],
+)
+def test_repointed_relative_import_of_a_stdlib_package_submodule_stays_refused(
+    tmp_path, validator, also_edit_types
+):
+    """A relative import whose first step is named like a stdlib machinery sub-module
+    (``unittest.mock``, ``asyncio.subprocess``, ``trace``) keeps the old comparison, so a file
+    that repoints its package context cannot reach the real module (main refuses these too)."""
+    base = {**_PK, "pkg/validator.py": "X = 1\n", "pkg/subprocess.py": "X = 1\n"}
+    new = {"pkg/validator.py": validator} | (_EDIT if also_edit_types else {})
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_a_target_above_the_top_package_is_not_exempt(tmp_path):
     base = {
+        "types.py": TYPES,
         "pkg/__init__.py": "",
-        "pkg/mock.py": MOCK,
         "pkg/types.py": TYPES,
         "pkg/validator.py": "X = 1\n",
     }
+    new = {"pkg/types.py": TYPES + "\nEXTRA = 1\n", "pkg/validator.py": "from ..types import X\n"}
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_a_namespace_step_in_the_module_path_is_not_exempt(tmp_path):
+    base = {"pkg/__init__.py": "", "pkg/types/inner.py": TYPES, "pkg/validator.py": "X = 1\n"}
     new = {
-        "pkg/types.py": TYPES + "\nEXTRA = 1\n",
-        "pkg/validator.py": (
-            'import pkg.validator as me\nme.__setattr__("__pack" + "age__", "unittest")\n'
-            "from .mock import patch\n"
-        ),
+        "pkg/types/inner.py": TYPES + "\nEXTRA = 1\n",
+        "pkg/validator.py": "from .types.inner import X\n",
     }
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_a_top_package_named_like_stdlib_in_another_case_is_not_exempt(tmp_path):
+    base = {"Inspect/__init__.py": "", "Inspect/types.py": TYPES, "Inspect/v.py": "X = 1\n"}
+    new = {"Inspect/types.py": TYPES + "\nEXTRA = 1\n", "Inspect/v.py": "from .types import X\n"}
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_a_sibling_named_like_the_stdlib_but_not_machinery_stays_exempt(tmp_path):
+    base = {**_PK, "pkg/validator.py": "X = 1\n"}
+    new = _EDIT | {"pkg/validator.py": "from .types import X\n"}
     assert _verdict(tmp_path, base, new) is None

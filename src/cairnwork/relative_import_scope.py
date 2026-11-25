@@ -28,16 +28,37 @@ installed in the target environment.
 
 from __future__ import annotations
 
+import importlib.util
+import pkgutil
 import sys
 from collections.abc import Callable
+from functools import cache
 from pathlib import Path
 
 from cairnwork.candidate_shadow import _ALWAYS_SHADOW  # pyright: ignore[reportPrivateUsage]
 from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.gitcmd import GitCommandError
+from cairnwork.sys_path_names import IMPORT_MODULES
 
 _REGULAR = ("100644", "100755")
 _BARRED = {n.casefold() for n in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
+
+
+@cache
+def _machinery_leaves() -> frozenset[str]:
+    """Names of stdlib sub-modules (``unittest.mock``, ``asyncio.subprocess``) that are also
+    IMPORT_MODULES names: a package whose context is repointed at a stdlib package would load
+    that real module through ``from .mock import x``, so such a first step is not exempt."""
+    bare = {name for name in IMPORT_MODULES if "." not in name} - {"types"}
+    found: set[str] = set()
+    for top in sorted(sys.stdlib_module_names):
+        try:
+            spec = importlib.util.find_spec(top)
+        except (ImportError, ValueError, AttributeError):
+            continue
+        for info in pkgutil.iter_modules(spec.submodule_search_locations or [] if spec else []):
+            found.add(info.name)
+    return frozenset(found & bare)
 
 
 class RelativeScope:
@@ -85,6 +106,8 @@ class RelativeScope:
         if start <= top:
             return False  # level climbs out of the top-level package
         cur, parts = dirs[:start], module.split(".")
+        if parts[0] in _machinery_leaves():
+            return False  # may be a repointed stdlib package: the old comparison applies
         for part in parts[:-1]:
             cur = [*cur, part]
             if "/".join([*cur, "__init__.py"]) not in cand:
