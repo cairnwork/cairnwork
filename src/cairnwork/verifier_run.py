@@ -46,6 +46,7 @@ class VerifierRun:
     deny_evidence: str = ""  # #797 step 1: a base run's deny channel (deny_channel.py); not hashed
     deny_denials: frozenset[tuple[str, str]] = frozenset()  # #991: its exact denials; not hashed
     setup_denied: dict[str, tuple[str, str, int]] = field(default_factory=dict)  # #962; unhashed
+    denied: dict[str, str] = field(default_factory=dict)  # #1781: node -> EPERM path; wording only
     data_refused: tuple[str, ...] = ()  # #850: declared data was executed: never a pass
     not_run: tuple[str, ...] = ()  # #962 R0b: named targets or skipped collectors missing
     renamed: tuple[str, ...] = ()  # #962 R0b: items changed after collection

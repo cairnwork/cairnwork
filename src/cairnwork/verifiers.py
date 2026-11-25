@@ -380,7 +380,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
-        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big,
+        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big, denied=verdict.denied,
         notes=(profile.notes if profile else ()) + host_notes(),
         collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,

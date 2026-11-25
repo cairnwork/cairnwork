@@ -29,3 +29,4 @@ def test_the_verify_cli_needs_origin_url_in_state_config(
     else:  # the repo's own remote is not an origin source
         assert code != 0 and out["status"] in ("INFRA_ERROR", "FAILED"), json.dumps(out)
         assert "no verifier-owned origin" in json.dumps(out)
+        assert "import-tests" in json.dumps(out) and "origin_url" in json.dumps(out)  # #1781
