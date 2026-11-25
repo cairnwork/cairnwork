@@ -346,8 +346,8 @@ def _account_uid(account: str) -> int | None:
 
 def _processes_with_environment():
     """[(pid, pgid, effective uid, set of 'NAME=value' tokens or None if unreadable)], or None
-    if the table cannot be read. A zombie runs nothing: ps rows of one are left out, and on
-    Linux its environment reads empty."""
+    if the table cannot be read. A zombie (every thread in state Z) runs nothing: both
+    tables leave it out. A process with a live thread stays, whatever its main thread shows."""
     if sys.platform.startswith("linux"):
         return _linux_processes()
     # One attempt, no retry: this sweep kills by token only after the read, so waiting for a
