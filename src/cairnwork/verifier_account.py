@@ -265,7 +265,7 @@ class VerifierAccount:
         except (OSError, subprocess.SubprocessError):
             return survivor_argv.Survivors(1)
         count = max(before, 0) + 1 if before < 0 or left != 0 else max(before - main, 0)
-        return survivor_argv.Survivors(count, *seen) if count else survivor_argv.Survivors(0)
+        return verifier_seen.result(count, seen, main)
 
     def kill_all(self, attempts: int = 5) -> int:
         """SIGKILL every process of the account; return how many ESCAPED processes are left (-1:

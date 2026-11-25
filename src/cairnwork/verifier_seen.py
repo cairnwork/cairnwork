@@ -40,16 +40,18 @@ def snapshot(user: str, timeout: float) -> tuple[tuple[str, ...], tuple[str, ...
             if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit():
                 rows.append(parts)
         rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
-        entries = [_entry(*row[2:]) for row in rows]
+        names = {row[0]: row[4] for row in rows}
+        entries = [_entry(row[2], row[3], row[4], row[1], names.get(row[1])) for row in rows]
         return tuple(entries[: survivor_argv.MAX_LISTED]), ((REASON,) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return (), ()
 
 
-def _entry(stat: str, age: str, name: str) -> str:
+def _entry(stat: str, age: str, name: str, ppid: str, parent: str | None) -> str:
     shown_stat = stat if _STAT.fullmatch(stat) else "?"
     shown_age = age.replace(":", ".") if _AGE.fullmatch(age) else "?"
-    return f"{survivor_argv.prefix(name)} {shown_stat} {shown_age}"
+    up = survivor_argv.prefix(parent) if parent else "-"  # the parent's name, filtered the same
+    return f"{survivor_argv.prefix(name)} {shown_stat} {shown_age} ppid={ppid}/{up}"
 
 
 def before_kill(user: str, before: int, deadline: float) -> tuple[tuple, float]:
@@ -60,3 +62,10 @@ def before_kill(user: str, before: int, deadline: float) -> tuple[tuple, float]:
     start = time.monotonic()
     seen = snapshot(user, max(deadline - start, 0.0))
     return seen, deadline + (time.monotonic() - start)
+
+
+def result(count: int, seen: tuple, main: int) -> survivor_argv.Survivors:
+    """``count`` with its listing; listing and fixed ``main=`` reason only if there is one."""
+    if not count or not seen[0]:
+        return survivor_argv.Survivors(count)
+    return survivor_argv.Survivors(count, seen[0], (*seen[1], f"main={main}"))

@@ -27,13 +27,13 @@ def _snap(monkeypatch, stdout, **kw):
 
 def test_rows_become_bounded_argv_prefixes_with_state_and_age(monkeypatch):
     argv, reasons = _snap(monkeypatch, PS)
-    assert argv == ("sleep Z+ 00.03", "python3.13 S 01.02")  # launchd child last
+    assert argv == ("sleep Z+ 00.03 ppid=10/python3.13", "python3.13 S 01.02 ppid=1/-")
     assert reasons == ("account-escaped",)
 
 
 def test_a_candidate_chosen_name_is_hidden_not_echoed(monkeypatch):
     argv, _ = _snap(monkeypatch, "5 1 S 00:01 /tmp/x/##[error]evil\n")
-    assert argv == ("<redacted> S 00.01",)
+    assert argv == ("<redacted> S 00.01 ppid=1/-",)
 
 
 def test_no_listed_line_carries_control_characters_or_workflow_prefixes(monkeypatch):
@@ -58,7 +58,7 @@ def test_at_most_max_listed_rows(monkeypatch):
 
 def test_a_bad_state_or_age_is_shown_as_unread_not_echoed(monkeypatch):
     argv, _ = _snap(monkeypatch, "5 1 ::error:: 12:xx:zz sleep\n")
-    assert argv == ("sleep ? ?",)
+    assert argv == ("sleep ? ? ppid=1/-",)
 
 
 def test_ps_failing_gives_no_listing_and_never_raises(monkeypatch):
@@ -83,7 +83,9 @@ def _acct(monkeypatch, before, left, snap=(("sleep S 00.01",), ("account-escaped
 
 def test_reap_lists_what_it_counted(monkeypatch):
     got = _acct(monkeypatch, 2, 0).reap()
-    assert got == 2 and got.argv == ("sleep S 00.01",) and got.reasons == ("account-escaped",)
+    assert (
+        got == 2 and got.argv == ("sleep S 00.01",) and got.reasons == ("account-escaped", "main=0")
+    )
 
 
 def test_reap_counts_are_unchanged_for_every_branch(monkeypatch):
@@ -120,7 +122,7 @@ def test_merge_keeps_both_listings():
 def test_launchd_children_are_listed_after_the_others(monkeypatch):
     rows = "".join(f"{n} 1 S 00:01 sleep\n" for n in range(10, 20)) + "99 50 S 00:09 python\n"
     argv, _ = _snap(monkeypatch, rows)
-    assert argv[0] == "python S 00.09"
+    assert argv[0] == "python S 00.09 ppid=50/-"
 
 
 def test_merged_listing_is_bounded_and_reasons_not_repeated():
@@ -132,7 +134,7 @@ def test_merged_listing_is_bounded_and_reasons_not_repeated():
 
 def test_a_three_digit_day_age_is_shown(monkeypatch):
     argv, _ = _snap(monkeypatch, "5 1 S 123-04:05:06 sleep\n")
-    assert argv == ("sleep S 123-04.05.06",)
+    assert argv == ("sleep S 123-04.05.06 ppid=1/-",)
 
 
 def test_snapshot_is_taken_before_the_kill(monkeypatch):
@@ -180,3 +182,17 @@ def test_snapshot_timeout_is_capped(monkeypatch):
     vs.snapshot("x", 120.0)
     vs.snapshot("x", 4.0)
     assert seen[0] <= 30 and seen[1] <= 1.0
+
+
+def test_the_parent_name_is_filtered_like_any_name(monkeypatch):
+    rows = "20 1 S 00:09 /tmp/##[error]evil\n21 20 R 00:00 python\n"
+    argv, _ = _snap(monkeypatch, rows)
+    assert argv[0] == "python R 00.00 ppid=20/<redacted>"
+    assert all("##[" not in line and "::" not in line for line in argv)
+
+
+def test_reap_records_the_main_value_as_a_fixed_reason(monkeypatch):
+    got = _acct(monkeypatch, 3, 0).reap(1)
+    assert got.reasons == ("account-escaped", "main=1")
+    assert _acct(monkeypatch, 2, 0).reap().reasons == ("account-escaped", "main=0")
+    assert _acct(monkeypatch, 1, 0, snap=((), ())).reap().reasons == ()
