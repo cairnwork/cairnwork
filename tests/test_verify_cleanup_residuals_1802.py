@@ -321,6 +321,8 @@ def test_an_index_that_stays_is_reported_by_both_paths(tmp_path, name, shape, pa
     root.mkdir()
     index = root / f"{AID}{name}"
     _shape(index, shape)
+    out: dict = {}
+    seen: list[str] = []
     if shape == "stuck_file":
         os.chmod(root, 0o500)  # the file cannot be unlinked
     try:
