@@ -13,13 +13,31 @@ import pytest
 from conftest import commit_change
 from test_collect_parity_files import _case
 
-from cairnwork.collect_parity import _counted, _dirs, _may_have_tests
+from cairnwork.collect_parity import _counted, _dirs, _ignored, _may_have_tests
+
+EMPTY_HOOK = (
+    "import pytest\n"
+    "class _Empty(pytest.Module):\n"
+    "    def collect(self):\n"
+    "        return []\n"
+    "@pytest.hookimpl(wrapper=True)\n"
+    "def pytest_collect_file(file_path, parent):\n"
+    "    result = yield\n"
+    "    if file_path.name == 'test_hidden.py':\n"
+    "        return [_Empty.from_parent(parent, path=file_path)]\n"
+    "    return result\n"
+)
 
 NOT_TESTS = {
     "helper": "def make():\n    return 1\n",
     "mixin": "class Mixin:\n    def test_x(self):\n        pass\n",
     "init": "class TestA:\n    def __init__(self):\n        pass\n    def test_x(self):\n        pass\n",  # noqa: E501
     "plain_class": "class Helper:\n    def test_x(self):\n        pass\n",
+    "dict_subclass": "class FakeResp(dict):\n    pass\n",
+    "object_mixin": "class BaseMixin(object):\n    def test_x(self):\n        pass\n",
+    "abc_mixin": "from abc import ABC\nclass M(ABC):\n    def test_x(self):\n        pass\n",
+    "import_helper": "from _cases import helper\n",
+    "plain_alias": "from _cases import helper as util\nvalue = util()\n",
     "empty": "",
 }
 TESTS = {
@@ -29,6 +47,21 @@ TESTS = {
     "nested_if": "import sys\nif sys.platform:\n    def test_a():\n        pass\n",
     "based_class": "import unittest\nclass A(unittest.TestCase):\n    def test_x(self):\n        pass\n",  # noqa: E501
     "unparsable": "def test_a(:\n",
+    "for_target": "for test_a in range(1):\n    pass\n",
+    "with_target": "import io\nwith io.StringIO() as test_a:\n    pass\n",
+    "from_import": "from _cases import test_neg\n",
+    "import_alias": "from _cases import neg as test_neg\n",
+    "star_import": "from _cases import *\n",
+    "assigned": "def _mk():\n    return 1\ntest_neg = _mk()\n",
+    "annotated": "test_neg: object = None\n",
+    "class_attr": "def _f(self):\n    pass\nclass TestA:\n    test_neg = _f\n",
+    "nested_class": "class TestA:\n    class TestB:\n        def test_x(self):\n            pass\n",
+    "class_decorator": "def deco(c):\n    return c\n@deco\nclass Mix:\n    pass\n",
+    "metaclass": "class Mix(metaclass=type):\n    pass\n",
+    "unknown_base": "from _cases import Base\nclass Mix(Base):\n    pass\n",
+    "dynamic_globals": "globals()['test_a'] = lambda: None\n",
+    "dynamic_setattr": "import sys\nsetattr(sys.modules[__name__], 'test_a', lambda: None)\n",
+    "dynamic_exec": "exec('def test_a(): pass')\n",
 }
 
 
@@ -47,6 +80,19 @@ def test_a_module_that_defines_tests_may_have_tests(repo, kind):
     assert _may_have_tests(_task(repo, TESTS[kind]), "tests/test_x.py") is True
 
 
+@pytest.mark.parametrize(
+    ("key", "source"),
+    [
+        ("python_functions", "def make():\n    return 1\n"),
+        ("python_classes", "class Helper:\n    pass\n"),
+    ],
+)
+def test_a_custom_naming_rule_says_there_may_be_tests(repo, key, source):
+    base = commit_change(repo, {"pytest.ini": f"[pytest]\n{key} = *\n", "tests/test_x.py": source})
+    task = SimpleNamespace(repo=repo, base_commit=base, test_roots=("tests",))
+    assert _may_have_tests(task, "tests/test_x.py") is True
+
+
 def test_a_directory_pattern_does_not_count_a_file_pytest_never_walks(repo):
     base = commit_change(
         repo,
@@ -60,9 +106,24 @@ def test_a_directory_pattern_does_not_count_a_file_pytest_never_walks(repo):
     assert _counted(task, ("tests", "other")) == ["tests/a.py"]
 
 
-def test_selected_files_collapse_to_their_topmost_directories():
+def test_selected_files_give_their_parent_directories():
     files = ("a/b/test_x.py", "a/test_y.py", "c/test_z.py", "test_root.py")
-    assert _dirs(files) == ("a", "c")
+    assert _dirs(files) == ("a", "a/b", "c")
+
+
+def test_a_run_ignores_the_subdirectories_it_does_not_select(repo):
+    base = commit_change(
+        repo,
+        {
+            "tests/test_a.py": "def test_a(): pass\n",
+            "tests/big/test_b.py": "def test_b(): pass\n",
+            "tests/mid/low/test_c.py": "def test_c(): pass\n",
+            "tests/mid/test_d.py": "def test_d(): pass\n",
+        },
+    )
+    task = SimpleNamespace(repo=repo, base_commit=base)
+    got = _ignored(task, ("tests", "tests/mid/low"))
+    assert got == ("tests/big",)
 
 
 @pytest.mark.sandbox
@@ -87,17 +148,34 @@ def test_a_skipped_module_is_not_a_hidden_file(repo, tmp_path, source):
 
 @pytest.mark.sandbox
 def test_a_hook_that_empties_a_module_with_tests_is_refused(repo, tmp_path):
-    hook = (
-        "import pytest\n"
-        "class _Empty(pytest.Module):\n"
-        "    def collect(self):\n"
-        "        return []\n"
-        "@pytest.hookimpl(wrapper=True)\n"
-        "def pytest_collect_file(file_path, parent):\n"
-        "    result = yield\n"
-        "    if file_path.name == 'test_hidden.py':\n"
-        "        return [_Empty.from_parent(parent, path=file_path)]\n"
-        "    return result\n"
-    )
+    hook = EMPTY_HOOK
     result = _case(repo, tmp_path, hook, {"tests/test_hidden.py": TESTS["function"]})
     assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
+
+
+HIDDEN = {
+    "imported": "from _cases import test_neg\n",
+    "star_import": "from _cases import *\n",
+    "assigned": "import _cases\ntest_neg = _cases.test_neg\n",
+    "nested_class": "class TestOuter:\n    class TestInner:\n        def test_neg(self):\n            pass\n",  # noqa: E501
+    "class_attr": "import _cases\nclass TestA:\n    test_neg = _cases.test_neg\n",
+}
+CASES = "def test_neg():\n    assert True\ndef helper():\n    return 1\n"
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("kind", sorted(HIDDEN))
+def test_an_emptied_module_with_bound_tests_is_refused(repo, tmp_path, kind):
+    hook = EMPTY_HOOK
+    result = _case(
+        repo, tmp_path, hook, {"tests/_cases.py": CASES, "tests/test_hidden.py": HIDDEN[kind]}
+    )
+    assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
+
+
+@pytest.mark.sandbox
+@pytest.mark.parametrize("kind", ["dict_subclass", "object_mixin", "import_helper"])
+def test_a_benign_helper_module_is_not_refused(repo, tmp_path, kind):
+    extra = {"tests/_cases.py": CASES, "tests/test_helpers.py": NOT_TESTS[kind]}
+    result = _case(repo, tmp_path, "", extra)
+    assert result.status == "COMPLETED" and result.verified, result.reason
