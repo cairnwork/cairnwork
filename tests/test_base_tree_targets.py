@@ -155,7 +155,8 @@ def test_an_unreadable_tree_keeps_the_narrow_run(task, monkeypatch):
 def test_the_guards_still_make_no_run(task, monkeypatch):
     calls = _run(monkeypatch, [frozenset({"n"})])
     assert bfn.probe(SimpleNamespace(account=object()), task, PATHS, "r")[1] == "ACCOUNT_RUN"
-    assert bfn.probe(CTX, task, ("tests/test_a.py",), "r")[1] == "NO_CONFTEST_CHANGE"
+    # no conftest and no changed file the base has (a changed base file now runs, #1769)
+    assert bfn.probe(CTX, task, ("tests/test_new.py",), "r")[1] == "NO_CONFTEST_CHANGE"
     conftest_and_new = ("tests/conftest.py", "tests/test_new.py")
     assert bfn.probe(CTX, task, conftest_and_new, "r")[1] == "NO_BASE_TARGET"
     assert calls == []
