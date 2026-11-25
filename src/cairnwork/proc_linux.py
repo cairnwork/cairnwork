@@ -37,7 +37,8 @@ def _zombie(base: str) -> bool:
     A process whose main thread has exited but whose other threads run shows Z on its own stat
     too, and is alive. Its own stat not being Z means alive, and the threads are not read. No
     task directory at all (FileNotFoundError): its own Z decides. Any other failure to list the
-    threads, or an empty list: not a zombie (strict). The state is the first field after the
+    threads, or an empty list: not a zombie (strict). The threads are listed again after the
+    reads: a different set means one was made meanwhile, so it is not one. The state is the first field after the
     LAST ")" (the command name may hold any bytes); stat is read as bytes."""
     if _state(f"{base}/stat") != b"Z":
         return False
@@ -47,7 +48,15 @@ def _zombie(base: str) -> bool:
         return True
     except OSError:
         return False
-    return bool(tids) and all(_state(f"{base}/task/{tid}/stat") == b"Z" for tid in tids)
+    if not tids or any(_state(f"{base}/task/{tid}/stat") != b"Z" for tid in tids):
+        return False
+    # a live thread may have made a new one and ended between the listing and the reads
+    try:
+        return set(os.listdir(f"{base}/task")) == set(tids)
+    except FileNotFoundError:
+        return True  # gone
+    except OSError:
+        return False
 
 
 def _state(path: str) -> bytes | None:

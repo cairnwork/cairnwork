@@ -153,3 +153,48 @@ def test_a_process_whose_own_stat_is_not_z_is_alive_without_reading_its_tasks(tm
     base = _proc(tmp_path, 81, "S", tasks={81: "Z"})  # inconsistent: the main thread decides
     assert _pids(tmp_path) == [81]
     assert base.exists()
+
+
+def _task_listings(monkeypatch, *listings):
+    """os.listdir of a .../task path answers from `listings` in turn (the last one repeats)."""
+    real = os.listdir
+    queue = list(listings)
+
+    def listdir(path):
+        if str(path).endswith("/task"):
+            item = queue.pop(0) if len(queue) > 1 else queue[0]
+            if isinstance(item, Exception):
+                raise item
+            return item
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", listdir)
+
+
+def test_a_thread_made_between_the_two_task_listings_keeps_the_process(tmp_path, monkeypatch):
+    """A live thread can start a new one and end before its state is read: the list changed."""
+    _proc(tmp_path, 90, "Z", tasks={90: "Z", 91: "Z"})
+    _task_listings(monkeypatch, ["90", "91"], ["90", "91", "92"])
+    assert _pids(tmp_path) == [90]
+
+
+def test_two_equal_task_listings_with_every_thread_zombie_leave_the_process_out(
+    tmp_path, monkeypatch
+):
+    _proc(tmp_path, 93, "Z", tasks={93: "Z", 94: "Z"})
+    _task_listings(monkeypatch, ["93", "94"], ["94", "93"])
+    assert _pids(tmp_path) == []
+
+
+def test_a_task_directory_gone_at_the_second_listing_counts_as_gone(tmp_path, monkeypatch):
+    _proc(tmp_path, 95, "Z", tasks={95: "Z"})
+    _task_listings(monkeypatch, ["95"], FileNotFoundError())
+    assert _pids(tmp_path) == []
+
+
+def test_a_task_directory_that_cannot_be_listed_the_second_time_keeps_the_process(
+    tmp_path, monkeypatch
+):
+    _proc(tmp_path, 96, "Z", tasks={96: "Z"})
+    _task_listings(monkeypatch, ["96"], PermissionError())
+    assert _pids(tmp_path) == [96]
