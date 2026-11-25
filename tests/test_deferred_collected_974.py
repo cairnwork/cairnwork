@@ -244,12 +244,6 @@ def test_a_large_but_legal_collect_still_passes(monkeypatch):
     _check(SimpleNamespace(test_commit="t", base_commit="b"), set())
 
 
-@pytest.fixture(autouse=True)
-def _fresh_reasons():
-    """Tests that call ``_collect`` directly leave keys; start every test from an empty dict."""
-    deferred_collected._WHY.clear()
-
-
 def _stub(monkeypatch, usable_for):
     """Real _collect/_collect_all over stubbed runs; read_collected is unusable unless the commit
     is in ``usable_for``; a commit named 'boom' makes run_verifiers raise."""
@@ -278,17 +272,17 @@ def _go(task, files=(PATH,)):
 def test_nothing_is_left_behind_when_both_runs_fail(monkeypatch):
     _stub(monkeypatch, usable_for=())  # the test commit and the base probe both fail
     _go(SimpleNamespace(test_commit="t", base_commit="b"))  # returns (UNCOMPARABLE path)
-    assert deferred_collected._WHY == {}
+    assert deferred_collected._WHY.get() is None
 
 
 def test_nothing_is_left_behind_after_a_refusal_or_a_fault(monkeypatch):
     _stub(monkeypatch, usable_for=("b",))
     with pytest.raises(Rejected):
         _go(SimpleNamespace(test_commit="t", base_commit="b"))
-    assert deferred_collected._WHY == {}
+    assert deferred_collected._WHY.get() is None
     with pytest.raises(Rejected) as err:  # a fault in the run itself, named collect-fault
         _go(SimpleNamespace(test_commit="boom", base_commit="b"))
-    assert "collect-fault" in str(err.value) and deferred_collected._WHY == {}
+    assert "collect-fault" in str(err.value) and deferred_collected._WHY.get() is None
 
 
 def test_a_many_batch_failure_leaves_nothing_and_names_the_first_failing_batch(monkeypatch):
@@ -297,4 +291,50 @@ def test_a_many_batch_failure_leaves_nothing_and_names_the_first_failing_batch(m
     with pytest.raises(Rejected) as err:
         _go(SimpleNamespace(test_commit="t", base_commit="b"), files)
     assert "collect-timeout" in str(err.value)  # batch 0 holds 50 files: the first failing batch
-    assert deferred_collected._WHY == {}
+    assert deferred_collected._WHY.get() is None
+
+
+def test_nothing_is_left_behind_when_the_test_commit_reads_and_the_base_run_fails(monkeypatch):
+    _stub(monkeypatch, usable_for=("t",))  # #1804 item 2: the base-side keys are cleaned too
+    seen = []
+    real = deferred_collected._collect
+
+    def spy(*a):
+        got = real(*a)
+        seen.append(dict(deferred_collected._WHY.get() or {}))
+        return got
+
+    monkeypatch.setattr(deferred_collected, "_collect", spy)
+    _go(SimpleNamespace(test_commit="t", base_commit="b"))  # base unreadable: static rule stays
+    assert any(seen[-1]) and deferred_collected._WHY.get() is None
+
+
+def test_a_direct_collect_outside_a_check_leaves_nothing_behind(monkeypatch):
+    """#1804 item 3: reasons live in one dict per ``check`` call, so no run id prefix can clear
+    another run's key, and a call outside a check has nowhere to leave one."""
+    _stub(monkeypatch, usable_for=())
+    assert deferred_collected._collect(None, "t", (PATH,), "rt0") is None
+    assert deferred_collected._WHY.get() is None
+
+
+def test_checks_in_two_threads_do_not_disturb_each_other(monkeypatch):
+    """#1804 item 1: the cleanup never scans a dict another thread writes."""
+    import threading
+
+    _stub(monkeypatch, usable_for=("b",))
+    errors: list[str] = []
+
+    def work():
+        for _ in range(50):
+            try:
+                _go(SimpleNamespace(test_commit="t", base_commit="b"))
+            except Rejected as err:
+                if "collect-over-cap" not in str(err):
+                    errors.append(str(err))
+            except Exception as err:  # noqa: BLE001
+                errors.append(repr(err))
+
+    threads = [threading.Thread(target=work) for _ in range(4)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert errors == []

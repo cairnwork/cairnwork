@@ -33,5 +33,5 @@ class TaskRejected(Exception):
 
 class CandidateRejected(Exception):
     def __init__(self, code: str, detail: str) -> None:
-        self.code = code
-        super().__init__(f"{code}: {detail}")
+        self.code = code  # escaped here too, so a call site that forgets ``shown`` stays safe
+        super().__init__(f"{code}: {_shown_detail(detail)}")

@@ -55,7 +55,9 @@ def test_a_refusal_comment_carries_only_the_code(setup):
     exc = runner.IssueRefused("TASK_BAD_THING", evil)
     out = runner._needs_fix(github, 7, exc)
     assert "@someone" not in github.comments[-1][1] and "`TASK_BAD_THING`" in github.comments[-1][1]
-    assert evil in out["refused"]  # the detail stays in the local output
+    # the detail stays in the local output, hidden characters shown as escapes (#1804)
+    assert out["refused"] == "TASK_BAD_THING: x `y` @someone\\x0a# head"
+    assert "\n" not in out["refused"]
     runner._needs_fix(github, 7, ValueError("@someone\n`x`"))  # no code at all
     assert "@someone" not in github.comments[-1][1] and "`REFUSED`" in github.comments[-1][1]
 

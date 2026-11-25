@@ -34,6 +34,7 @@ from cairnwork.protected_paths import (  # noqa: F401  (re-exported)
     is_protected,
     path_refusal,
 )
+from cairnwork.refusal_types import _shown_detail
 
 TASK_FENCE = re.compile(r"```eia-task[ \t]*\r?\n(.*?)\r?\n```", re.DOTALL)
 ANY_FENCE = re.compile(r"```[A-Za-z0-9_-]*-contract\b")
@@ -45,15 +46,8 @@ _IMPORT_PATH = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_\-]*(?:/[A-Za-z0-9_][A-Za-z0-
 COMMIT = re.compile(r"[0-9a-f]{40}")
 MAX_ALLOWED_FILES = 10
 KEYS = frozenset(
-    {
-        "difficulty",
-        "allowed_files",
-        "verification",
-        "capability_ids",
-        "capability_disposition",
-        "summary",
-        "test_commit",
-    }
+    "difficulty allowed_files verification capability_ids capability_disposition summary"
+    " test_commit".split()
 )
 _LATEST = datetime.max.replace(tzinfo=UTC)
 TRUSTED_ACTORS = frozenset({"James3014", "james3014-nexus-agent[bot]"})
@@ -63,7 +57,7 @@ TRUST_CHECK_FAILED = "TRUST_CHECK_FAILED"
 
 class IssueRefused(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
-        super().__init__(f"{code}: {detail}" if detail else code)
+        super().__init__(f"{code}: {_shown_detail(detail)}" if detail else code)
         self.code = code
 
 
