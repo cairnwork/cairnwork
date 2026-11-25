@@ -1,21 +1,30 @@
 """#986 step 5b: the fixture names pytest itself collects on the base, for ``check_conftests``.
 
-One owner collect-only run on the base commit with the recorder on (``record_fixtures``, see
-fixture_probe.py). It targets the existing base test files the test commit changes, so it sees the
-plugins, ``pytest_plugins`` and dynamic fixtures those files meet. The result is advisory
-(``check_conftests`` only unions it with the static names, so it can add a refusal and never remove
-one); any fault, an account run, a conftest-free test commit or no base target gives None, and the
-#916 rule then stands alone, as before this step.
+Two owner collect-only runs on the base commit with the recorder on (``record_fixtures``, see
+fixture_probe.py).
+1. The names run (``probe``): the base tests under a conftest the test commit adds or edits, plus
+   the changed base files. It sees the plugins, ``pytest_plugins`` and dynamic fixtures those files
+   meet. The result is advisory (``check_conftests`` only unions it with the static names, so it
+   can add a refusal and never remove one); any fault, an account run or a conftest-free commit
+   gives None, and the #916 rule then stands alone.
+2. The reach run (``reach_record``, #1769): whenever the commit changes a base file or adds a file
+   (a conftest-only edit makes none), the base's whole test tree (``base_tree_targets``) plus the
+   changed base .py files. ``check_runtime_reach`` refuses on the runtime record; a record that left
+   something out (tree over the cap or unreadable, a changed file dropped) refuses too.
 """
 
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
-from cairnwork.base_tree_targets import base_tree_targets
+from cairnwork.base_tree_targets import base_tree_targets, conftest_dirs, pick_dir_targets
 from cairnwork.conftest_check import check_conftests, conftest_of, governed
+from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.gitcmd import run_git_bytes
+from cairnwork.runtime_reach import CODE, check_runtime_reach
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -36,9 +45,94 @@ def _on_base(repo: Path, base: str, path: str) -> bool:
 
 
 def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
-    """``check_conftests`` with the base's collected fixture names (None when not obtained)."""
+    """``check_conftests`` with the base's collected fixture names (None when not obtained), then
+    the runtime plugin and sys.path reach (#1769; refusals only)."""
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
+    on_base = tuple(p for p in paths if _on_base(task.repo, task.base_commit, p))
+    added = tuple(p for p in paths if p not in on_base)
+    if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
+        return  # only conftest edits: no run, as before (#1769)
+    record, complete = reach_record(ctx, task, on_base, run_id)
+    if record is None:
+        return  # no run, no evidence: the static verdict stands
+    check_runtime_reach(record, on_base, added, _base_paths(task))
+    if not complete:  # fail closed: a record that left out a changed file or part of the tree
+        raise TestCommitRejected(CODE, "the base run did not cover every changed or base test file")
+
+
+def _base_paths(task) -> tuple[str, ...] | None:
+    """Every file of the base (None when unreadable: a case variant is then the same file)."""
+    try:
+        raw = run_git_bytes(task.repo, "ls-tree", "-r", "-z", "--name-only", task.base_commit, "--")
+        return tuple(p for p in raw.decode("utf-8", "surrogateescape").split("\0") if p)
+    except Exception:  # noqa: BLE001 - unknown base: the folded match stands
+        return None
+
+
+def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
+    """(record, complete): the record of one collect-only base run, or (None, False).
+
+    The run names the changed base .py files, every base conftest directory (a test file below it,
+    else its conftest.py: collecting either loads it), and the whole test tree up to
+    MAX_TREE_TARGETS files (above that one tree file, so a root conftest and the ini still load).
+    An unreadable tree, unreadable conftest directories or more than MAX_CONFTEST_DIRS of them
+    refuse the commit (TestCommitRejected): no run is made. ``complete`` is False when a changed
+    file that cannot be collected on the base was dropped (the rest run again, the directories
+    picked again from the tree minus that file) and its base text shows a sys.path or plugin
+    signal or cannot be read."""
+    if ctx.account is not None:
+        return None, False
+    roots = tuple(task.test_roots)
+    tree = base_tree_targets(task.repo, task.base_commit, roots)
+    dirs = conftest_dirs(task.repo, task.base_commit, roots)
+    if tree is None or dirs is None or pick_dir_targets(tree, dirs) is None:
+        raise TestCommitRejected(
+            CODE, "the base's test tree or conftest directories were not usable"
+        )
+    try:
+        edited = tuple(
+            p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
+        )[:MAX_TARGETS]
+        for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
+            if tag == "r2" and not edited:
+                break
+            left = tuple(p for p in tree if p not in dropped)
+            picked = pick_dir_targets(left, dirs) or ()
+            base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
+            named = (*(p for p in edited if p not in dropped), *base, *picked)
+            targets = tuple(dict.fromkeys(named))
+            if not targets:
+                continue
+            record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
+            if record is not None:
+                return record, not dropped or _quiet(task, edited)
+    except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
+        return None, False
+    return None, False
+
+
+SIGNAL = re.compile(rb"sys|path|plugin|importlib|import_module|__import__|exec|eval|site")
+
+
+def _quiet(task, dropped: tuple[str, ...]) -> bool:
+    """True when no dropped file's base text shows a sys.path or plugin signal (unreadable: no)."""
+    try:
+        return not any(
+            SIGNAL.search(run_git_bytes(task.repo, "show", f"{task.base_commit}:{p}"))
+            for p in dropped
+        )
+    except Exception:  # noqa: BLE001 - unreadable is never quiet
+        return False
+
+
+def _record_run(ctx, task, targets: tuple[str, ...], run_id: str):
+    try:
+        spec = VerifierSpec("fixture-names", targets, collect_only=True, record_fixtures=True)
+        runs = run_verifiers(ctx, task.base_commit, (spec,), run_id)
+        return runs[0].collect_record if len(runs) == 1 else None
+    except Exception:  # noqa: BLE001 - never read the exception: the candidate shapes its name
+        return None
 
 
 def collect(ctx, task, paths: tuple[str, ...], run_id: str):

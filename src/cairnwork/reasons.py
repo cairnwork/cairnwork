@@ -273,6 +273,18 @@ def skip_hint(run) -> str:
     return f"; skipped at collection, could not import {_names(deps)}" if deps else ""
 
 
+def no_tests_hint(run, code: str) -> str:
+    """#1784: BASE_NO_TESTS names the verifier's targets (a caller's own argument, cleaned like any
+    name in a reason): a target that holds no test, such as a conftest, is what exit 5 usually is.
+    A run with a hidden test commit gives the count only (#1186). pytest's output is not shown."""
+    targets = getattr(run.spec, "targets", ())
+    if code != "BASE_NO_TESTS" or not targets:
+        return ""
+    if getattr(run, "hidden_tests", False):
+        return f"; pytest collected no test in {len(targets)} target(s)"
+    return f"; pytest collected no test in {_names(targets)}"
+
+
 # #796: the hint for a base collect error in a target file. A module-level ``from <in-repo module>
 # import <name>`` (or, #796 S3, ``import <in-repo package>.<new module>``) that fails on the base
 # is accepted as teeth; anything else must move inside.

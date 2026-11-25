@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.collected_names import CollectedRecord, collected_record
+from cairnwork.runtime_reach import resolve_record
 
 PREFIX = "_cairnwork_fixture_record_"
 RECORDER = Path(__file__).with_name("fixture_record.py")
@@ -117,8 +118,11 @@ def finish(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run
     return None if record is None else record.names
 
 
-def finish_record(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run):
-    """The same read, whole (#1769): the validated record, or None."""
+def finish_record(
+    spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run, checkout=None
+):
+    """The same read, whole (#1769): the validated record, or None. ``checkout`` (the run's
+    directory) is kept in it, resolved, for runtime_reach."""
     if not spec.record_fixtures or ctx.account is not None:
         return None
     try:
@@ -131,7 +135,10 @@ def finish_record(spec, ctx, candidate_commit: str, private: Path, ini_text: byt
     digest = hashlib.sha256(ini_text).hexdigest()
     base = ctx.base_commit or candidate_commit
     probe = Probe(("-p", module), module, record_dir, plugin_file, digest, base, nonce)
-    return probe.read_record(run.returncode, run.timed_out)
+    record = probe.read_record(run.returncode, run.timed_out)
+    if record is None or checkout is None:
+        return record
+    return resolve_record(record, checkout)
 
 
 def _nonce_pipe(nonce: str) -> int:
