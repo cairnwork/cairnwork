@@ -46,7 +46,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import runlock, unswept
+from cairnwork import proc_start, runlock, unswept
 from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, sweep_marked
 from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.notary import Notary
@@ -320,6 +320,22 @@ def path_absent(path: Path) -> bool:
     except OSError as exc:
         return isinstance(exc, (FileNotFoundError, NotADirectoryError))
     return False
+
+
+def write_start_mark(fd: int) -> None:
+    """Note in a run's held marker when it started (boot mark, "" off Linux), as the journal does
+    at DISPATCHED: cleanup then does not count a hidden process older than the run as its own."""
+    try:
+        os.write(fd, proc_start.boot_mark().encode())
+    except OSError:
+        pass  # no mark: cleanup keeps the strict rule
+
+
+def read_start_mark(fd: int) -> str:
+    try:
+        return os.pread(fd, 256, 0).decode("utf-8", "replace")
+    except OSError:
+        return ""
 
 
 def _unlink(path: Path) -> None:

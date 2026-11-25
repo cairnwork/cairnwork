@@ -49,7 +49,7 @@ from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import TaskRejected, TaskResult, TaskSpec, tests_with_teeth
 from cairnwork.pipeline_judge import judge_candidate
-from cairnwork.recovery import _remove_leftovers, path_absent
+from cairnwork.recovery import _remove_leftovers, path_absent, read_start_mark, write_start_mark
 from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_before_clone,
@@ -356,6 +356,7 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
         if _same_file(fd, path):
             break
         os.close(fd)
+    write_start_mark(fd)
     try:  # an interrupt keeps the marker: the next run's cleanup then sweeps this attempt
         with unless_interrupted(partial(path.unlink, missing_ok=True)):
             yield
@@ -380,7 +381,7 @@ def cleanup(intake: Intake) -> dict[str, Any]:
             _gap()
             if not _same_file(fd, marker):
                 continue  # replaced by a run that started meanwhile
-            look = partial(sweep_marked, ATTEMPT_ENV, marker.name)
+            look = partial(sweep_marked, ATTEMPT_ENV, marker.name, dispatched=read_start_mark(fd))
             swept = confirm_gone(look(), look)
             _remove_leftovers(intake.run_root, marker.name)
             shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
