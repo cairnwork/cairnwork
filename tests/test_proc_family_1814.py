@@ -99,3 +99,34 @@ def test_a_value_repr_would_write_in_exponent_form_is_refused_so_the_strict_rule
     proc = _fake_proc(tmp_path / "proc")
     for at in (repr(1e16), repr(1e-05)):
         assert proc_start._dispatched(f"{BOOT} {at}", proc) is None
+
+
+NON_ASCII_DIGITS = ["\u0663", "\u06f3", "\u0969", "\uff13", "\U0001d7ce"]  # 5 scripts
+NEVER_WRITTEN = [
+    "0.50", "10000.000", "0.1000000000000000000001", "12345.6789012345678901",
+    "10000000000000000.0", "1" + "0" * 300 + ".0", "1e+16", "1e-05",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("digit", NON_ASCII_DIGITS)
+@pytest.mark.parametrize("shape", ["1{d}.5", "10.{d}", "{d}.5", "12.5{d}", "1{d}{d}.25"])
+def test_ascii_led_spellings_with_non_ascii_digits_are_refused(tmp_path, linux, digit, shape):
+    at = shape.format(d=digit)
+    proc = _fake_proc(tmp_path / "proc", rows=[(41, 1.0), (42, 2.0)])
+    mark = f"{BOOT} {at}"
+    assert proc_start._dispatched(mark, proc) is None
+    assert proc_start.not_older([41, 42], mark, 0.0, proc) == [41, 42]
+
+
+@pytest.mark.parametrize("at", NEVER_WRITTEN)
+def test_spellings_repr_never_writes_are_refused(tmp_path, linux, at):
+    proc = _fake_proc(tmp_path / "proc", rows=[(41, 1.0), (42, 2.0)])
+    mark = f"{BOOT} {at}"
+    assert proc_start._dispatched(mark, proc) is None
+    assert proc_start.not_older([41, 42], mark, 0.0, proc) == [41, 42]
+
+
+@pytest.mark.parametrize("at", ["10000.0", "0.5", "12345.678901"])
+def test_spellings_repr_writes_are_read(tmp_path, linux, at):
+    proc = _fake_proc(tmp_path / "proc")
+    assert proc_start._dispatched(f"{BOOT} {at}", proc) == float(at)
