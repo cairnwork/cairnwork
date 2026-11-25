@@ -279,13 +279,16 @@ def test_a_directory_exactly_one_hour_old_is_kept(tmp_path, age, removed):
     assert (tmp_path / "cairnwork-deny.edge").exists() == (removed == 0)
 
 
-@pytest.mark.parametrize("error", [OverflowError, OSError])
-def test_a_pid_that_cannot_be_signalled_is_not_live(monkeypatch, error):
+@pytest.mark.parametrize("error, live", [(OverflowError, False), (OSError, True)])
+def test_an_owner_whose_state_is_unknown_is_kept(monkeypatch, error, live):
+    """Flipped on purpose (#995): an OSError other than "no such process" used to read as not live,
+    so the sweep removed a directory whose owner it could not see."""
+
     def fail(pid, sig):
         raise error
 
     monkeypatch.setattr(deny_sweep.os, "kill", fail)
-    assert deny_sweep._is_live_pid(5) is False
+    assert deny_sweep._is_live_pid(5) is live
 
 
 def test_an_owner_pid_that_is_not_a_number_does_not_protect_the_directory(tmp_path):

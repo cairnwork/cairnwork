@@ -26,8 +26,10 @@ def _is_live_pid(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except (OSError, OverflowError):
+    except OverflowError:
         return False
+    except OSError:  # an owner whose state is unknown is kept (#995)
+        return True
 
 
 def sweep_stale(
