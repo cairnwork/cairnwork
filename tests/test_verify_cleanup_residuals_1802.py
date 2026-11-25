@@ -295,3 +295,60 @@ def test_a_removable_clone_is_removed_and_the_attempt_cleaned(tmp_path):
     _clone_in(root)
     assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
     assert not (root / AID).exists() and not (root / f"{AID}-v-v0").exists()
+
+
+# the two index names, in every shape, through both paths (cleanup and recover's pair of calls)
+def _shape(path, shape):
+    if shape == "dir_with_file":
+        path.mkdir()
+        (path / "inner").write_text("x")
+    elif shape == "empty_dir":
+        path.mkdir()
+    elif shape == "stuck_file":
+        path.write_text("x")
+    else:  # symlink into the same directory, dangling
+        path.symlink_to("nowhere")
+
+
+@pytest.mark.parametrize("name", [".index", ".tests.index"])
+@pytest.mark.parametrize("shape", ["dir_with_file", "empty_dir", "stuck_file", "symlink"])
+@pytest.mark.parametrize("path", ["cleanup", "recover"])
+def test_an_index_that_stays_is_reported_by_both_paths(tmp_path, name, shape, path):
+    from cairnwork.recovery import _leftover_names, _remove_leftovers
+
+    marker = _orphan(tmp_path)
+    root = tmp_path / "runs"
+    root.mkdir()
+    index = root / f"{AID}{name}"
+    _shape(index, shape)
+    if shape == "stuck_file":
+        os.chmod(root, 0o500)  # the file cannot be unlinked
+    try:
+        if path == "cleanup":
+            out = module.cleanup(Intake(tmp_path))
+        else:
+            _remove_leftovers(root, AID)
+            seen = _leftover_names(root, AID)
+    finally:
+        os.chmod(root, 0o700)
+    removable = shape == "symlink"  # unlinking a symlink removes it
+    if path == "cleanup":
+        if removable:
+            assert out == {"cleaned": [AID]} and not marker.exists()
+        else:
+            assert out["kept"] == [AID] and marker.exists()
+            assert out["leftovers"] == {AID: [index.name]}
+    else:
+        assert seen == ([] if removable else [index.name])
+
+
+@pytest.mark.parametrize("name", [".index", ".tests.index"])
+def test_a_plain_index_file_is_removed_by_both_paths(tmp_path, name):
+    from cairnwork.recovery import _leftover_names, _remove_leftovers
+
+    root = tmp_path / "runs"
+    root.mkdir()
+    (root / f"{AID}{name}").write_text("x")
+    _remove_leftovers(root, AID)
+    assert _leftover_names(root, AID) == [] and not (root / f"{AID}{name}").exists()
+    assert _leftover_names(root / "absent", AID) == []

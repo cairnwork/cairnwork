@@ -54,11 +54,7 @@ def read_start_mark(fd: int) -> str:
 def leftovers(run_root: Path, attempt_id: str) -> list[str]:
     """Names (only) still under ``run_root`` after the attempt's removal: clones, verifier
     directories and snapshot indexes. Looked for on disk again; the removers are not trusted."""
-    names = _leftover_names(run_root, attempt_id)
-    for suffix in (".index", ".tests.index"):
-        if os.path.lexists(Path(run_root) / f"{attempt_id}{suffix}"):
-            names.append(f"{attempt_id}{suffix}")
-    return sorted(names)
+    return _leftover_names(run_root, attempt_id)
 
 
 def clear_account(intake: Any, attempt_id: str) -> list[str]:

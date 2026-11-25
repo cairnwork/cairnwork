@@ -289,8 +289,8 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
     if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
     root = Path(run_root)
-    _unlink(root / f"{attempt_id}.index")
-    _unlink(root / f"{attempt_id}.tests.index")
+    for name in _index_names(attempt_id):
+        _unlink(root / name)
     works, privates, clones = _run_dirs(root, attempt_id)
     for work in works:  # a verifier checkout's own dir
         if not work.is_symlink():
@@ -306,6 +306,12 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
         elif path.is_dir():
             with suppress(WorkspaceError):  # a leftover directory is disk space, not a wrong status
                 remove_attempt_clone(root, name)
+
+
+def _index_names(attempt_id: str) -> list[str]:
+    """The snapshot index files of an attempt: removed by _remove_leftovers, looked for by
+    _leftover_names from this one list, so the two cannot drift."""
+    return [f"{attempt_id}.index", f"{attempt_id}.tests.index"]
 
 
 def _unlink(path: Path) -> None:
@@ -371,9 +377,12 @@ def _leftover_names(root: Path, attempt_id: str) -> list[str]:
         return [UNSEARCHABLE]
     works, privates, clones = _run_dirs(root, attempt_id)
     own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
+    indexes = [
+        root / name for name in _index_names(attempt_id)
+    ]  # whatever _remove_leftovers unlinks
     names = {
         p.name if p.name != "run" else p.parent.name + "/run"
-        for p in works + privates + clones + own
+        for p in works + privates + clones + own + indexes
         if os.path.lexists(p)  # a dangling symlink is still a leftover
     }
     return sorted(names)
