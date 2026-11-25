@@ -61,6 +61,12 @@ class Evidence:
         """The run itself was denied ``operation`` on exactly ``target`` (DENIED evidence only)."""
         return self.state == "DENIED" and (operation, target) in self.denials
 
+    def denial_of(self, operation: str, target: str) -> str:
+        """DENIED when the run's own denial of exactly this is recorded, else UNKNOWN. Never "not
+        denied" (#995): a missing line proves nothing on a busy host, whatever the state (CLEAN,
+        UNAVAILABLE, or a DENIED that names other targets)."""
+        return "DENIED" if self.denied(operation, target) else "UNKNOWN"
+
     def __str__(self) -> str:
         detail = f" {self.detail}" if self.detail else ""
         return f"{self.state}:{detail} (lines {self.window_lines}, peak {self.peak_per_second}/s)"
