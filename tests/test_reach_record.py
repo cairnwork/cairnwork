@@ -70,8 +70,8 @@ class Runs:
 CTX = SimpleNamespace(account=None)
 
 
-def check(task, paths):
-    bfn.check_with_base(CTX, task, paths, "r")
+def check(task, paths, deleted=()):
+    bfn.check_with_base(CTX, task, paths, "r", deleted=deleted)
 
 
 def test_any_changed_base_file_runs_the_whole_tree_plus_the_changed_py_files(task, monkeypatch):
@@ -322,3 +322,63 @@ def test_the_base_file_list_is_read_with_the_option_terminator(task, monkeypatch
     paths = bfn._base_paths(task)
     assert paths is not None and "tests/test_a.py" in paths
     assert seen[0][-2:] == (task.base_commit, "--")
+=======
+# #1809 (b): a rerun with nothing left to name still loads the root files
+def test_a_rerun_with_no_tree_file_and_no_conftest_directory_runs_the_test_roots(task, monkeypatch):
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/test_a.py",))
+    monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ())
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
+    runs = Runs(monkeypatch, [None, _record(task)])
+    check(task, ("tests/test_a.py",))
+    assert runs.targets[1] == ("tests",)
+
+
+def test_a_rerun_with_nothing_left_and_no_record_is_not_a_pass_for_a_path_signal(task, monkeypatch):
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/test_sig.py",))
+    monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ())
+    Runs(monkeypatch, [None, _record(task)])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/test_sig.py",))
+    assert caught.value.code == CODE
+
+
+# #1809 (c): every changed .py file is dropped on the rerun, not only the first MAX_TARGETS
+@pytest.mark.parametrize("count", [bfn.MAX_TARGETS, bfn.MAX_TARGETS + 1, bfn.MAX_TARGETS + 5])
+def test_the_rerun_drops_every_changed_py_file_whatever_their_number(task, monkeypatch, count):
+    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(count))
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
+    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
+    runs = Runs(monkeypatch, [None, _record(task)])
+    check(task, changed)
+    assert not set(changed) & set(runs.targets[1])
+    assert "tests/test_a.py" in runs.targets[1]
+
+
+# #1809: a file the commit deletes is a changed base file for the reach check
+@pytest.mark.parametrize(
+    ("record", "deleted", "refuses"),
+    [
+        ({"sys_path": ["tests/data/lib.zip"]}, "tests/data/lib.zip", True),
+        ({"sys_path": ["tests/data/lib.zip"]}, "tests/data/other.zip", False),
+        ({"plugin": "tests/lib/helper_mod.py"}, "tests/lib/helper_mod.py", True),
+        ({"plugin": "tests/lib/helper_mod.py"}, "tests/lib/other_mod.py", False),
+    ],
+)
+def test_a_deleted_base_archive_or_plugin_file_is_checked_like_a_changed_one(
+    task, monkeypatch, record, deleted, refuses
+):
+    Runs(monkeypatch, [_record(task, **record)])
+    if not refuses:
+        check(task, (), deleted=(deleted,))
+        return
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, (), deleted=(deleted,))
+    assert caught.value.code == CODE
+
+
+def test_deleting_only_a_conftest_makes_no_run(task, monkeypatch):
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, (), deleted=("tests/sib/conftest.py",))
+    assert runs.targets == []
+>>>>>>> cfddd127 (cw#1809: tests first (rerun with no target, more than MAX_TARGETS changed files, deleted base files))
