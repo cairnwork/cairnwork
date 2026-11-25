@@ -202,8 +202,12 @@ def _may_have_tests(task, path: str) -> bool:
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
 _DYNAMIC = frozenset(
-    {"globals", "locals", "vars", "setattr", "exec", "eval", "__import__", "__dict__", "modules"}
-)
+    {
+        "globals", "locals", "vars", "setattr", "exec", "eval", "__import__", "__dict__", "modules",
+        "__globals__", "f_globals", "f_locals", "f_back", "gi_frame", "cr_frame", "ag_frame",
+        "_getframe", "currentframe", "__builtins__",
+    }
+)  # fmt: skip
 _CTOR = ("__init__", "__new__")
 
 
@@ -225,7 +229,22 @@ def _dynamic(tree) -> bool:
             return True
         if isinstance(node, ast.Attribute) and node.attr in _DYNAMIC:
             return True
+        if isinstance(node, ast.Constant) and node.value in _DYNAMIC:  # getattr(x, "__globals__")
+            return True
+        if _computed_getattr(node):
+            return True
     return False
+
+
+def _computed_getattr(node) -> bool:
+    """``getattr``/``delattr``/``hasattr`` with an attribute name that is not a plain string."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in ("getattr", "delattr")
+        and len(node.args) >= 2
+        and not isinstance(node.args[1], ast.Constant)
+    )
 
 
 def _scope(nodes):
