@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork import base_fixture_names as bfn
-from cairnwork.base_tree_targets import base_tree_targets
+from cairnwork import base_tree_targets as btt
+from cairnwork.base_tree_targets import base_tree_targets, conftest_dirs, pick_dir_targets
 
 FILES = {
     "tests/conftest.py": "",
@@ -171,3 +172,74 @@ def test_a_failing_log_handler_does_not_change_the_names(task, monkeypatch):
     monkeypatch.setattr(bfn.LOG, "handlers", [Boom()])
     monkeypatch.setattr(bfn.LOG, "log", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
     assert bfn.collect(CTX, task, PATHS, "r") == frozenset({"n"})
+
+
+def test_conftest_dirs_lists_every_base_conftest_directory_under_the_roots(tmp_path):
+    files = {
+        "tests/conftest.py": "",
+        "tests/test_a.py": "",
+        "tests/sib/conftest.py": "",
+        "tests/sib/test_s.py": "",
+        "tests/empty/conftest.py": "",
+        "other/conftest.py": "",
+    }
+    task = _repo(tmp_path, files)
+    assert conftest_dirs(task.repo, task.base_commit, ("tests",)) == (
+        "tests",
+        "tests/empty",
+        "tests/sib",
+    )
+    assert conftest_dirs(task.repo, "no-such-commit", ("tests",)) is None
+
+
+def _layout(rnd):
+    """A random nested tree (names that are prefixes of each other too) and conftest directories."""
+    names = ["a", "a-x", "a_x", "ab", "b"]
+    dirs = {"tests"}
+    for _ in range(rnd.randint(1, 25)):
+        dirs.add("/".join(["tests", *rnd.choices(names, k=rnd.randint(1, 4))]))
+    some = rnd.sample(sorted(dirs), rnd.randint(0, len(dirs)))
+    tree = sorted(f"{d}/test_{i}.py" for i, d in enumerate(some))
+    return tuple(tree), sorted(rnd.sample(sorted(dirs), rnd.randint(0, len(dirs))))
+
+
+def test_every_conftest_directory_is_covered_by_a_target_below_it():
+    """Layer1 rulings: the property over random nested layouts, prefix-sharing names included."""
+    import random
+
+    rnd = random.Random(1769)
+    for _ in range(500):
+        tree, dirs = _layout(rnd)
+        picked = pick_dir_targets(tree, dirs)
+        assert picked is not None
+        for d in dirs:
+            below = [t for t in tree if t.startswith(d + "/")]
+            if below:
+                assert any(t in below for t in picked), (d, tree, picked)
+            else:
+                assert d + "/conftest.py" in picked, (d, tree, picked)
+        assert set(picked) <= {*tree, *(d + "/conftest.py" for d in dirs)}
+
+
+def test_a_sibling_directory_whose_name_starts_like_the_conftest_directory_is_not_its_test():
+    tree = ("tests/a-x/test_1.py", "tests/a/test_2.py", "tests/a_x/test_3.py")
+    assert pick_dir_targets(tree, ["tests/a"]) == ("tests/a/test_2.py",)
+    assert pick_dir_targets(tree, ["tests/a-x"]) == ("tests/a-x/test_1.py",)
+
+
+def test_a_conftest_directory_with_no_test_below_it_gets_its_conftest_as_the_target():
+    tree = ("tests/a/test_a.py",)
+    assert pick_dir_targets(tree, ["tests", "tests/empty"]) == (
+        "tests/a/test_a.py",
+        "tests/empty/conftest.py",
+    )
+    assert pick_dir_targets((), ["tests"]) == ("tests/conftest.py",)
+    assert pick_dir_targets(tree, []) == ()
+
+
+def test_more_conftest_directories_than_the_measured_cap_are_not_picked():
+    """Measured 4.7 s collect-only for 600 conftest directories (50: 1.1 s, 1500: 10.7 s)."""
+    assert btt.MAX_CONFTEST_DIRS == 600
+    tree = tuple(sorted(f"tests/d{i}/test_{i}.py" for i in range(601)))
+    assert len(pick_dir_targets(tree, [f"tests/d{i}" for i in range(600)]) or ()) == 600
+    assert pick_dir_targets(tree, [f"tests/d{i}" for i in range(601)]) is None
