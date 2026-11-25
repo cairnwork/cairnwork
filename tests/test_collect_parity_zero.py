@@ -70,6 +70,43 @@ def _task(repo, source):
     return SimpleNamespace(repo=repo, base_commit=base, test_roots=("tests",))
 
 
+BOUND = {
+    "walrus_if": "import _c\nif (test_neg := _c.test_neg):\n    pass\n",
+    "walrus_while": "import _c\nwhile not (test_neg := _c.test_neg):\n    pass\n",
+    "walrus_for": "import _c\nfor _ in [(test_neg := _c.test_neg)]:\n    pass\n",
+    "walrus_with": "import _c, contextlib\nwith contextlib.nullcontext(test_neg := _c.test_neg):\n    pass\n",  # noqa: E501
+    "match_import": "match 1:\n    case _:\n        from _c import test_neg\n",
+    "match_def": "match 1:\n    case _:\n        def test_neg():\n            pass\n",
+    "match_capture": "import _c\nmatch _c.test_neg:\n    case test_neg:\n        pass\n",
+    "walrus_in_class": "def _f():\n    pass\nclass TestA:\n    (test_neg := _f)\n",
+    "global_bind": "import _c\ndef _bind():\n    global test_neg\n    test_neg = _c.test_neg\n_bind()\n",  # noqa: E501
+    "sys_modules_attr": "import sys, _c\nsys.modules[__name__].test_neg = _c.test_neg\n",
+    "sys_modules_dict": "import sys, _c\nsys.modules[__name__].__dict__['test_neg'] = _c.test_neg\n",  # noqa: E501
+    "builtins_exec": "import builtins\nbuiltins.exec('from _c import test_neg')\n",
+    "builtins_globals": "import builtins, _c\nbuiltins.globals()['test_neg'] = _c.test_neg\n",
+    "alias_globals": "import _c\ng = globals\ng()['test_neg'] = _c.test_neg\n",
+    "rebound_list": "import unittest\nlist = unittest.TestCase\nclass Checks(list):\n    def test_neg(self):\n        pass\n",  # noqa: E501
+    "rebound_object": "from unittest import TestCase as object\nclass Checks(object):\n    def test_neg(self):\n        pass\n",  # noqa: E501
+    "rebound_abc": "from unittest import TestCase as ABC\nclass Checks(ABC):\n    def test_neg(self):\n        pass\n",  # noqa: E501
+    "deleted_init": "class TestA:\n    def __init__(self):\n        pass\n    del __init__\n    def test_neg(self):\n        pass\n",  # noqa: E501
+    "except_star": "try:\n    from _c import test_neg\nexcept* ValueError:\n    pass\n",
+}
+PLAIN = {
+    "attribute_abc": "import abc\nclass M(abc.ABC):\n    def test_x(self):\n        pass\n",
+    "local_name": "def helper():\n    test_dir = 1\n    return test_dir\n",
+}
+
+
+@pytest.mark.parametrize("kind", sorted(BOUND))
+def test_a_test_name_bound_by_any_statement_may_have_tests(repo, kind):
+    assert _may_have_tests(_task(repo, BOUND[kind]), "tests/test_x.py") is True
+
+
+@pytest.mark.parametrize("kind", sorted(PLAIN))
+def test_an_attribute_abc_base_is_a_plain_base(repo, kind):
+    assert _may_have_tests(_task(repo, PLAIN[kind]), "tests/test_x.py") is False
+
+
 @pytest.mark.parametrize("kind", sorted(NOT_TESTS))
 def test_a_module_that_defines_nothing_collectable_may_have_no_tests(repo, kind):
     assert _may_have_tests(_task(repo, NOT_TESTS[kind]), "tests/test_x.py") is False
