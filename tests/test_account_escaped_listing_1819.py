@@ -133,3 +133,50 @@ def test_merged_listing_is_bounded_and_reasons_not_repeated():
 def test_a_three_digit_day_age_is_shown(monkeypatch):
     argv, _ = _snap(monkeypatch, "5 1 S 123-04:05:06 sleep\n")
     assert argv == ("sleep S 123-04.05.06",)
+
+
+def test_snapshot_is_taken_before_the_kill(monkeypatch):
+    order = []
+    acct = _acct(monkeypatch, 2, 0)
+    monkeypatch.setattr(
+        va.VerifierAccount, "_kill_until_clean", lambda self, n, d: order.append("kill") or 0
+    )
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout: order.append("snap") or ((), ()))
+    acct.reap()
+    assert order == ["snap", "kill"]
+
+
+def test_a_slow_snapshot_cannot_change_the_count(monkeypatch):
+    """A snapshot that eats the time must not make the kill run out of its budget (#1824 review)."""
+    clock = {"now": 0.0}
+    monkeypatch.setattr(va.time, "monotonic", lambda: clock["now"])
+
+    def counted(self, deadline=None, attempts=1):
+        clock["now"] += 90.0
+        return 1  # only the main run, which reap(1) ends on purpose
+
+    def kill(self, attempts, deadline):
+        clock["now"] += 26.0
+        return -1 if clock["now"] > deadline else 0
+
+    def slow_ps(argv, **kwargs):
+        clock["now"] += min(100.0, kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="9 8 S 00:01 sleep\n", stderr="")
+
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", counted)
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", kill)
+    monkeypatch.setattr(vs.subprocess, "run", slow_ps)
+    assert va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(1) == 0
+
+
+def test_snapshot_timeout_is_capped(monkeypatch):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(kwargs["timeout"])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(vs.subprocess, "run", run)
+    vs.snapshot("x", 120.0)
+    vs.snapshot("x", 4.0)
+    assert seen[0] <= 30 and seen[1] <= 1.0

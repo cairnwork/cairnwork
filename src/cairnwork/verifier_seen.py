@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import time
 
 from cairnwork import confined, survivor_argv
 
@@ -49,3 +50,13 @@ def _entry(stat: str, age: str, name: str) -> str:
     shown_stat = stat if _STAT.fullmatch(stat) else "?"
     shown_age = age.replace(":", ".") if _AGE.fullmatch(age) else "?"
     return f"{survivor_argv.prefix(name)} {shown_stat} {shown_age}"
+
+
+def before_kill(user: str, before: int, deadline: float) -> tuple[tuple, float]:
+    """The snapshot (only if ``before`` > 0) and the caller's deadline moved later by the time it
+    took: the diagnostic never uses up the budget the kill needs (#1824 review)."""
+    if before <= 0:
+        return ((), ()), deadline
+    start = time.monotonic()
+    seen = snapshot(user, max(deadline - start, 0.0))
+    return seen, deadline + (time.monotonic() - start)

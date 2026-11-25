@@ -260,9 +260,7 @@ class VerifierAccount:
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)
-            seen = (
-                verifier_seen.snapshot(self.user, _remaining(deadline)) if before > 0 else ((), ())
-            )
+            seen, deadline = verifier_seen.before_kill(self.user, before, deadline)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
             return survivor_argv.Survivors(1)
