@@ -49,7 +49,12 @@ class Survivors(int):
         return self
 
     def __add__(self, other: int) -> Survivors:
-        return Survivors(int(self) + other, self.argv, self.reasons)
+        # #1819: an added Survivors (reap()'s account count) keeps its listing too
+        return Survivors(
+            int(self) + other,
+            self.argv + getattr(other, "argv", ()),
+            self.reasons + getattr(other, "reasons", ()),
+        )
 
 
 def _allowed(words: list[str]) -> list[str]:
