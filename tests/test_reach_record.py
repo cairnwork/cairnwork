@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork import base_fixture_names as bfn
+from cairnwork import base_tree_targets as btt
 from cairnwork.collected_names import CollectedRecord
 from cairnwork.deferred_overlay import TestCommitRejected
 
@@ -170,34 +171,76 @@ def test_a_base_over_the_cap_still_refuses_a_changed_archive_a_conftest_puts_on_
     assert caught.value.code == CODE
 
 
-def test_a_base_over_the_cap_with_unpickable_conftest_directories_is_incomplete_and_refuses(
-    task, monkeypatch
+@pytest.mark.parametrize("bad", ["unreadable tree", "unreadable dirs", "too many dirs"])
+@pytest.mark.parametrize("paths", [("tests/data/lib.zip",), ("tests/lib/helper_mod.py",)])
+def test_a_plan_that_cannot_be_made_refuses_with_or_without_a_changed_py_file(
+    task, monkeypatch, bad, paths
 ):
-    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
-    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: None)
-    Runs(monkeypatch, [_record(task)])
-    with pytest.raises(TestCommitRejected):
-        check(task, ("tests/lib/helper_mod.py",))
-
-
-def test_a_base_over_the_cap_whose_conftest_directories_hold_no_test_is_complete(task, monkeypatch):
-    """Layer1 ruling 1: no test loads those conftests, so an empty pick is not 'cannot pick'."""
-    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
-    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: ())
+    """Layer1 round 3, 1(b)(c): fail closed whatever the commit changes (no run is made)."""
+    if bad == "unreadable tree":
+        monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: None)
+    elif bad == "unreadable dirs":
+        monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: None)
+    else:
+        monkeypatch.setattr(btt, "MAX_CONFTEST_DIRS", 1)  # the base has two conftest directories
     runs = Runs(monkeypatch, [_record(task)])
-    check(task, ("tests/lib/helper_mod.py",))
-    assert runs.targets == [("tests/lib/helper_mod.py",)]
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, paths)
+    assert caught.value.code == CODE
+    assert runs.targets == []
 
 
-def test_an_unreadable_tree_is_incomplete_and_refuses(task, monkeypatch):
-    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: None)
-    runs = Runs(monkeypatch, [_record(task)])
-    with pytest.raises(TestCommitRejected):
-        check(task, ("tests/lib/helper_mod.py", "tests/data/lib.zip"))
-    assert runs.targets == [("tests/lib/helper_mod.py",)]
+@pytest.mark.parametrize("cap", [300, 1])
+def test_a_base_over_the_cap_or_not_always_runs_at_least_one_tree_file(task, monkeypatch, cap):
+    """Layer1 round 3, 1(a): a root conftest or ini loads with any collected file."""
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", cap)
+    monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ())
     runs = Runs(monkeypatch, [_record(task)])
     check(task, ("tests/data/lib.zip",))
-    assert runs.targets == []  # no target at all: no record, the static rules stand
+    assert runs.targets[0][0] == TREE[0]
+    assert len(runs.targets[0]) == (len(TREE) if cap == 300 else 1)
+
+
+@pytest.mark.parametrize("cap", [300, 1])
+def test_a_conftest_directory_with_no_base_test_gets_its_conftest_as_a_target(
+    task, monkeypatch, cap
+):
+    """Layer1 round 3, 3: the commit may add a test there and change what that conftest adds."""
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", cap)
+    monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ("tests/quiet",))
+    runs = Runs(monkeypatch, [_record(task, sys_path=("tests/data/lib.zip",))])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/quiet/test_new.py", "tests/data/lib.zip"))
+    assert "tests/quiet/conftest.py" in runs.targets[0]
+
+
+def test_a_dropped_test_that_was_the_only_one_below_a_conftest_leaves_its_conftest_a_target(
+    task, monkeypatch
+):
+    """Layer1 round 3, 2: the rerun picks again from the tree minus the dropped file."""
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/sib/test_s.py",))
+    record = _record(task, sys_path=("tests/data/lib.zip",))
+    runs = Runs(monkeypatch, [None, record])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
+    assert runs.targets[1] == ("tests/sib/conftest.py", "tests/conftest.py")
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["sys", "path", "plugin", "importlib", "import_module", "__import__", "exec", "eval", "site"],
+)
+def test_each_path_signal_word_in_a_dropped_file_refuses(task, monkeypatch, word):
+    monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: f"x = 1  # {word}\n".encode())
+    Runs(monkeypatch, [None, _record(task)])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/sib/test_s.py",))
+
+
+def test_a_dropped_file_with_no_signal_word_is_accepted(task, monkeypatch):
+    monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: b"import no_such_module\n")
+    Runs(monkeypatch, [None, _record(task)])
+    check(task, ("tests/sib/test_s.py",))
 
 
 def test_an_account_run_makes_no_reach_run(task, monkeypatch):

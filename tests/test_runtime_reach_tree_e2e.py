@@ -185,3 +185,63 @@ def test_a_base_over_the_cap_still_refuses_an_archive_a_sibling_conftest_puts_on
     refused(
         go(project, tmp_path, base, {"tests/a/data/lib.zip": "z2", Z: OK + "# e\n"}, extra=(Z,))
     )
+
+
+# layer1 round 3: shapes the first over-cap fix did not close (cap forced to 1 for the "over" rows)
+@pytest.fixture(params=["whole", "over"])
+def either_cap(request, monkeypatch):
+    from cairnwork import base_fixture_names
+
+    if request.param == "over":
+        monkeypatch.setattr(base_fixture_names, "MAX_TREE_TARGETS", 1)
+
+
+ONLY = {"tests/a/conftest.py": SIBLING_ZIP, "tests/a/test_broken.py": BROKEN, Z: OK, **ZIPS}
+
+
+def test_a_dropped_broken_test_that_was_the_only_one_below_its_conftest_still_loads_it(
+    project, tmp_path, either_cap
+):
+    fixed = {"tests/a/data/lib.zip": "z2", "tests/a/test_broken.py": OK}
+    refused(go(project, tmp_path, ONLY, fixed, extra=("tests/a/test_broken.py",)))
+
+
+def test_the_same_only_broken_test_with_an_archive_off_sys_path_is_accepted(project, tmp_path):
+    fixed = {"tests/a/data/other.zip": "o2", "tests/a/test_broken.py": OK}
+    accepted(go(project, tmp_path, ONLY, fixed, extra=("tests/a/test_broken.py",)))
+
+
+NOTEST = {"tests/a/conftest.py": SIBLING_ZIP, Z: OK, **ZIPS}
+
+
+def test_a_conftest_directory_with_no_base_test_still_loads_when_the_commit_adds_one(
+    project, tmp_path, either_cap
+):
+    new = {"tests/a/test_new.py": OK, "tests/a/data/lib.zip": "z2"}
+    refused(go(project, tmp_path, NOTEST, new, extra=("tests/a/test_new.py",)))
+
+
+def test_the_same_directory_with_an_archive_off_sys_path_is_accepted(project, tmp_path):
+    new = {"tests/a/test_new.py": OK, "tests/a/data/other.zip": "o2"}
+    accepted(go(project, tmp_path, NOTEST, new, extra=("tests/a/test_new.py",)))
+
+
+ROOT = {
+    "conftest.py": "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent / 'data' / 'lib.zip'))\n",
+    "data/lib.zip": "z",
+    "data/other.zip": "o",
+    "tests/x/test_x.py": OK,
+    "tests/y/test_y.py": OK,
+}  # fmt: skip
+
+
+def test_a_root_conftest_that_puts_an_archive_on_sys_path_loads_over_the_cap(
+    project, tmp_path, over_cap
+):
+    refused(go(project, tmp_path, ROOT, {"data/lib.zip": "z2"}))
+
+
+def test_the_same_root_conftest_layout_with_an_archive_off_sys_path_is_accepted(
+    project, tmp_path, over_cap
+):
+    accepted(go(project, tmp_path, ROOT, {"data/other.zip": "o2"}))
