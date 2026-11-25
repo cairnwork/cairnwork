@@ -117,6 +117,7 @@ def _hidden_old_process(monkeypatch, started):
     monkeypatch.setattr(proc_start, "LINUX", True)
     monkeypatch.setattr(proc_start, "_boot_id", lambda proc: "boot1")
     monkeypatch.setattr(proc_start, "boot_start", lambda pid, proc="/proc": started)
+    monkeypatch.setattr(proc_start, "boot_mark", lambda proc="/proc": "boot1 5000.0")  # now
     monkeypatch.setattr(confined, "_restricted", lambda: "")
     monkeypatch.setattr(confined, "_reread", lambda pids: None)
     row = (999999, 999999, os.getuid(), None)
@@ -135,6 +136,20 @@ def test_an_unreadable_process_newer_than_the_run_keeps_the_marker(tmp_path, mon
     marker, _ = _orphan(tmp_path)
     _marker_taken_at(marker, "boot1 1000.0")
     _hidden_old_process(monkeypatch, 2000.0)  # started after the run began
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID]
+    assert marker.exists()
+
+
+@pytest.mark.parametrize(
+    "mark",
+    ["boot1 1e18", "boot1 1e300", "boot1 99999999999", "boot1 5000.5", "boot1 inf", "boot1 nan"]
+    + ["boot1 -5", "boot2 10.0", "boot1 10.0 extra", "boot1", "", "garbage", "boot1  10.0"],
+)
+def test_a_start_mark_that_cannot_be_trusted_keeps_the_marker(tmp_path, monkeypatch, mark):
+    marker, _ = _orphan(tmp_path)
+    _marker_taken_at(marker, mark)
+    _hidden_old_process(monkeypatch, 10.0)  # old: only a trusted mark would let it be ignored
     out = module.cleanup(Intake(tmp_path))
     assert out["cleaned"] == [] and out["kept"] == [AID]
     assert marker.exists()
