@@ -122,6 +122,29 @@ def test_a_tree_over_the_cap_is_not_run_whole_and_says_so(task, monkeypatch, cap
     assert "TREE_OVER_CAP" in caplog.records[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    "extra", [(), ("tests/helpers.py",), ("tests/helpers.py", "tests/check_w.py")]
+)
+def test_what_the_candidate_changes_never_moves_the_tree_cap(task, monkeypatch, extra):
+    """The cap reads the base tree alone: more changed base files cannot push the run to the
+    narrow fallback (the 3 test files of the base fit a cap of 3 for every k)."""
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 3)
+    calls = _run(monkeypatch, [frozenset({"n"})])
+    paths = ("tests/conftest.py", "tests/test_a.py", *extra)
+    assert bfn.probe(CTX, task, paths, "r") == (frozenset({"n"}), "OK")
+    assert len(calls) == 1 and set(calls[0][0]) >= {
+        "tests/sib/test_s.py",
+        "tests/deep/er/test_d.py",
+    }
+
+
+def test_only_the_base_tests_under_a_new_conftests_directory_are_collected(task, monkeypatch):
+    calls = _run(monkeypatch, [frozenset({"n"})])
+    paths = ("tests/sib/conftest.py", "tests/test_a.py")
+    assert bfn.probe(CTX, task, paths, "r") == (frozenset({"n"}), "OK")
+    assert calls[0][0] == ("tests/test_a.py", "tests/sib/test_s.py")  # not deep/ and not others
+
+
 def test_an_unreadable_tree_keeps_the_narrow_run(task, monkeypatch):
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: None)
     calls = _run(monkeypatch, [frozenset({"n"})])

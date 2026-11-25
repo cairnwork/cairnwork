@@ -15,7 +15,7 @@ import subprocess
 from pathlib import Path
 
 from cairnwork.base_tree_targets import base_tree_targets
-from cairnwork.conftest_check import check_conftests, conftest_of
+from cairnwork.conftest_check import check_conftests, conftest_of, governed
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -62,8 +62,10 @@ def _log(level: int, message: str, reason: str) -> None:
 def probe(ctx, task, paths: tuple[str, ...], run_id: str):
     """(names, reason): the names the base run recorded and "OK", or (None, a reason code):
     ACCOUNT_RUN, NO_CONFTEST_CHANGE, NO_BASE_TARGET (not attempted), RUN_FAULT,
-    RUN_COUNT or NO_NAMES_RECORDED (attempted, nothing usable). The first try collects the whole
-    base tree (#1767); when that is too big, unreadable or gives no names, the narrow run of the
+    RUN_COUNT or NO_NAMES_RECORDED (attempted, nothing usable). The first try collects the base
+    tests under a conftest's directory the test commit adds or edits (#1767; a sibling directory is
+    not governed by it). The base tree size alone (never a changed file) decides whether that is
+    tried: when the tree is too big, unreadable or the run gives no names, the narrow run of the
     changed files follows, and its names come with TREE_OVER_CAP, TREE_UNREADABLE or
     TREE_RUN_FAILED instead of "OK". Diagnostics only."""
     conftests = conftest_of(paths)
@@ -82,9 +84,10 @@ def probe(ctx, task, paths: tuple[str, ...], run_id: str):
         tree = base_tree_targets(task.repo, task.base_commit, tuple(task.test_roots))
         note = "TREE_UNREADABLE"
         if tree is not None:
-            whole = (*narrow, *(p for p in tree if p not in narrow))
             note = "TREE_OVER_CAP"
-            if len(whole) <= MAX_TREE_TARGETS:
+            if len(tree) <= MAX_TREE_TARGETS:  # the base alone decides: no changed file counts
+                under = set(governed(conftests, tree))
+                whole = (*narrow, *(p for p in tree if p in under and p not in narrow))
                 names, _ = _collect_run(ctx, task, whole, run_id)
                 if names is not None:
                     return names, "OK"
