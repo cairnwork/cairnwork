@@ -19,7 +19,7 @@ from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.intake_config import has_token, stored_config
 from cairnwork.intake_request import IntakeRefused, check_requests
-from cairnwork.runtime_reach import check_runtime_reach, resolve_record
+from cairnwork.runtime_reach import UNRESOLVED, check_runtime_reach, resolve_record
 
 SHA = "a" * 40
 
@@ -230,15 +230,15 @@ def _record(root: Path, entry: str) -> CollectedRecord:
     return CollectedRecord(frozenset(), (), (entry,), (), str(root))
 
 
-def test_an_unresolvable_entry_refuses_at_resolve_and_at_check_time(tmp_path, deny):
+def test_an_unresolvable_entry_is_marked_at_resolve_and_refused_at_check_time(tmp_path, deny):
     root = _checkout(tmp_path)
     entry = str(root / "plug" / "sub" / "real.py")
     (root / "plug" / "sub").mkdir()
     deny("sub")
+    resolved = resolve_record(_record(root, entry), root)  # never raises: the probe would drop it
+    assert dict(resolved.real)[entry] == UNRESOLVED
     with pytest.raises(TestCommitRejected):
-        resolve_record(_record(root, entry), root)
-    with pytest.raises(TestCommitRejected):
-        check_runtime_reach(_record(root, entry), ["plug/sub/real.py"])
+        check_runtime_reach(resolved, ["plug/real.py"])
 
 
 def test_a_missing_entry_is_absent_and_keeps_its_lexical_path(tmp_path):
@@ -257,3 +257,17 @@ def test_a_readable_symlinked_entry_still_resolves_to_its_target(tmp_path):
     entry = str(root / "plug" / "alias.py")
     resolved = resolve_record(_record(root, entry), root)
     assert dict(resolved.real)[entry] == str(root / "plug" / "real.py")
+
+
+@pytest.mark.parametrize("failing", ["is_dir", "exists"])
+def test_check_requests_names_the_query_that_failed(tmp_path, monkeypatch, failing):
+    def boom(*args, **kwargs):
+        raise PermissionError()  # no strerror: the message must still say why
+
+    monkeypatch.setattr(present, failing, boom)
+    if failing == "exists":
+        monkeypatch.setattr(present, "is_dir", lambda *a, **k: False)
+    with pytest.raises(IntakeRefused) as caught:
+        check_requests(tmp_path)
+    want = "requests directory" if failing == "is_dir" else "ownership ledger"
+    assert want in str(caught.value) and "PermissionError" in str(caught.value)

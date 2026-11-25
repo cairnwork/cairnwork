@@ -5,39 +5,33 @@ owner in owner mode, as the verifier account under one, so that what it can open
 run's Python could open. Standard library only; nothing from the checkout or the run is
 imported. It prints one JSON object and exits 0; any error it cannot place fails the run.
 
-Directories are identified by (st_dev, st_ino), never by spelling: the kernel resolves letter
-case and NFC/NFD on APFS, firmlinks (/System/Volumes/Data), symlinks and ``..`` that a string
-comparison or realpath does not canonicalize (#289 review).
+Directories are identified by (st_dev, st_ino), never by spelling (case, NFC/NFD on APFS,
+firmlinks, symlinks and ``..`` that no string comparison or realpath canonicalizes; #289).
 
 1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
-   its owner is opened (u+rwx) first, and one still not listable and searchable (an ACL) is an
-   error. Each directory becomes a node with its entries as edges:
-   subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
-   directory, after the whole listing has opened every closed directory in the roots) is a
-   directory. Every pyc-like name is reported, so is every other regular file that starts with
-   this Python's magic number (the run's Python names bytecode by ``BYTECODE_SUFFIXES``,
-   ``sys.implementation.cache_tag`` and pytest's ``PYC_TAIL``, all of which the run can change;
-   the owner judges only those outside the checkout's committed files), so is every error, a
+   its owner is opened (u+rwx) first, a closed regular file likewise (u+r, see bytecode), and a
+   directory still not listable and searchable (an ACL) is an error. Each directory becomes a
+   node with its entries as edges: subdirectories, and symlinks whose target (resolved by the
+   kernel relative to the link's own directory, after the whole listing has opened every closed
+   directory in the roots) is a directory. Every pyc-like name is reported, so is every other
+   regular file that starts with this Python's magic number (the run can rename bytecode; the
+   owner judges only those outside the checkout's committed files), so is every error, a
    symlink's included unless its target is missing, closed (by then only outside the roots),
    looping or through a file (link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
    edges too, so /var -> /private/var counts; the step down towards each root is an edge even
-   where an ancestor cannot be listed), and every node gets a ``..`` edge to the
-   directory the kernel gives for ``<node>/..``. Only nodes from which a pyc can be reached are
-   walked.
+   where an ancestor cannot be listed), and every node gets a ``..`` edge to the directory the
+   kernel gives for ``<node>/..``. Only nodes from which a pyc can be reached are walked.
 3. **Walk.** Python reads ``<P>/<D>/<name>`` as bytecode for a source in directory D, and the
    lookup resolves P's part through these nodes. So the walk starts at every node P with D = /
    and, for each edge, steps D by every entry of D whose name folds (NFD, case) to the edge's
    name, or by ``..``; states are (node, D) by identity, so loops end. Where a node holding a pyc
    is reached with D, each existing source in D the pyc's name can stand for (a stem cut at a dot
    plus ``.py``, folded) is a hit, and when D was entered as ``__pycache__`` from the directory
-   P's side stood in (no prefix: P = /), the sources of that directory too (the legacy layout,
-   which Python never reads at ``<P>/<D>/__pycache__`` under another prefix). Only the first
-   spelling of D reached is kept, so one the kernel refuses as too long is an error, not a miss.
+   P's side stood in (P = /), the sources of that directory too (the legacy layout). Only the
+   first spelling of D reached is kept, so one the kernel refuses as too long is an error.
 
-Not modeled: a lookup that leaves the run's directories and their ancestors for another
-directory and comes back into them by ``..`` or a system link (the run cannot write there).
-"""
+Not modeled: a lookup leaving the run's directories and coming back by ``..`` or a system link."""
 
 import errno
 import importlib.util
@@ -71,9 +65,18 @@ def ident(info):
 
 def bytecode(name, fd):
     """Whether the regular file ``name`` in directory ``fd`` starts with this Python's magic
-    number. A file that cannot be opened raises (an error row in opened), never "not bytecode"
-    (#1823); one removed before the run ended is the known gap of bytecode_roots.py."""
-    handle = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+    number. A regular file closed to its owner (an honest suite may leave one) is opened to it
+    (u+r, never through a link) first; one still unreadable raises: an error row, never "not
+    bytecode" (#1823). One removed before the run ended: the gap in bytecode_roots.py."""
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        handle = os.open(name, flags, dir_fd=fd)
+    except PermissionError:
+        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        if not NOFOLLOW or not stat.S_ISREG(info.st_mode):
+            raise
+        os.chmod(name, stat.S_IMODE(info.st_mode) | 0o400, dir_fd=fd, **NOFOLLOW)
+        handle = os.open(name, flags, dir_fd=fd)
     try:
         return stat.S_ISREG(os.fstat(handle).st_mode) and os.read(handle, len(MAGIC)) == MAGIC
     finally:

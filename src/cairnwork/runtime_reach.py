@@ -34,6 +34,9 @@ CODE = "TEST_COMMIT_CONFTEST_STATIC"
 _BYTECODE = (".pyc", ".pyo")
 
 
+UNRESOLVED = "\0unresolved"  # resolve_record could not tell where an entry leads
+
+
 def check_runtime_reach(
     record: CollectedRecord | None,
     changed_on_base: Iterable[str],
@@ -64,12 +67,12 @@ def check_runtime_reach(
 def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
     """The record with its checkout root and the realpath of every entry and plugin file, read
     while the checkout still exists (a symlink cannot be followed once it is removed)."""
-    root = _real(os.fspath(checkout))
+    root = _real(os.fspath(checkout)) or os.path.abspath(checkout)
     paths = (*record.sys_path, *record.sys_path_finish, *(f for _, f in record.plugins if f))
     real = {}
     for path in paths:
         try:
-            real[path] = _real(_full(root, path))
+            real[path] = _real(_full(root, path)) or UNRESOLVED
         except ValueError:
             continue
     return replace(record, root=root, real=tuple(sorted(real.items())))
@@ -79,16 +82,17 @@ def _refuse(why: str) -> None:
     raise TestCommitRejected(CODE, why)
 
 
-def _real(full: str) -> str:
-    """realpath where only "not found" means absent (then the lexical result, as before); any
-    other OSError (unsearchable parent, loop) refuses (#1823: 3.14 swallows them)."""
+def _real(full: str) -> str | None:
+    """realpath where only "not found" means absent (then the lexical result, as before); None
+    for any other OSError (unsearchable parent, loop, name too long): 3.14 swallows them (#1823).
+    A caller must not read None as absent: check_runtime_reach refuses it (_rels), because
+    resolve_record runs inside a probe that drops its whole record on an exception."""
     try:
         return os.path.realpath(full, strict=True)
     except (FileNotFoundError, NotADirectoryError):
         return os.path.realpath(full)
-    except OSError as exc:
-        _refuse(f"cannot resolve a sys.path or plugin entry: {exc.strerror or exc.errno}")
-        raise
+    except OSError:
+        return None
 
 
 def _key(path: str) -> str:
@@ -192,7 +196,10 @@ def _rels(root: str, path: str, real: dict[str, str]) -> tuple[str, ...]:
     checkout. A relative entry is read against the checkout."""
     try:
         full = _full(root, path)
-        found = {os.path.normpath(full), real.get(path) or _real(full)}
+        resolved = real.get(path) or _real(full) or UNRESOLVED
+        if resolved == UNRESOLVED and _within(root, os.path.normpath(full)):
+            _refuse("a sys.path or plugin entry of the base run cannot be resolved")
+        found = {os.path.normpath(full), resolved}
         rels = (os.path.relpath(p, root) for p in found if _within(root, p))
         return tuple(sorted(r.replace(os.sep, "/") for r in rels if r != "."))
     except ValueError:

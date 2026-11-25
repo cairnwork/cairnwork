@@ -185,11 +185,16 @@ def check_requests(state: Path) -> None:
     (#466): those tasks' requests are gone, which prepare() must not hide by making it anew. With
     no ledger or an empty one nothing is lost, so prepare() creates it. Read-only."""
     requests, ledger = state / "requests", state / "ownership.sqlite"
+    asked = "the requests directory"
     try:  # only "not found" is absent: any other error may hide a bound task (#1823)
-        if present.is_dir(requests, follow=False) or not present.exists(ledger):
+        if present.is_dir(requests, follow=False):
+            return
+        asked = "the ownership ledger"
+        if not present.exists(ledger):
             return
     except OSError as exc:
-        raise IntakeRefused("BAD_STATE", f"{requests}: cannot be checked: {exc.strerror}") from exc
+        why = exc.strerror or (os.strerror(exc.errno) if exc.errno else type(exc).__name__)
+        raise IntakeRefused("BAD_STATE", f"cannot check {asked} in {state}: {why}") from exc
     try:
         uri = f"{ledger.absolute().as_uri()}?mode=ro"
         with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:

@@ -126,18 +126,17 @@ def test_other_files_and_fifos_pass(run):
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0 does not close a file to root")
-def test_a_closed_file_is_reported_not_passed_as_not_bytecode(run):
-    """#1823: a file this user cannot open is an error row (the walk runs in a child process,
-    so the lookup cannot be patched here); the unit test patches os.open (test_present_1823)."""
+def test_an_honest_suite_leaving_a_closed_file_still_passes(run):
+    """#1823: a regular file closed to its owner is opened (u+r) before it is read, as a closed
+    directory is; an honest suite that leaves one is not a finding."""
     checkout, run_dir = run
     closed = run_dir / "home" / "closed"
     closed.write_text("x = 1\n")
     closed.chmod(0)
     try:
-        found = scan(checkout, run_dir)
+        assert scan(checkout, run_dir) == ()
     finally:
         closed.chmod(0o600)
-    assert any("closed unreadable" in line for line in found)
 
 
 def nested(top: Path, chars: int) -> Path:
