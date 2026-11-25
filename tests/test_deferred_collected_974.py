@@ -208,3 +208,93 @@ def test_a_new_id_the_reader_does_not_hold_is_refused_even_beside_a_seen_one(mon
     assert err.value.code == "DEFERRED_TESTS_UNREADABLE"
     assert "Hid" not in str(err.value) and "test_h" not in str(err.value)  # no candidate text
     assert "1 new test" in str(err.value)
+
+
+@pytest.mark.parametrize("why", ["collect-over-cap", "collect-timeout", "collect-not-recorded"])
+def test_a_run_without_a_usable_record_names_the_reason(monkeypatch, caplog, why):
+    """#1792: the unusable reason was lost; now the log and the message carry it (code same)."""
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: True)
+
+    def verifiers(ctx, commit, specs, run_id):
+        return (SimpleNamespace(log_path="/nonexistent/x/log", commit=commit),)
+
+    monkeypatch.setattr(deferred_collected, "run_verifiers", verifiers)
+    monkeypatch.setattr(
+        deferred_collected,
+        "read_collected",
+        lambda run: Collected(unusable=why) if run.commit == "t" else NONE,
+    )
+    task = SimpleNamespace(test_commit="t", base_commit="b")
+    with caplog.at_level("WARNING", logger=deferred_collected.LOG.name):
+        with pytest.raises(Rejected) as err:
+            _check(task, set())
+    assert err.value.code == "DEFERRED_TESTS_COLLECT_FAILED"
+    assert why in str(err.value) and why in caplog.text
+
+
+def test_a_large_but_legal_collect_still_passes(monkeypatch):
+    ids = tuple(f"{PATH}::test_{n}" for n in range(5000))
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: True)
+    monkeypatch.setattr(
+        deferred_collected,
+        "run_verifiers",
+        lambda *a: (SimpleNamespace(log_path="/nonexistent/x/log"),),
+    )
+    monkeypatch.setattr(deferred_collected, "read_collected", lambda run: Collected(ids))
+    _check(SimpleNamespace(test_commit="t", base_commit="b"), set())
+
+
+@pytest.fixture(autouse=True)
+def _fresh_reasons():
+    """Tests that call ``_collect`` directly leave keys; start every test from an empty dict."""
+    deferred_collected._WHY.clear()
+
+
+def _stub(monkeypatch, usable_for):
+    """Real _collect/_collect_all over stubbed runs; read_collected is unusable unless the commit
+    is in ``usable_for``; a commit named 'boom' makes run_verifiers raise."""
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: True)
+
+    def verifiers(ctx, commit, specs, run_id):
+        if commit == "boom":
+            raise RuntimeError("x")
+        return (
+            SimpleNamespace(log_path="/nonexistent/x/log", commit=commit, files=specs[0].targets),
+        )
+
+    def read(run):
+        if run.commit in usable_for:
+            return NONE
+        return Collected(unusable="collect-timeout" if len(run.files) > 1 else "collect-over-cap")
+
+    monkeypatch.setattr(deferred_collected, "run_verifiers", verifiers)
+    monkeypatch.setattr(deferred_collected, "read_collected", read)
+
+
+def _go(task, files=(PATH,)):
+    deferred_collected.check(None, task, files, set(), "r")
+
+
+def test_nothing_is_left_behind_when_both_runs_fail(monkeypatch):
+    _stub(monkeypatch, usable_for=())  # the test commit and the base probe both fail
+    _go(SimpleNamespace(test_commit="t", base_commit="b"))  # returns (UNCOMPARABLE path)
+    assert deferred_collected._WHY == {}
+
+
+def test_nothing_is_left_behind_after_a_refusal_or_a_fault(monkeypatch):
+    _stub(monkeypatch, usable_for=("b",))
+    with pytest.raises(Rejected):
+        _go(SimpleNamespace(test_commit="t", base_commit="b"))
+    assert deferred_collected._WHY == {}
+    with pytest.raises(Rejected) as err:  # a fault in the run itself, named collect-fault
+        _go(SimpleNamespace(test_commit="boom", base_commit="b"))
+    assert "collect-fault" in str(err.value) and deferred_collected._WHY == {}
+
+
+def test_a_many_batch_failure_leaves_nothing_and_names_the_first_failing_batch(monkeypatch):
+    _stub(monkeypatch, usable_for=("b",))
+    files = tuple(f"tests/test_f{i}.py" for i in range(deferred_collected.MAX_FILES + 1))
+    with pytest.raises(Rejected) as err:
+        _go(SimpleNamespace(test_commit="t", base_commit="b"), files)
+    assert "collect-timeout" in str(err.value)  # batch 0 holds 50 files: the first failing batch
+    assert deferred_collected._WHY == {}
