@@ -116,7 +116,7 @@ def test_a_name_only_the_run_sees_is_refused_on_real_seatbelt(project, tmp_path,
 
 def test_the_987_shape_is_accepted_without_the_run(project, tmp_path, monkeypatch):
     """The before column: only the run refuses it (main's static rule reads no test module)."""
-    monkeypatch.setattr(base_fixture_names, "collect", lambda *a, **k: None)
+    monkeypatch.setattr(base_fixture_names, "_probe", lambda *a, **k: (None, "RUN_FAULT"))
     base = SHAPES["#987 a helper outside the directory bound under a test name"]
     result = _run(project, tmp_path, base, _addition("#987"), [EDIT])
     assert result.status == "COMPLETED", result.reason
