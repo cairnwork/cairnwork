@@ -93,16 +93,17 @@ def test_a_broken_base_test_the_commit_fixes_does_not_hide_the_archive(project, 
 
 
 @pytest.mark.parametrize("name", LAYOUTS)
-def test_the_same_broken_base_test_with_an_archive_off_sys_path_is_accepted(
+def test_the_same_broken_base_test_with_an_archive_off_sys_path_is_refused_fail_closed(
     project, tmp_path, name
 ):
+    """Known residual (layer1 ruling): the record left the broken file out, so it is incomplete."""
     base, _, twin = LAYOUTS[name]
     base = {**base, "tests/test_broken.py": BROKEN}
     result = go(
         project, tmp_path, base, {twin: "o2", "tests/test_broken.py": OK},
         extra=("tests/test_broken.py",),
     )  # fmt: skip
-    accepted(result)
+    refused(result)
 
 
 def test_a_plugin_a_sibling_conftest_registers_by_name_is_refused_when_the_commit_changes_it(
