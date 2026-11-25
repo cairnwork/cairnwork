@@ -174,6 +174,34 @@ RESOLVING = [
     "def f(__package__):\n    pass",
     "global __package__",
 ]
+# Run as a script (``python s.py``), the parent package of a relative import comes from __name__
+# ("unittest.zz"): any write or naming of it counts, a plain read does not.
+NAME_WRITES = [
+    '__name__ = "unittest.zz"',
+    '__name__ += "x"',
+    '__name__: str = "unittest.zz"',
+    'globals()["__name__"] = "unittest.zz"',
+    'vars()["__name__"] = "unittest.zz"',
+    'locals()["__name__"] = "unittest.zz"',
+    'globals().update(__name__="unittest.zz")',
+    'globals().update({"__name__": "unittest.zz"})',
+    'setattr(me, "__name__", "unittest.zz")',
+    'delattr(me, "__name__")',
+    "del __name__",
+    'NAME = "__name__"',
+    "from m import __name__ as p",
+    "from m import a as __name__",
+    "import m as __name__",
+    "class __name__:\n    pass",
+    "def __name__():\n    pass",
+    "for __name__ in items:\n    pass",
+    "with ctx() as __name__:\n    pass",
+    "match value:\n    case __name__:\n        pass",
+    'obj.__name__ = "unittest.zz"',
+    "def f(__name__):\n    pass",
+    "global __name__",
+]
+RESOLVING += NAME_WRITES
 RELATIVE = [
     "from .mock import patch",
     "from ..mock import patch",
@@ -205,5 +233,17 @@ def test_the_taint_added_by_the_candidate_counts_too(tmp_path):
     ],
 )
 def test_a_comment_naming_the_words_does_not_block(tmp_path, line):
+    base, new = _pair(line)
+    assert _verdict(tmp_path, base, new) is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'if __name__ == "__main__":\n    pass\nfrom .types import type_ok, type_name',
+        "import logging\nLOG = logging.getLogger(__name__)\nfrom .types import type_ok",
+    ],
+)
+def test_a_plain_read_of_dunder_name_does_not_block(tmp_path, line):
     base, new = _pair(line)
     assert _verdict(tmp_path, base, new) is None
