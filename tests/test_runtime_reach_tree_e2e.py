@@ -278,9 +278,11 @@ def test_the_same_lone_broken_file_with_an_archive_off_sys_path_is_accepted(proj
 # #1809: a deleted base archive on sys.path is a change the reach check sees
 def test_a_deleted_archive_a_conftest_puts_on_sys_path_is_refused(project, tmp_path):
     base = {**SIBLING, **ZIPS, Z: OK}
-    refused(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=("tests/a/data/lib.zip",)))
+    gone = ("tests/a/data/lib.zip",)
+    refused(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=gone))
 
 
 def test_a_deleted_archive_off_sys_path_is_accepted(project, tmp_path):
     base = {**SIBLING, **ZIPS, Z: OK}
-    accepted(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=("tests/a/data/other.zip",)))
+    gone = ("tests/a/data/other.zip",)
+    accepted(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=gone))
