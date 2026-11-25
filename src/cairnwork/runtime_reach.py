@@ -127,7 +127,7 @@ def _plugin_hit(
     added: frozenset[str] = frozenset(),
 ) -> str | None:
     if file is None:
-        return _named(name, changed, exact)
+        return _named(name, changed | added, exact)
     keys = _by_key(changed)
     for rel in map(_source_of, _rels(root, file, real)):
         hit = _same(rel, keys, exact)

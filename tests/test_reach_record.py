@@ -313,3 +313,11 @@ def test_the_base_file_list_reaches_the_reach_check(task, monkeypatch):
     Runs(monkeypatch, [_record(task)])
     check(task, ("tests/data/lib.zip",))
     assert "tests/data/lib.zip" in seen[0][3] and "tests/test_a.py" in seen[0][3]
+
+
+def test_the_base_file_list_is_read_with_the_option_terminator(task, monkeypatch):
+    seen = []
+    real = bfn.run_git_bytes
+    monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: seen.append(a) or real(*a))
+    assert "tests/test_a.py" in bfn._base_paths(task)
+    assert seen[0][-2:] == (task.base_commit, "--")

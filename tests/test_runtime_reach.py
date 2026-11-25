@@ -280,3 +280,31 @@ def test_the_message_says_adds_when_the_hit_is_an_added_file(root):
 def test_a_pycache_bytecode_plugin_maps_back_to_its_source(root):
     path = str(root / "plug" / "__pycache__" / "helper.cpython-311.pyc")
     refused(rec(root, plugins=[("plug.helper", path)]), ["plug/helper.py"])
+
+
+# review round 4b: a file-less plugin name is matched against changed AND added files alike
+@pytest.mark.parametrize(
+    ("added", "refuses"),
+    [
+        ("pkg/mod.py", True),
+        ("pkg/mod/__init__.py", True),
+        ("PKG/MOD.py", True),
+        ("vendor/pkg/mod.py", True),
+        ("pkg/other.py", False),
+        ("pkg/mod.txt", False),
+        ("pkgx/mod.py", False),
+        ("pkg/mod/conftest.py", False),
+    ],
+)
+def test_a_file_less_plugin_name_is_matched_by_a_file_the_commit_adds(root, added, refuses):
+    record = rec(root, plugins=[("pkg.mod", None)])
+    if not refuses:
+        check_runtime_reach(record, [], [added], base_paths=frozenset())
+        return
+    assert "adds" in refused_with(record, [], frozenset(), added=[added])
+
+
+def test_a_file_less_plugin_name_still_matches_a_changed_file_and_says_changes(root):
+    record = rec(root, plugins=[("pkg.mod", None)])
+    assert "changes" in refused_with(record, ["pkg/mod.py"], frozenset({"pkg/mod.py"}))
+    check_runtime_reach(record, ["pkg/other.py"], [], base_paths=frozenset({"pkg/other.py"}))
