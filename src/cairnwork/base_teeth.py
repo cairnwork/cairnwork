@@ -27,7 +27,7 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
     """``(kind, code, detail)`` for ``Comparison``: TEETH, UNCOMPARABLE or NO_TEETH."""
     setup: list[str] = []
     env: list[str] = []
-    denied: list[str] = []  # the EPERM path of each env failure that has one (#1781)
+    eperm: list[str] = []  # the EPERM path of each env failure that has one (#1781)
     plugin: list[str] = []
     hidden = any(getattr(run, "hidden_tests", False) for run in runs)
     for run in runs:
@@ -40,8 +40,8 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
             if kind is None:
                 return ("TEETH", "", "")
             {"setup": setup, "plugin": plugin}.get(kind, env).append(nodeid)
-            if kind == "env" and (path := getattr(run, "denied", {}).get(nodeid)):
-                denied.append(path)
+            if kind == "env" and (path := getattr(run, "eperm_paths", {}).get(nodeid)):
+                eperm.append(path)
     if plugin and not setup:  # #804: only a missing table plugin's fixture stopped the base
         detail = f"a pytest plugin fixture is missing for {_shown(plugin, hidden)}"
         return ("UNCOMPARABLE", "PLUGIN_NOT_INSTALLED", detail + _PLUGIN_HINT)
@@ -56,8 +56,8 @@ def base_teeth(runs, targets) -> tuple[str, str, str]:
             "the test body failed from the environment (OSError, MemoryError, RecursionError, "
             f"or a subprocess that could not run) for {_shown(env, hidden)}"
         )
-        if len(denied) == len(env):  # every one was a sandbox denial: say which operation (#1781)
-            where = "1 denied path (withheld)" if hidden else shown(denied[0])
+        if len(eperm) == len(env):  # every one was a sandbox denial: say which operation (#1781)
+            where = "1 denied path (withheld)" if hidden else shown(eperm[0])
             detail += f"; the failing tests report an operation not permitted (EPERM) at {where}"
         return ("UNCOMPARABLE", "BASE_ENV_ERROR", detail)
     return ("NO_TEETH", "", "")

@@ -55,7 +55,7 @@ def _run(outcomes, kinds, denied, hidden=False):
         spec=SimpleNamespace(verifier_id="v"), returncode=1, forged=False, data_refused=(),
         timed_out=False, survivors=0, mutated=(), report_too_big=False, log_too_big=False,
         collect_errors=(), recorded=True, teardown_errors=(), skipped_deps=(),
-        outcomes=outcomes, fail_kind=kinds, denied=denied, hidden_tests=hidden,
+        outcomes=outcomes, fail_kind=kinds, eperm_paths=denied, hidden_tests=hidden,
     )  # fmt: skip
 
 

@@ -377,10 +377,11 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     observation = VerifierObservation(
         spec.verifier_id, f"{private.name}/verifier.log", f"sha256:{digest}", passed
     )
+    eperm = verdict.denied  # the report plugin's EPERM paths, not deny-channel evidence (#1781)
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
-        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big, denied=verdict.denied,
+        hidden_tests=bool(ctx.test_commit), report_too_big=verdict.too_big, eperm_paths=eperm,
         notes=(profile.notes if profile else ()) + host_notes(),
         collect_errors=verdict.collect_errors, uncollected_exposed=verdict.uncollected_exposed,
         teardown_errors=verdict.teardown_errors, fail_kind=verdict.fail_kind, log_too_big=too_big,
