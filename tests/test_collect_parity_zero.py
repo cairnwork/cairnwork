@@ -96,10 +96,20 @@ BOUND = {
     "dict_update": "import sys, _c\nsys.modules[__name__].__dict__.update(test_neg=_c.test_neg)\n",  # noqa: E501
     "try_star_else": "try:\n    pass\nexcept* ValueError:\n    pass\nelse:\n    def test_neg():\n        pass\n",  # noqa: E501
     "try_star_finally": "try:\n    pass\nfinally:\n    def test_neg():\n        pass\n",
+    "func_globals": "def f():\n    pass\nf.__globals__['test_a'] = lambda: None\n",
+    "frame_inspect": "import inspect\ninspect.currentframe().f_globals['test_a'] = lambda: None\n",
+    "frame_sys": "import sys\nsys._getframe().f_globals['test_a'] = lambda: None\n",
+    "frame_back": "import sys\nsys._getframe().f_back.f_globals['test_a'] = lambda: None\n",
+    "gen_frame": "def g():\n    yield 1\ng().gi_frame.f_globals['test_a'] = lambda: None\n",
+    "coro_frame": "async def c():\n    pass\nc().cr_frame.f_globals['test_a'] = lambda: None\n",
+    "getattr_string": "def f():\n    pass\ngetattr(f, '__globals__')['test_a'] = lambda: None\n",
+    "getattr_computed": "def f():\n    pass\nname = '__glo' + 'bals__'\ngetattr(f, name)['test_a'] = lambda: None\n",  # noqa: E501
     "except_star": "try:\n    from _c import test_neg\nexcept* ValueError:\n    pass\n",
 }
 PLAIN = {
     "attribute_abc": "import abc\nclass M(abc.ABC):\n    def test_x(self):\n        pass\n",
+    "frame_word_attributes": "def f(df, self):\n    return df.frame, self.frame_count, df.back\n",
+    "getattr_plain": "def f(x):\n    return getattr(x, 'name')\n",
     "local_name": "def helper():\n    test_dir = 1\n    return test_dir\n",
 }
 
