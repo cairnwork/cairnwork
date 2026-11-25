@@ -304,7 +304,7 @@ def _identifiers(node: ast.AST) -> Iterator[str]:
         yield from (node.module or "").split(".")
         yield from _bound_identifiers(node)
     elif isinstance(node, _TYPE_PARAMS):
-        yield node.name
+        yield getattr(node, "name")  # noqa: B009 - the tuple is built at run time, no narrowing
     elif isinstance(node, ast.MatchClass):
         yield from node.kwd_attrs  # case object(exec=e) reads the attribute
         yield from _bound_identifiers(node)
