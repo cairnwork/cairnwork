@@ -180,3 +180,22 @@ def test_snapshot_timeout_is_capped(monkeypatch):
     vs.snapshot("x", 120.0)
     vs.snapshot("x", 4.0)
     assert seen[0] <= 30 and seen[1] <= 1.0
+
+
+def _argv_of(monkeypatch, platform):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(vs.subprocess, "run", run)
+    monkeypatch.setattr(vs.sys, "platform", platform)
+    vs.snapshot("x", 4.0)
+    return seen[0]
+
+
+def test_ps_argv_has_x_on_darwin_only(monkeypatch):
+    """The platform branch of verifier_seen (macOS needs -x to list other sessions' processes)."""
+    assert "-x" in _argv_of(monkeypatch, "darwin")
+    assert "-x" not in _argv_of(monkeypatch, "linux")
