@@ -1,0 +1,193 @@
+"""#1769 review, unit level: which base files the reach run collects, and when it is not made."""
+
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from cairnwork import base_fixture_names as bfn
+from cairnwork.collected_names import CollectedRecord
+from cairnwork.deferred_overlay import TestCommitRejected
+
+CODE = "TEST_COMMIT_CONFTEST_STATIC"
+FILES = {
+    "tests/conftest.py": "",
+    "tests/test_a.py": "",
+    "tests/sib/conftest.py": "",
+    "tests/sib/test_s.py": "",
+    "tests/data/lib.zip": "z",
+    "tests/lib/helper_mod.py": "",
+}
+TREE = ("tests/sib/test_s.py", "tests/test_a.py")
+
+
+@pytest.fixture
+def task(tmp_path, monkeypatch):
+    def git(*args):
+        return subprocess.run(
+            ["git", "-C", str(tmp_path), "-c", "user.name=x", "-c", "user.email=x@x", *args],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()  # fmt: skip
+
+    git("init", "-q")
+    for name, text in FILES.items():
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text(text)
+    git("add", "-A")
+    git("commit", "-qm", "base")
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: TREE)
+    monkeypatch.setattr(bfn, "check_conftests", lambda *a, **k: None)  # the static rule is quiet
+    return SimpleNamespace(
+        repo=tmp_path, base_commit=git("rev-parse", "HEAD"), test_commit="t", test_roots=("tests",)
+    )
+
+
+def _record(task, *, plugin=None, sys_path=()):
+    root = str(Path(task.repo).resolve())
+    plugins = (("helper_mod", str(Path(root) / plugin)),) if plugin else ()
+    paths = tuple(str(Path(root) / p) for p in sys_path)
+    return CollectedRecord(frozenset({"s"}), plugins, paths, paths, root)
+
+
+class Runs:
+    """A fake run_verifiers: the targets of each run; ``records`` are handed out in turn."""
+
+    def __init__(self, monkeypatch, records):
+        self.targets, self.records = [], list(records)
+        monkeypatch.setattr(bfn, "run_verifiers", self)
+
+    def __call__(self, ctx, commit, specs, run_id, **kwargs):
+        self.targets.append(specs[0].targets)
+        record = self.records.pop(0) if self.records else None
+        return (
+            SimpleNamespace(fixture_names=frozenset() if record else None, collect_record=record),
+        )
+
+
+CTX = SimpleNamespace(account=None)
+
+
+def check(task, paths):
+    bfn.check_with_base(CTX, task, paths, "r")
+
+
+def test_any_changed_base_file_runs_the_whole_tree_plus_the_changed_py_files(task, monkeypatch):
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/data/lib.zip", "tests/lib/helper_mod.py"))
+    # a conftest in a sibling directory is not what chose these: the base tree was
+    assert runs.targets == [("tests/lib/helper_mod.py", *TREE)]
+
+
+def test_an_edited_base_test_file_is_not_collected_twice(task, monkeypatch):
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
+    assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py")]
+
+
+@pytest.mark.parametrize(
+    "paths", [("tests/conftest.py",), ("tests/new.py",), ("tests/conftest.py", "tests/new.py")]
+)
+def test_a_conftest_alone_or_new_files_alone_make_no_reach_run(task, monkeypatch, paths):
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, paths)
+    assert runs.targets == []
+
+
+def test_a_conftest_beside_a_changed_base_file_does_get_the_run(task, monkeypatch):
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/conftest.py", "tests/data/lib.zip"))
+    assert len(runs.targets) == 1
+
+
+def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, monkeypatch):
+    record = _record(task, sys_path=("tests/data/lib.zip",))
+    runs = Runs(monkeypatch, [None, record])  # the first run (with the edited file) gave nothing
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
+    assert caught.value.code == CODE
+    assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py"), ("tests/test_a.py",)]
+
+
+def test_a_failed_run_with_no_changed_py_file_is_not_repeated(task, monkeypatch):
+    runs = Runs(monkeypatch, [None])
+    check(task, ("tests/data/lib.zip",))
+    assert len(runs.targets) == 1
+
+
+def test_a_base_with_more_files_than_the_cap_runs_one_tree_file_and_the_changed(task, monkeypatch):
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/lib/helper_mod.py",))
+    assert runs.targets == [("tests/lib/helper_mod.py", "tests/sib/test_s.py")]
+
+
+def test_an_unreadable_tree_runs_the_changed_py_files_only(task, monkeypatch):
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: None)
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/lib/helper_mod.py", "tests/data/lib.zip"))
+    assert runs.targets == [("tests/lib/helper_mod.py",)]
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/data/lib.zip",))
+    assert runs.targets == []  # nothing to run, nothing to refuse: the static rules stand
+
+
+def test_an_account_run_makes_no_reach_run(task, monkeypatch):
+    runs = Runs(monkeypatch, [_record(task)])
+    bfn.check_with_base(SimpleNamespace(account=object()), task, ("tests/data/lib.zip",), "r")
+    assert runs.targets == []
+
+
+def test_a_run_that_raises_leaves_the_static_verdict(task, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(bfn, "run_verifiers", boom)
+    check(task, ("tests/data/lib.zip",))
+
+
+# what the record may refuse
+def test_an_archive_on_sys_path_that_the_commit_changes_is_refused(task, monkeypatch):
+    Runs(monkeypatch, [_record(task, sys_path=("tests/data/lib.zip",))])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/data/lib.zip",))
+
+
+def test_a_changed_base_file_off_sys_path_is_not_refused(task, monkeypatch):
+    Runs(monkeypatch, [_record(task, sys_path=("tests/data/lib.zip",))])
+    check(task, ("tests/lib/helper_mod.py",))
+
+
+def test_a_plugin_file_the_commit_changes_is_refused(task, monkeypatch):
+    Runs(monkeypatch, [_record(task, plugin="tests/lib/helper_mod.py")])
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/lib/helper_mod.py",))
+
+
+def test_a_file_the_commit_adds_is_never_a_plugin_hit(task, monkeypatch):
+    """The base-only filter: a path the base lacks must not be matched against plugin files."""
+    Runs(monkeypatch, [_record(task, plugin="tests/lib/new_plugin.py")])
+    check(task, ("tests/data/lib.zip", "tests/lib/new_plugin.py"))
+
+
+def test_a_sys_path_entry_the_base_names_but_lacks_is_refused_when_the_commit_adds_it(
+    task, monkeypatch
+):
+    """Fail closed: the entry was absent in the base run; the commit supplies the archive."""
+    Runs(monkeypatch, [_record(task, sys_path=("tests/data/missing.zip",))])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/data/lib.zip", "tests/data/missing.zip"))
+    assert caught.value.code == CODE
+
+
+def test_an_added_file_that_no_entry_names_is_not_refused(task, monkeypatch):
+    Runs(monkeypatch, [_record(task, sys_path=("tests/data/missing.zip",))])
+    check(task, ("tests/data/lib.zip", "tests/data/other.zip"))
+
+
+def test_a_changed_conftest_the_base_ran_as_a_plugin_is_left_to_the_conftest_rules(
+    task, monkeypatch
+):
+    """Pins runtime_reach's conftest exclusion through the whole path."""
+    Runs(monkeypatch, [_record(task, plugin="tests/conftest.py")])
+    check(task, ("tests/conftest.py", "tests/data/lib.zip"))

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork import base_fixture_names as bfn
-from cairnwork.deferred_overlay import TestCommitRejected
 
 PATHS = ("tests/conftest.py", "tests/test_a.py", "tests/test_new.py")
 
@@ -40,7 +39,7 @@ def _calls(monkeypatch, result=None, error=None):
         calls.append((commit, specs, run_id, kwargs))
         if error:
             raise error
-        return (SimpleNamespace(fixture_names=result, collect_record=None),)
+        return (SimpleNamespace(fixture_names=result),)
 
     monkeypatch.setattr(bfn, "run_verifiers", fake)
     return calls
@@ -75,7 +74,7 @@ def test_an_account_run_does_not_collect(task, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "paths", [("tests/test_new.py",), ("tests/conftest.py", "tests/test_new.py")]
+    "paths", [("tests/test_a.py",), ("tests/conftest.py", "tests/test_new.py")]
 )
 def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
     calls = _calls(monkeypatch, frozenset({"shared"}))
@@ -87,7 +86,7 @@ def test_no_conftest_or_no_base_target_makes_no_run(task, monkeypatch, paths):
     ("account", "paths", "kind", "error", "reason", "level"),
     [
         (object(), PATHS, "ok", None, "ACCOUNT_RUN", "INFO"),
-        (None, ("tests/test_new.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
+        (None, ("tests/test_a.py",), "ok", None, "NO_CONFTEST_CHANGE", "INFO"),
         (None, ("tests/conftest.py", "tests/test_new.py"), "ok", None, "NO_BASE_TARGET", "INFO"),
         (None, PATHS, "ok", RuntimeError("x"), "RUN_FAULT", "WARNING"),
         (None, PATHS, "none", None, "NO_NAMES_RECORDED", "WARNING"),
@@ -174,95 +173,3 @@ def test_a_log_handler_that_raises_does_not_change_the_result(task, monkeypatch,
     finally:
         bfn.LOG.removeHandler(handler)
     assert seen == {"collected": None}
-
-
-def test_a_conftest_free_commit_that_changes_a_base_file_now_gets_the_run(task, monkeypatch):
-    calls = _calls(monkeypatch, frozenset({"shared"}))  # #1769: plugin and sys.path reach
-    assert bfn.collect(SimpleNamespace(account=None), task, ("tests/test_a.py",), "r-f")
-    [(commit, [spec], _, _)] = calls
-    assert commit == task.base_commit and spec.targets == ("tests/test_a.py",)
-
-
-def test_a_changed_non_python_base_file_runs_against_one_base_test_file(task, monkeypatch):
-    (task.repo / "data.bin").write_bytes(b"x")
-    import subprocess
-
-    subprocess.run(["git", "-C", str(task.repo), "add", "-A"], check=True)
-    subprocess.run(
-        ["git", "-C", str(task.repo), "-c", "user.name=x", "-c", "user.email=x@x",
-         "commit", "-qm", "d"], check=True)  # fmt: skip
-    task.base_commit = subprocess.run(
-        ["git", "-C", str(task.repo), "rev-parse", "HEAD"], capture_output=True, text=True
-    ).stdout.strip()
-    calls = _calls(monkeypatch, frozenset({"shared"}))
-    assert bfn.collect(SimpleNamespace(account=None), task, ("data.bin",), "r-f")
-    [(_, [spec], _, _)] = calls
-    assert spec.targets == ("tests/test_a.py",)
-
-
-# #1769 review: a commit that changes several kinds of file must still reach the runtime check
-def _base_with(task, files):
-    for name, text in files.items():
-        (task.repo / name).write_text(text)
-    git = ["git", "-C", str(task.repo), "-c", "user.name=x", "-c", "user.email=x@x"]
-    subprocess.run([*git, "add", "-A"], check=True)
-    subprocess.run([*git, "commit", "-qm", "more"], check=True)
-    task.base_commit = subprocess.run(
-        [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
-    ).stdout.strip()
-
-
-def _record(task, *, plugin=None, sys_path=()):
-    from cairnwork.collected_names import CollectedRecord
-
-    plugins = (("helper", str(task.repo / plugin)),) if plugin else ()
-    paths = tuple(str(task.repo / p) for p in sys_path)
-    return CollectedRecord(frozenset({"s"}), plugins, paths, paths, str(task.repo.resolve()))
-
-
-MIXES = {  # what the commit changes -> what the base run saw (plugin file, sys.path entries)
-    "conftest and an archive": (("tests/conftest.py", "data.bin"), None, ("data.bin",)),
-    "conftest and a plugin file": (("tests/conftest.py", "helper.py"), "helper.py", ()),
-    "a test file and an archive": (("tests/test_a.py", "data.bin"), None, ("data.bin",)),
-    "a test file and a plugin file": (("tests/test_a.py", "helper.py"), "helper.py", ()),
-    "an archive, a plugin file and a test": (
-        ("data.bin", "helper.py", "tests/test_a.py"),
-        "helper.py",
-        (),
-    ),
-    "everything, archive on sys.path": (
-        ("tests/conftest.py", "tests/test_a.py", "helper.py", "data.bin"),
-        None,
-        ("data.bin",),
-    ),
-}
-
-
-@pytest.fixture
-def mixed(task):
-    _base_with(task, {"data.bin": "x", "helper.py": ""})
-    return task
-
-
-@pytest.mark.parametrize("name", MIXES)
-def test_a_mixed_change_the_record_condemns_is_refused(mixed, monkeypatch, name):
-    paths, plugin, sys_path = MIXES[name]
-    record = _record(mixed, plugin=plugin, sys_path=sys_path)
-    monkeypatch.setattr(
-        bfn,
-        "run_verifiers",
-        lambda *a, **k: (SimpleNamespace(fixture_names=frozenset({"s"}), collect_record=record),),
-    )
-    monkeypatch.setattr(bfn, "check_conftests", lambda *a, **k: None)  # the static rule is quiet
-    with pytest.raises(TestCommitRejected) as caught:
-        bfn.check_with_base(SimpleNamespace(account=None), mixed, paths, "r-f")
-    assert caught.value.code == "TEST_COMMIT_CONFTEST_STATIC"
-
-
-@pytest.mark.parametrize("name", MIXES)
-def test_the_same_mix_with_a_clean_record_is_not_refused(mixed, monkeypatch, name):
-    paths, _, _ = MIXES[name]
-    calls = _calls(monkeypatch, frozenset({"s"}))
-    monkeypatch.setattr(bfn, "check_conftests", lambda *a, **k: None)
-    bfn.check_with_base(SimpleNamespace(account=None), mixed, paths, "r-f")
-    assert calls, "the base run must have been made: a mix is never skipped"

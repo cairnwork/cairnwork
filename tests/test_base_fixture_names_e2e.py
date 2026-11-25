@@ -55,6 +55,6 @@ def test_without_that_plugin_the_same_binding_is_accepted(project, tmp_path):
 
 
 def test_no_names_obtained_leaves_the_old_verdict(project, tmp_path, monkeypatch):
-    monkeypatch.setattr(base_fixture_names, "_probe", lambda *a, **k: (None, "RUN_FAULT"))
+    monkeypatch.setattr(base_fixture_names, "collect", lambda *a, **k: None)
     result = _run(project, tmp_path, PLUGIN)
     assert result.status == "COMPLETED", result.reason

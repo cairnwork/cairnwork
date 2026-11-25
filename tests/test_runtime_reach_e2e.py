@@ -49,13 +49,24 @@ def _test_commit(project, files, declared):
     return base, tests
 
 
-def go(project, tmp_path, base_files, test_files):
-    commit_change(project, base_files)
+CHECK = ("python3", "-m", "pytest", "-q", "tests/test_regression.py")
+OTHER = "tests/test_other.py"  # an unrelated base test file: the small edit every twin also makes
+OTHER_TEXT = "def test_other():\n    assert True\n"
+
+
+def go(project, tmp_path, base_files, test_files, extra=()):
+    commit_change(project, {OTHER: OTHER_TEXT, **base_files})
     declared = [p for p in test_files if p == ARCHIVE_PATH]
     base, tests = _test_commit(
         project, {"tests/test_regression.py": REGRESSION, **test_files}, declared
     )
-    return run(project, tmp_path, base, tests, SeeingWorker(FIX))
+    verifiers = (("pytest", (*CHECK, *extra)),)
+    return run(project, tmp_path, base, tests, SeeingWorker(FIX), verifiers=verifiers)
+
+
+def edit_other(**more):
+    """The test commit's small edit to an unrelated base test file (a twin must reach the check)."""
+    return {OTHER: OTHER_TEXT + "# edited\n", **more}
 
 
 def test_a_plugin_loaded_by_import_name_that_the_commit_changes_is_refused(project, tmp_path):
@@ -67,7 +78,7 @@ def test_a_plugin_loaded_by_import_name_that_the_commit_changes_is_refused(proje
 
 def test_the_same_plugin_untouched_is_accepted(project, tmp_path):
     base = {"tests/conftest.py": BY_NAME, "tests/helper_mod.py": HELPER}
-    result = go(project, tmp_path, base, {})
+    result = go(project, tmp_path, base, edit_other(), extra=(OTHER,))
     assert result.status == "COMPLETED", result.reason
 
 
@@ -80,5 +91,5 @@ def test_an_archive_on_sys_path_that_the_commit_changes_is_refused(project, tmp_
 
 def test_the_same_archive_on_sys_path_untouched_is_accepted(project, tmp_path):
     base = {"tests/conftest.py": ON_PATH, ARCHIVE_PATH: ARCHIVE}
-    result = go(project, tmp_path, base, {})
+    result = go(project, tmp_path, base, edit_other(), extra=(OTHER,))
     assert result.status == "COMPLETED", result.reason

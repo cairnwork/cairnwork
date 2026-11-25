@@ -116,7 +116,7 @@ def test_a_name_only_the_run_sees_is_refused_on_real_seatbelt(project, tmp_path,
 
 def test_the_987_shape_is_accepted_without_the_run(project, tmp_path, monkeypatch):
     """The before column: only the run refuses it (main's static rule reads no test module)."""
-    monkeypatch.setattr(base_fixture_names, "_probe", lambda *a, **k: (None, "RUN_FAULT"))
+    monkeypatch.setattr(base_fixture_names, "collect", lambda *a, **k: None)
     base = SHAPES["#987 a helper outside the directory bound under a test name"]
     result = _run(project, tmp_path, base, _addition("#987"), [EDIT])
     assert result.status == "COMPLETED", result.reason
@@ -155,17 +155,15 @@ STATIC_REFUSED = SHAPES["#984 a helper bound through globals()"]
 
 @pytest.fixture
 def spy(monkeypatch):
-    """The names the base run recorded (a one-item list; None when none were obtained)."""
+    """What ``collect`` returned for the run (a one-item list)."""
     seen: list = []
-    real = base_fixture_names._probe
+    real = base_fixture_names.collect
 
-    def probe(*args, **kwargs):
-        result = real(*args, **kwargs)
-        run = result[0]
-        seen.append(None if run is None else run.fixture_names)
-        return result
+    def collect(*args, **kwargs):
+        seen.append(real(*args, **kwargs))
+        return seen[-1]
 
-    monkeypatch.setattr(base_fixture_names, "_probe", probe)
+    monkeypatch.setattr(base_fixture_names, "collect", collect)
     return seen
 
 

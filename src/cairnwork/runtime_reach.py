@@ -32,15 +32,21 @@ CODE = "TEST_COMMIT_CONFTEST_STATIC"
 _BYTECODE = (".pyc", ".pyo")
 
 
-def check_runtime_reach(record: CollectedRecord | None, changed_on_base: Iterable[str]) -> None:
+def check_runtime_reach(
+    record: CollectedRecord | None, changed_on_base: Iterable[str], added: Iterable[str] = ()
+) -> None:
+    """Refuse when the record names a changed base file. ``added`` are the paths the test commit
+    adds: only a ``sys.path`` entry may match one (an entry the base named but did not have, which
+    the commit now supplies); a plugin file the base ran always exists on it."""
     changed = frozenset(changed_on_base)
     if record is None or not record.root or not changed:
         return
+    on_path = changed | frozenset(added)
     for name, file in record.plugins:
         if (hit := _plugin_hit(record.root, name, file, changed)) is not None:
             _refuse(f"pytest loads {hit} as a plugin, and the test commit changes it")
     for entry in (*record.sys_path, *record.sys_path_finish):
-        if (hit := _path_hit(record.root, entry, changed)) is not None:
+        if (hit := _path_hit(record.root, entry, on_path)) is not None:
             _refuse(f"{hit} is on sys.path in the base run, and the test commit changes it")
 
 
