@@ -161,3 +161,27 @@ def test_the_same_symlink_case_or_inside_layouts_with_an_archive_off_sys_path_ar
     project, tmp_path, name
 ):
     accepted(_reach_go(project, tmp_path, name, {"tests/a/data/other.zip": "o2"}))
+
+
+# layer1 ruling 2: a base over the whole-tree cap (cap forced to 1 here) is not mass-refused
+@pytest.fixture
+def over_cap(monkeypatch):
+    from cairnwork import base_fixture_names
+
+    monkeypatch.setattr(base_fixture_names, "MAX_TREE_TARGETS", 1)
+
+
+def test_a_base_over_the_cap_accepts_an_honest_edit_of_a_base_test_file(
+    project, tmp_path, over_cap
+):
+    base = {**SIBLING, **ZIPS, Z: OK, "tests/y/test_y.py": OK}
+    accepted(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,)))
+
+
+def test_a_base_over_the_cap_still_refuses_an_archive_a_sibling_conftest_puts_on_sys_path(
+    project, tmp_path, over_cap
+):
+    base = {**SIBLING, **ZIPS, Z: OK, "tests/y/test_y.py": OK}
+    refused(
+        go(project, tmp_path, base, {"tests/a/data/lib.zip": "z2", Z: OK + "# e\n"}, extra=(Z,))
+    )

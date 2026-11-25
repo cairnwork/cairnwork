@@ -230,6 +230,6 @@ def test_a_conftest_directory_with_no_test_below_it_is_not_an_error():
 def test_more_conftest_directories_than_the_measured_cap_are_not_picked(monkeypatch):
     """Measured 4.7 s collect-only for 600 conftest directories (50: 1.1 s, 1500: 10.7 s)."""
     assert btt.MAX_CONFTEST_DIRS == 600
-    tree = tuple(f"tests/d{i}/test_{i}.py" for i in range(601))
+    tree = tuple(sorted(f"tests/d{i}/test_{i}.py" for i in range(601)))
     assert len(pick_dir_targets(tree, [f"tests/d{i}" for i in range(600)]) or ()) == 600
     assert pick_dir_targets(tree, [f"tests/d{i}" for i in range(601)]) is None
