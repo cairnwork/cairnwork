@@ -14,8 +14,9 @@ only data (#967). This reads the record instead:
   data, is not.
 
 Only refusals come from here. No record, no checkout root or nothing changed leaves the verdict to
-the static rules; a malformed entry is skipped. ``changed_on_base`` must hold paths the base
-already has, so a file the test commit adds is never matched. The record is advisory (see
+the static rules; a malformed entry is skipped. ``changed_on_base`` holds paths the base already
+has and ``added`` the files the commit adds (a plugin file or package the base loaded refuses
+both); ``base_paths`` tells a case variant from another file. The record is advisory (see
 fixture_probe.py): a run that forges it can hide an entry, which is the limit already pinned there.
 """
 
@@ -127,7 +128,7 @@ def _plugin_hit(
     added: frozenset[str] = frozenset(),
 ) -> str | None:
     if file is None:
-        return _named(name, changed | added, exact)
+        return _named(name, (*changed, *added), exact)
     keys = _by_key(changed)
     for rel in map(_source_of, _rels(root, file, real)):
         hit = _same(rel, keys, exact)
@@ -191,19 +192,48 @@ def _within(root: str, path: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def _named(name: str, changed: frozenset[str], exact: frozenset[str] | None = None) -> str | None:
-    """A changed file that the dotted ``name`` can import: ``a/b.py`` or ``a/b/__init__.py``
-    under any leading directory, matched on whole path parts."""
+def _respelled(path: str, want: str) -> str | None:
+    """``path`` when it ends in ``want`` on whole path parts; the same path with that tail written
+    as ``want`` when it differs only by case or Unicode form; else None. Compared per path part,
+    never by string length (a fold can change a name's length)."""
+    parts, wants = path.split("/"), want.split("/")
+    tail = "/".join(parts[-len(wants) :])
+    if len(parts) < len(wants) or _key(tail) != _key(want):
+        return None
+    return path if tail == want else "/".join([*parts[: -len(wants)], *wants])
+
+
+def _named(name: str, paths: Iterable[str], exact: frozenset[str] | None = None) -> str | None:
+    """A changed or added file that the dotted ``name`` can import: ``a/b.py``, ``a/b/__init__.py``
+    or (when ``a/b`` is a package) any ``.py`` below it, under any leading directory, matched on
+    whole path parts. A bytecode file counts as its source."""
     if not name or any(not part.isidentifier() for part in name.split(".")):
         return None
     tail = "/".join(name.split("."))
+    sources: dict[str, str] = {}
+    for path in sorted(paths):
+        sources.setdefault(_source_of(path), path)
     for want in (f"{tail}.py", f"{tail}/__init__.py"):
-        for path in sorted(changed):
-            if path == want or path.endswith("/" + want):
-                return None if PurePosixPath(path).name == "conftest.py" else path
-            folded = _key(path)
-            if folded == _key(want) or folded.endswith("/" + _key(want)):
-                spelled = path[: len(path) - len(want)] + want  # the exact spelling, in that place
-                if exact is None or spelled not in exact:
-                    return None if PurePosixPath(path).name == "conftest.py" else path
+        for path, original in sources.items():
+            spelled = _respelled(path, want)
+            if spelled is not None and (spelled == path or exact is None or spelled not in exact):
+                return None if PurePosixPath(path).name == "conftest.py" else original
+    return _below_named(tail, sources, exact)
+
+
+def _below_named(tail: str, sources: dict[str, str], exact: frozenset[str] | None) -> str | None:
+    """A ``.py`` below the directory ``tail`` when that directory is a package: its
+    ``__init__.py`` is in the base, in the commit, or the base is unknown."""
+    depth = len(tail.split("/"))
+    for path, original in sources.items():
+        parts = path.split("/")
+        if not path.endswith(".py") or parts[-1] == "conftest.py":
+            continue
+        for end in range(depth, len(parts)):
+            package = "/".join(parts[:end])
+            if _key("/".join(parts[end - depth : end])) != _key(tail):
+                continue
+            init = package + "/__init__.py"
+            if exact is None or init in exact or init in sources:
+                return original
     return None

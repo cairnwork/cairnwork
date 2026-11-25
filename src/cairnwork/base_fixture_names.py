@@ -8,9 +8,11 @@ fixture_probe.py).
    can add a refusal and never remove one); any fault, an account run or a conftest-free commit
    gives None, and the #916 rule then stands alone.
 2. The reach run (``reach_record``, #1769): whenever the commit changes a base file or adds a file
-   (a conftest-only edit makes none), the base's whole test tree (``base_tree_targets``) plus the
-   changed base .py files. ``check_runtime_reach`` refuses on the runtime record; a record that left
-   something out (tree over the cap or unreadable, a changed file dropped) refuses too.
+   (a conftest-only edit makes none), the base's test tree (``base_tree_targets``: every file up to
+   MAX_TREE_TARGETS, else one file) plus one target below each conftest directory, so every
+   conftest loads, plus the changed base .py files. ``check_runtime_reach`` refuses on the runtime
+   record. A changed file that cannot be collected is dropped and the run repeated; a record that
+   still leaves something out (tree unreadable, no plan, a fault) refuses too.
 """
 
 from __future__ import annotations
