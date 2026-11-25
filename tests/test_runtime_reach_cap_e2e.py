@@ -42,8 +42,8 @@ def _layout(n, gone, kind):
         base.update(
             {
                 "tests/m/conftest.py": SIBLING_PLUGIN,
-                "tests/lib/helper_mod.py": "# plugin\n",
-                "tests/lib/other_mod.py": "# not a plugin\n",
+                "tests/lib/helper_mod.py": "# helper\n" + OK,
+                "tests/lib/other_mod.py": "# other\n" + OK,
             }
         )
     return base
@@ -63,7 +63,7 @@ def _many(project, tmp_path, n, *, gone=0, kind="archive", bad=True, touch=True)
         tests[path] = base[path] + "# edited\n" if path.endswith(".py") else "changed"
     deleted = tuple(p for p in base if "/gone_" in p)
     return go(
-        project, tmp_path, base, tests, extra=tuple(sorted(p for p in tests if "test_" in p)),
+        project, tmp_path, base, tests, extra=tuple(sorted(p for p in tests if p.endswith(".py"))),
         delete=deleted,
     )  # fmt: skip
 
@@ -119,6 +119,7 @@ def test_exactly_the_cap_of_edits_with_an_unreached_file_is_accepted(project, tm
 # #1809 (b): the issue's shape: the only tree file is broken, and no conftest directory is left
 ROOT_CONFTEST = (
     "import sys, pathlib\n"
+    "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'src'))\n"
     "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'tests' / 'data' / ('lib' + '.zip')))\n"
 )
 
