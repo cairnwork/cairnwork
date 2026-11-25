@@ -36,30 +36,27 @@ def base_tree_targets(repo, base: str, roots: tuple[str, ...]) -> tuple[str, ...
     return tuple(sorted(paths))
 
 
-def conftest_dir_targets(repo, base: str, roots: tuple[str, ...]) -> tuple[str, ...] | None:
-    """One base test file under each base conftest's directory (the least path), or None.
-
-    A conftest loads when any test file below its directory is collected, so these few files make
-    one collect-only run load every conftest's sys.path and plugin effects, without the whole tree.
-    """
+def conftest_dirs(repo, base: str, roots: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Every directory under ``roots`` that holds a base conftest.py, sorted, or None."""
     try:
         raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", base, "--")
-        dirs = {
-            posixpath.dirname(p)
-            for p in under_roots(raw, roots)
-            if posixpath.basename(p) == "conftest.py"
-        }
-        tree = base_tree_targets(repo, base, roots)
+        return tuple(
+            sorted(
+                {
+                    posixpath.dirname(p)
+                    for p in under_roots(raw, roots)
+                    if posixpath.basename(p) == "conftest.py"
+                }
+            )
+        )
     except (GitCommandError, PytestConfigError):
         return None
-    return None if tree is None else pick_dir_targets(tree, sorted(dirs))
 
 
 def pick_dir_targets(tree: tuple[str, ...], dirs) -> tuple[str, ...] | None:
-    """The least file of the sorted ``tree`` below each conftest directory in ``dirs``.
-
-    A directory with no test file below it picks nothing (no test loads it). None when there are
-    more directories than MAX_CONFTEST_DIRS: the run would no longer be cheap.
+    """One target below each conftest directory in ``dirs``: the least file of the sorted ``tree``
+    there, or that directory's own conftest.py when no test file is below it (collecting it loads
+    it). None when there are more directories than MAX_CONFTEST_DIRS: the run would not be cheap.
     """
     dirs = set(dirs)
     if len(dirs) > MAX_CONFTEST_DIRS:
@@ -67,6 +64,6 @@ def pick_dir_targets(tree: tuple[str, ...], dirs) -> tuple[str, ...] | None:
     picked = set()
     for d in dirs:
         at = bisect.bisect_left(tree, d + "/")
-        if at < len(tree) and tree[at].startswith(d + "/"):
-            picked.add(tree[at])
+        below = at < len(tree) and tree[at].startswith(d + "/")
+        picked.add(tree[at] if below else d + "/conftest.py")
     return tuple(sorted(picked))

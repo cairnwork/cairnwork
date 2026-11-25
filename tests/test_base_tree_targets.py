@@ -214,9 +214,10 @@ def test_every_conftest_directory_is_covered_by_a_target_below_it():
         assert picked is not None
         for d in dirs:
             below = [t for t in tree if t.startswith(d + "/")]
-            mine = [t for t in picked if t.startswith(d + "/")]
-            assert mine, (d, tree, picked)
-            assert mine[0] in below or (not below and mine == [d + "/conftest.py"])
+            if below:
+                assert any(t in below for t in picked), (d, tree, picked)
+            else:
+                assert d + "/conftest.py" in picked, (d, tree, picked)
         assert set(picked) <= {*tree, *(d + "/conftest.py" for d in dirs)}
 
 

@@ -227,7 +227,8 @@ def test_the_same_directory_with_an_archive_off_sys_path_is_accepted(project, tm
 
 
 ROOT = {
-    "conftest.py": "import sys, pathlib\nsys.path.insert(0, str(pathlib.Path(__file__).parent / 'data' / 'lib.zip'))\n",
+    "conftest.py": "import sys, pathlib\n"
+    "sys.path.insert(0, str(pathlib.Path(__file__).parent / 'data' / 'lib.zip'))\n",
     "data/lib.zip": "z",
     "data/other.zip": "o",
     "tests/x/test_x.py": OK,

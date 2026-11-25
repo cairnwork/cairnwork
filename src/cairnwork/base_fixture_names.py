@@ -20,7 +20,7 @@ import re
 import subprocess
 from pathlib import Path, PurePosixPath
 
-from cairnwork.base_tree_targets import base_tree_targets, conftest_dir_targets
+from cairnwork.base_tree_targets import base_tree_targets, conftest_dirs, pick_dir_targets
 from cairnwork.conftest_check import check_conftests, conftest_of, governed
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import run_git_bytes
@@ -62,30 +62,42 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
 
 
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
-    """(record, complete): the recorder's record of one collect-only run of the base's whole test
-    tree (#1767's ``base_tree_targets``) plus the changed base .py files, or (None, False).
-    A tree over MAX_TREE_TARGETS runs one test file per base conftest directory instead (every
-    conftest loads). ``complete`` is False when the record left something out: no such target, an
-    unreadable tree, or a changed file that cannot be collected on the base (dropped, the rest run
-    again) whose base text shows a sys.path or plugin signal or cannot be read."""
+    """(record, complete): the record of one collect-only base run, or (None, False).
+
+    The run names the changed base .py files, every base conftest directory (a test file below it,
+    else its conftest.py: collecting either loads it), and the whole test tree up to
+    MAX_TREE_TARGETS files (above that one tree file, so a root conftest and the ini still load).
+    An unreadable tree, unreadable conftest directories or more than MAX_CONFTEST_DIRS of them
+    refuse the commit (TestCommitRejected): no run is made. ``complete`` is False when a changed
+    file that cannot be collected on the base was dropped (the rest run again, the directories
+    picked again from the tree minus that file) and its base text shows a sys.path or plugin
+    signal or cannot be read."""
     if ctx.account is not None:
         return None, False
+    roots = tuple(task.test_roots)
+    tree = base_tree_targets(task.repo, task.base_commit, roots)
+    dirs = conftest_dirs(task.repo, task.base_commit, roots)
+    if tree is None or dirs is None or pick_dir_targets(tree, dirs) is None:
+        raise TestCommitRejected(
+            CODE, "the base's test tree or conftest directories were not usable"
+        )
     try:
-        tree = base_tree_targets(task.repo, task.base_commit, tuple(task.test_roots))
-        if tree is not None and len(tree) > MAX_TREE_TARGETS:
-            tree = conftest_dir_targets(task.repo, task.base_commit, tuple(task.test_roots))
-        whole = tree is not None
-        tree = tree or ()
         edited = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
         )[:MAX_TARGETS]
-        rest = tuple(p for p in tree if p not in edited)
-        for targets, tag, kept in (((*edited, *rest), "r", True), (rest, "r2", False)):
-            if not targets or (tag == "r2" and not edited):
+        for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
+            if tag == "r2" and not edited:
+                break
+            left = tuple(p for p in tree if p not in dropped)
+            picked = pick_dir_targets(left, dirs) or ()
+            base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
+            named = (*(p for p in edited if p not in dropped), *base, *picked)
+            targets = tuple(dict.fromkeys(named))
+            if not targets:
                 continue
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
             if record is not None:
-                return record, whole and (kept or _quiet(task, edited))
+                return record, not dropped or _quiet(task, edited)
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
         return None, False
     return None, False

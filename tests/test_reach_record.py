@@ -124,7 +124,10 @@ def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, 
     with pytest.raises(TestCommitRejected) as caught:
         check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
     assert caught.value.code == CODE
-    assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py"), ("tests/test_a.py",)]
+    assert runs.targets == [
+        ("tests/sib/test_s.py", "tests/test_a.py"),
+        ("tests/test_a.py", "tests/sib/conftest.py"),  # the dropped file's directory picked again
+    ]
 
 
 def test_a_dropped_file_with_no_path_signal_is_accepted_as_the_old_head_did(task, monkeypatch):
@@ -223,7 +226,7 @@ def test_a_dropped_test_that_was_the_only_one_below_a_conftest_leaves_its_confte
     runs = Runs(monkeypatch, [None, record])
     with pytest.raises(TestCommitRejected):
         check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
-    assert runs.targets[1] == ("tests/sib/conftest.py", "tests/conftest.py")
+    assert runs.targets[1] == ("tests/conftest.py", "tests/sib/conftest.py")
 
 
 @pytest.mark.parametrize(
