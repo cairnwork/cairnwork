@@ -6,6 +6,7 @@ import shutil
 
 import pytest
 
+from cairnwork import proc_start
 from cairnwork import verify_candidate as module
 from cairnwork.intake import Intake
 
@@ -17,7 +18,7 @@ pytestmark = pytest.mark.skipif(os.getuid() == 0, reason="root removes any direc
 def _orphan(state, *, stuck):
     (state / "verify-runs").mkdir(parents=True)
     marker = state / "verify-runs" / AID
-    marker.write_text("")
+    marker.write_text(proc_start.boot_mark())  # as a real run does: Linux CI hides some processes
     scratch = state / "verify-scratch" / AID
     inner = scratch / "sub"
     inner.mkdir(parents=True)

@@ -19,10 +19,11 @@ AID = "a0123456789abcdef"
 pytestmark = pytest.mark.skipif(os.getuid() == 0, reason="root removes any directory")
 
 
-def _orphan(state):
+def _orphan(state, mark=None):
     (state / "verify-runs").mkdir(parents=True)
     marker = state / "verify-runs" / AID
-    marker.write_text("")
+    # a real run writes its start mark: a CI host hides some processes from the sweep (#1800)
+    marker.write_text(proc_start.boot_mark() if mark is None else mark)
     scratch = state / "verify-scratch" / AID
     scratch.mkdir(parents=True)
     (scratch / "f").write_text("x")
@@ -158,7 +159,7 @@ def test_a_start_mark_that_cannot_be_trusted_keeps_the_marker(tmp_path, monkeypa
 def test_an_unreadable_process_keeps_the_marker_when_the_run_left_no_start_mark(
     tmp_path, monkeypatch
 ):
-    marker, _ = _orphan(tmp_path)  # empty marker: macOS, or a run from before the mark
+    marker, _ = _orphan(tmp_path, mark="")  # empty marker: macOS, or a run from before the mark
     _hidden_old_process(monkeypatch, 10.0)
     out = module.cleanup(Intake(tmp_path))
     assert out["cleaned"] == [] and out["kept"] == [AID]

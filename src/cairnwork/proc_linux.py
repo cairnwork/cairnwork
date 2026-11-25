@@ -21,12 +21,23 @@ def _linux_processes(proc: str = "/proc"):
             # owner unknown: it may be one of ours; no process group, so no skip_group drops
             # it (#244); a hidepid mount is refused as a whole (proc_restrict)
             uid, pgid = os.getuid(), None
+        if _zombie(base):
+            continue  # runs nothing; its environ cannot be opened by a non-root user
         try:
             environment = _linux_environment(base)
         except (FileNotFoundError, ProcessLookupError):
             continue  # gone
         rows.append((int(name), pgid, uid, environment))
     return rows
+
+
+def _zombie(base: str) -> bool:
+    """True if /proc/<pid>/stat shows state Z (field 3, after the last ")")."""
+    try:
+        with open(f"{base}/stat") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except (OSError, IndexError):
+        return False
 
 
 def _linux_environment(base: str) -> set[str] | None:

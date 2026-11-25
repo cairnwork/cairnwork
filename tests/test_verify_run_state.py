@@ -10,6 +10,8 @@ from conftest import commit_change, git
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from verify_helpers import FIX, base_of, candidate, cli, has_object, in_process, make_mirror, verify
 
+from cairnwork import proc_start
+
 sandbox = pytest.mark.sandbox
 
 
@@ -133,7 +135,7 @@ def test_cleanup_removes_a_dead_run_s_leftovers_and_spares_a_live_one(state):
     runs.mkdir()
     markers.mkdir()
     for attempt in ("adead000000000001", "aa11e000000000002"):
-        (markers / attempt).touch()
+        (markers / attempt).write_text(proc_start.boot_mark())
         (runs / f"{attempt}-b-v0.work").mkdir()
         (runs / f"{attempt}.tests.index").touch()
         (state / "verify-scratch" / attempt).mkdir(parents=True)
@@ -202,7 +204,7 @@ def test_cleanup_stops_a_dead_run_s_orphan_process(state):
     from cairnwork.confined import ATTEMPT_ENV
 
     (state / "verify-runs").mkdir()
-    (state / "verify-runs" / "adead000000000003").touch()
+    (state / "verify-runs" / "adead000000000003").write_text(proc_start.boot_mark())
     orphan = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         env={**os.environ, ATTEMPT_ENV: "adead000000000003"},
@@ -299,7 +301,7 @@ def test_cleanup_tolerates_a_marker_that_vanishes_before_it_is_opened(state, mon
 
 def test_run_cleans_up_dead_runs_first(project, state):
     (state / "verify-runs").mkdir()
-    (state / "verify-runs" / "adead000000000006").touch()
+    (state / "verify-runs" / "adead000000000006").write_text(proc_start.boot_mark())
     (state / "runs").mkdir()
     (state / "runs" / "adead000000000006.tests.index").touch()
     base = base_of(project)
