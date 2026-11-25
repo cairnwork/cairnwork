@@ -15,7 +15,8 @@ early return before it), and base machinery reached through aliases, registries 
 not hot; broader lexical matching raised hot statements in real signalling files, so these are
 left to the blackbox and verifier checks.
 Exact names (#1779): vars, globals, locals, exec, eval, compile, breakpoint, marshal and pickle
-count only as a bare name, an import of that name, a string constant containing it, or an
+count only as a bare name, an import of that name, a string that is the word or a dotted path
+with the word as one segment (prose, log lines and docstrings are not hits), or an
 attribute reached from a receiver that is not a plain chain of names or that mentions builtins
 (or a same-file alias of it). A longer identifier (``evaluate``, ``compiled``) or ``re.compile`` is
 not a hit; the receiver of ``.compile`` is still rebindable, which only the later checks see.
@@ -250,7 +251,7 @@ def _hit(node: ast.AST, words: _Words) -> bool:
         if isinstance(sub, ast.Name) and sub.id in words.exact:
             return True
         if isinstance(sub, ast.Constant) and isinstance(sub.value, (str, bytes)):
-            if _has_word(_as_text(sub.value), tuple(w.encode() for w in words.exact)):
+            if _names_word(_as_text(sub.value), words.exact):
                 return True
         if isinstance(sub, (ast.Import, ast.ImportFrom)):
             names = [a.name for a in sub.names] + [a.asname or "" for a in sub.names]
@@ -262,6 +263,13 @@ def _hit(node: ast.AST, words: _Words) -> bool:
             if _reaches_builtins(sub.value, words.aliases):
                 return True
     return False
+
+
+def _names_word(text: str, exact: tuple[str, ...]) -> bool:
+    """A string names a word only as a whole (``"exec"``) or as one segment of a dotted path
+    (``"builtins.exec"``); prose, log lines and docstrings that merely contain it do not."""
+    parts = text.strip().split(".")
+    return all(p.isidentifier() for p in parts) and any(p in exact for p in parts)
 
 
 def _as_text(value: str | bytes) -> str:

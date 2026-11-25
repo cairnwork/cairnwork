@@ -73,7 +73,7 @@ _EMBEDDED_WORDS = tuple(
     word.encode()
     for word in (
         "os.exec", "execv", "execl", "py_compile", "compileall", "breakpointhook", "_pickle",
-        "cloudpickle", "read_pickle", "allow_pickle",
+        "cloudpickle", "read_pickle", "allow_pickle", "executable",
     )
 )  # fmt: skip
 _MACHINERY_WORDS = (

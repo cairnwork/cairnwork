@@ -131,3 +131,30 @@ MUST_BLOCK += [
     ("", "type Callback[T = eval] = list[T]\n"),
     ("", "s = f'{eval(x)}'\n"),
 ]
+
+
+# Owner ruling on string literals: only a whole-string machinery word or a dotted path with one
+# such segment counts; prose, log lines and docstrings that merely contain a word do not.
+MUST_PASS += [
+    "log = 'Starting model evaluation...'\n",
+    "log = 'executing step 3'\n",
+    "__all__ = ['evaluate', 'executor']\n",
+    "def g():\n    '''Compile and evaluate the rules.'''\n    return 1\n",
+]
+MUST_BLOCK += [
+    ("", "n = 'exec'\n"),
+    ("", "n = 'builtins.exec'\n"),
+    ("", "n = b'eval'\n"),
+    ("", "n = ' exec '\n"),
+    ("", "n = '__builtins__.exec'\n"),
+    ("", "msg = 'cache.pickle'\n"),
+    ("x = getattr(o, NAME)\nNAME = 'a'\n", "NAME = 'exec'\n"),
+    ("x = getattr(o, NAME)\nNAME = 'a'\n", "NAME = 'builtins.eval'\n"),
+]
+
+
+# Found by the existing child-process attack test: the interpreter path is how a candidate starts
+# a child that outlives the run, and main refused it only through the word "exec" inside it.
+MUST_BLOCK += [
+    ("import subprocess, sys\n", "subprocess.Popen([sys.executable, '-c', 'pass'])\n"),
+]
