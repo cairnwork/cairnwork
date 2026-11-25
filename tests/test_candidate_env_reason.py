@@ -89,6 +89,7 @@ class TestRealSandbox:
         assert out["status"] == "UNCOMPARABLE", out
         assert out["uncomparable"]["code"] == "BASE_ENV_ERROR", out
         assert "operation not permitted (EPERM)" in json.dumps(out)  # #1781: the base names it too
+        assert "unless the change raised this itself" not in json.dumps(out)  # candidate-only text
 
 
 ROOTS = ("/work/checkouts", "/run/x")

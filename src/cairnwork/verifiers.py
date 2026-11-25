@@ -344,7 +344,7 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     verdict, returncode = _read_verdict(
         channel, verdict_path, verdict_nonce, plugins, checkout, stop, returncode
     )
-    not_run = verdict.not_run(spec.targets)  # a target with no test that ran, a skipped module
+    not_run, eperm = verdict.not_run(spec.targets), verdict.denied  # eperm: report-plugin paths
     ran = profile is not None and verdict.ran and not not_run
     too_big = log_path.stat().st_size > MAX_LOG_BYTES
     clean = not (timed_out or mutated or survivors or forged or too_big or verdict.too_big)
@@ -377,7 +377,6 @@ def _run_one_in(batch: _Batch, spec, checkout, plugins, ini_text, private, chann
     observation = VerifierObservation(
         spec.verifier_id, f"{private.name}/verifier.log", f"sha256:{digest}", passed
     )
-    eperm = verdict.denied  # the report plugin's EPERM paths, not deny-channel evidence (#1781)
     return VerifierRun(
         spec, returncode, timed_out, mutated, log_path, observation, verdict.outcomes,
         survivors=survivors, ran=ran, plain_failure=plain_failure, why=why, forged=forged,
