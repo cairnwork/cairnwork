@@ -16,8 +16,10 @@ value, held as a field, tested bare in an ``if`` whose body only calls ``append`
 put in an f-string that is an argument of such a logging call; a bare call argument is refused
 because the callee could be len, bool or re.match. An alias of the ``denied`` attribute is
 tracked through assignment, tuple, walrus and loop targets (#1797) and refused as a keyword value;
-an attribute store (``self.x = ev.denied``) marks its base name (``self``); not followed: a class
-attribute, a function return.
+an attribute store (``self.x = ev.denied``) marks its base name (``self``); also followed: ``async for``, ``with``/``async with`` targets,
+``except ... as``, ``match`` captures, ``f(*d)``, and ``.eperm_paths`` (the same dict as ``.denied``,
+readable only in the files of EPERM_READERS). Not followed: a class attribute, a function return,
+``map``/``partial`` positional hand-off, a default argument, ``vars()``/``__dict__``.
 """
 
 import ast
@@ -33,6 +35,13 @@ NAMES = {  # carrier name -> files that may hold it (record, pass on, log), neve
         "cairnwork/verifier_run.py",
         "cairnwork/pipeline_judge.py",  # logs it only
     },
+}
+# Verdict.eperm_paths is the same dict as .denied under another name (#1781): the same rules apply,
+# except in the files that may touch it. Only base_teeth.py reads it (it words BASE_ENV_ERROR).
+EPERM_READERS = {
+    "cairnwork/base_teeth.py": "words a BASE_ENV_ERROR; never decides a verdict",
+    "cairnwork/verdict_record.py": "defines the property",
+    "cairnwork/verifiers.py": "copies it into the run record, no judgment",
 }
 IMPORTS = {"cairnwork/verifier_exec.py"}  # who may import a deny_* module (it records)
 LOGGERS = {"log", "append", "warning", "info", "debug", "error", "exception", "critical"}
@@ -173,17 +182,28 @@ def _allowed_use(node, parent):
     return isinstance(up, ast.If) and up.test is node and not up.orelse and _logs(up, parent)
 
 
-def _has_denied(node, names):
-    """The attribute ``.denied`` or a name already known to hold it, anywhere inside ``node``."""
+def _has_denied(node, names, attrs=("denied",)):
+    """A deny attribute or a name already known to hold it, anywhere inside ``node``."""
     return any(
-        (isinstance(n, ast.Attribute) and n.attr == "denied")
+        (isinstance(n, ast.Attribute) and n.attr in attrs)
         or (isinstance(n, ast.Name) and n.id in names)
         for n in ast.walk(node)
     )
 
 
-def _denied_aliases(tree):
-    """Names bound from ``.denied`` or from another such name (assignment, walrus, loop, with)."""
+def _captures(match):
+    """The names a ``match`` statement's patterns bind."""
+    return [
+        name
+        for n in ast.walk(match)
+        for name in (getattr(n, "name", None), getattr(n, "rest", None))
+        if isinstance(n, ast.MatchAs | ast.MatchStar | ast.MatchMapping) and isinstance(name, str)
+    ]
+
+
+def _denied_aliases(tree, attrs=("denied",)):
+    """Names bound from ``.denied`` or from another such name: assignment, walrus, ``for`` and
+    ``async for``, ``with`` and ``async with`` targets, ``except ... as``, ``match`` captures."""
     found = set()
     while True:
         before = len(found)
@@ -195,8 +215,12 @@ def _denied_aliases(tree):
                 pairs = [
                     (t, n.value) for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
                 ]
-            elif isinstance(n, ast.For | ast.comprehension):
+            elif isinstance(n, ast.For | ast.AsyncFor | ast.comprehension):
                 pairs = [(n.target, n.iter)]
+            elif isinstance(n, ast.ExceptHandler) and n.name and n.type is not None:
+                pairs = [(ast.Name(id=n.name), n.type)]
+            elif isinstance(n, ast.Match):
+                pairs = [(ast.Name(id=c), n.subject) for c in _captures(n)]
             elif isinstance(n, ast.withitem) and n.optional_vars is not None:
                 pairs = [(n.optional_vars, n.context_expr)]
             else:
@@ -206,7 +230,7 @@ def _denied_aliases(tree):
                     if len(target.elts) == len(value.elts):  # a, b = x, y: pair them up
                         pairs += list(zip(target.elts, value.elts, strict=True))
                         continue
-                if _has_denied(value, found):
+                if _has_denied(value, found, attrs):
                     found.update(_targets(target))
         if len(found) == before:
             return found
@@ -217,9 +241,8 @@ def _findings(tree, rel):
     found = []
     parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
     clean_names, aliases = _clean_names(tree), _aliases(tree)
-    kept = _denied_aliases(
-        tree
-    )  # d = ev.denied ... d(o, t); e = d; fns = [ev.denied]; fns[0](o, t)
+    attrs = ("denied",) if rel in EPERM_READERS else ("denied", "eperm_paths")
+    kept = _denied_aliases(tree, attrs)  # d = ev.denied ... d(o, t); e = d; fns = [ev.denied]
 
     def add(node, what):
         found.append(f"{rel}:{getattr(node, 'lineno', 0)} {what}")
@@ -241,9 +264,19 @@ def _findings(tree, rel):
         elif name in NAMES and isinstance(node, ast.Attribute | ast.Name | ast.Constant):
             if not _allowed_use(node, parent):
                 add(node, f"reads {name} beyond passing it on")
-        if isinstance(node, ast.keyword) and kept and _has_denied(node.value, kept):
+        if isinstance(node, ast.keyword) and kept and _has_denied(node.value, kept, attrs):
             add(node.value, "hands denied to a caller")  # #1797: an alias as a keyword value
-        if isinstance(node, ast.Attribute) and node.attr == "denied":
+        if isinstance(node, ast.Call) and kept:  # f(*d): a spread reads it too
+            if any(
+                isinstance(a, ast.Starred) and _has_denied(a.value, kept, attrs) for a in node.args
+            ):
+                add(node, "hands denied to a caller")
+        if rel not in EPERM_READERS and (
+            (isinstance(node, ast.Attribute) and node.attr == "eperm_paths")
+            or (isinstance(node, ast.Constant) and node.value == "eperm_paths")
+        ):
+            add(node, "reads eperm_paths (the denied dict) outside its table")
+        if isinstance(node, ast.Attribute) and node.attr in attrs:
             up = parent.get(node)
             if isinstance(up, ast.keyword):
                 add(node, "hands denied to a caller")
@@ -255,7 +288,7 @@ def _findings(tree, rel):
         ):
             add(node, "asks denied()")
         if isinstance(node, ast.Call) and _callee(node) in BY_NAME:
-            if any(isinstance(a, ast.Constant) and a.value == "denied" for a in node.args):
+            if any(isinstance(a, ast.Constant) and a.value in attrs for a in node.args):
                 add(node, "fetches denied by name")
         if isinstance(node, ast.Call) and _callee(node) in {"import_module", "__import__"}:
             if any(not isinstance(a, ast.Constant) or "deny_" in str(a.value) for a in node.args):
@@ -346,6 +379,14 @@ MUST_BLOCK = [  # #1797: an alias of the deny-evidence attribute read as a keywo
     "d = ev.denied\nf(x=[d])",  # inside a container value
     "d = ev.denied\ne = (d,)\nf(x=e)",
     "d = ev.denied\nf(**{'x': d})",  # splatted into keywords
+    "f(x=v.eperm_paths)",  # the same dict under another name
+    "d = v.eperm_paths\nf(x=d)",
+    "x = v.eperm_paths",  # outside the table, any read
+    "async def g():\n    async for d in src(ev.denied):\n        f(x=d)",
+    "async def g():\n    async with hold(ev.denied) as d:\n        f(x=d)",
+    "try:\n    pass\nexcept ev.denied as d:\n    f(x=d)",
+    "match ev.denied:\n    case d:\n        f(x=d)",
+    "d = ev.denied\nf(*d)",
     "d = {}\nd |= ev.denied\nf(x=d)",  # augmented assignment
     "d = []\nd += [ev.denied]\nf(x=d[0])",
     "with hold(ev.denied) as d:\n    f(x=d)",  # a with target
@@ -376,9 +417,22 @@ def test_the_legal_shapes_stay_unflagged():
 
 
 def test_an_augmented_or_with_alias_is_found():
-    for source in MUST_BLOCK[14:17]:
+    for source in (s for s in MUST_BLOCK if "|=" in s or "+=" in s or s.startswith("with")):
         assert _flags(source), source
 
 
 def test_an_alias_bound_before_its_source_is_found():
-    assert _flags(MUST_BLOCK[17])
+    assert _flags("e = d\nd = ev.denied\nf(x=e)")
+
+
+def test_eperm_paths_is_read_only_where_the_table_says():
+    src = "run = rec\nif (path := getattr(run, 'eperm_paths', {}).get(nodeid)):\n    pass\n"
+    assert not [f for f in _findings(ast.parse(src), "cairnwork/base_teeth.py") if "denied" in f]
+    assert _flags(src)  # the same line anywhere else is refused
+    assert all((SRC / rel).is_file() for rel in EPERM_READERS)
+
+
+def test_async_and_with_and_match_aliases_are_found():
+    for source in MUST_BLOCK:
+        if "async" in source or "except" in source or "match" in source or "*d" in source:
+            assert _flags(source), source
