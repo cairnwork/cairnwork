@@ -32,12 +32,30 @@ def _linux_processes(proc: str = "/proc"):
 
 
 def _zombie(base: str) -> bool:
-    """True if /proc/<pid>/stat shows state Z (field 3, after the last ")")."""
+    """True only if every thread of the process is a zombie (state Z): it then runs nothing.
+
+    A process whose main thread has exited but whose other threads run shows Z on its own stat
+    too, and is alive. The state is the first field after the LAST ")" (the command name may
+    hold any bytes); stat is read as bytes. Anything unreadable: not a zombie (strict)."""
+    states = _thread_states(base)
+    return bool(states) and all(state == b"Z" for state in states)
+
+
+def _thread_states(base: str) -> list[bytes | None]:
     try:
-        with open(f"{base}/stat") as handle:
-            return handle.read().rsplit(")", 1)[1].split()[0] == "Z"
-    except (OSError, IndexError):
-        return False
+        tids = os.listdir(f"{base}/task")
+    except OSError:
+        tids = []
+    paths = [f"{base}/task/{tid}/stat" for tid in tids] or [f"{base}/stat"]
+    return [_state(path) for path in paths]
+
+
+def _state(path: str) -> bytes | None:
+    try:
+        with open(path, "rb") as handle:
+            return handle.read().rsplit(b")", 1)[1].split()[0]
+    except (OSError, ValueError, IndexError):
+        return None
 
 
 def _linux_environment(base: str) -> set[str] | None:
