@@ -267,9 +267,8 @@ def test_a_suite_too_large_for_one_report_degrades_or_refuses_and_says_so(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite", extra={big_path: BIG}
     )
     assert result.status == status, result.reason
-    if degraded:
-        assert result.verified and result.p2p["degraded"] == degraded
-        assert result.p2p["applied"] == "module-dir" and result.p2p["targets"] >= 1
+    if degraded:  # #1768: the degraded run cannot tell which files the base collects: refused
+        assert not result.verified and result.reason.startswith(f"{degraded}: collect-over-cap")
     else:
         # #234: flat, so the module-dir files overflow too, already on the unchanged base
         assert not result.verified and "UNCOMPARABLE: BASE_ENV_FAILED: " in result.reason
