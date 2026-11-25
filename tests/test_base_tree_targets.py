@@ -185,5 +185,5 @@ def test_conftest_dir_targets_name_one_test_file_under_each_conftest_directory(t
     }
     task = _repo(tmp_path, files)
     got = conftest_dir_targets(task.repo, task.base_commit, ("tests",))
-    assert got == ("tests/sib/deep/test_d.py",)  # sib/deep is the least file under sib and tests
+    assert got == ("tests/quiet/test_q.py", "tests/sib/deep/test_d.py")  # empty/ has no test file
     assert conftest_dir_targets(task.repo, "no-such-commit", ("tests",)) is None

@@ -31,3 +31,27 @@ def base_tree_targets(repo, base: str, roots: tuple[str, ...]) -> tuple[str, ...
     except (GitCommandError, PytestConfigError):
         return None
     return tuple(sorted(paths))
+
+
+def conftest_dir_targets(repo, base: str, roots: tuple[str, ...]) -> tuple[str, ...] | None:
+    """One base test file under each base conftest's directory (the least path), or None.
+
+    A conftest loads when any test file below its directory is collected, so these few files make
+    one collect-only run load every conftest's sys.path and plugin effects, without the whole tree.
+    """
+    try:
+        raw = run_git_bytes(repo, "ls-tree", "-r", "-z", "--name-only", base, "--")
+        dirs = {
+            posixpath.dirname(p)
+            for p in under_roots(raw, roots)
+            if posixpath.basename(p) == "conftest.py"
+        }
+        tree = base_tree_targets(repo, base, roots)
+    except (GitCommandError, PytestConfigError):
+        return None
+    if tree is None:
+        return None
+    picked = {
+        next((t for t in tree if d == "" or t.startswith(d + "/")), None) for d in sorted(dirs)
+    }
+    return tuple(sorted(t for t in picked if t))

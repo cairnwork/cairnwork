@@ -133,12 +133,16 @@ def test_a_dropped_file_with_no_path_signal_is_accepted_as_the_old_head_did(task
     assert len(runs.targets) == 2
 
 
-@pytest.mark.parametrize("dropped", ["tests/test_sig.py", "tests/gone.py"])
-def test_a_dropped_file_with_a_path_signal_or_no_base_text_is_refused(task, monkeypatch, dropped):
+@pytest.mark.parametrize("unreadable", [False, True])
+def test_a_dropped_file_with_a_path_signal_or_no_base_text_is_refused(
+    task, monkeypatch, unreadable
+):
     """Fail closed: the rerun saw nothing of a file that may add to sys.path, or cannot be read."""
+    if unreadable:
+        monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: (_ for _ in ()).throw(OSError()))
     Runs(monkeypatch, [None, _record(task)])
     with pytest.raises(TestCommitRejected) as caught:
-        check(task, (dropped,))
+        check(task, ("tests/test_sig.py" if not unreadable else "tests/sib/test_s.py",))
     assert caught.value.code == CODE
 
 
