@@ -13,7 +13,7 @@ import pytest
 from conftest import commit_change
 from test_collect_parity_files import _case
 
-from cairnwork.collect_parity import _counted, _dirs, _ignored, _may_have_tests
+from cairnwork.collect_parity import _counted, _dirs, _ignored, _may_have_tests, _shown
 
 EMPTY_HOOK = (
     "import pytest\n"
@@ -39,6 +39,7 @@ NOT_TESTS = {
     "import_helper": "from _cases import helper\n",
     "plain_alias": "from _cases import helper as util\nvalue = util()\n",
     "empty": "",
+    "test_off": "class TestX:\n    __test__ = False\n    def test_x(self):\n        pass\n",
 }
 TESTS = {
     "function": "def test_a():\n    pass\n",
@@ -89,6 +90,11 @@ BOUND = {
     "rebound_object": "from unittest import TestCase as object\nclass Checks(object):\n    def test_neg(self):\n        pass\n",  # noqa: E501
     "rebound_abc": "from unittest import TestCase as ABC\nclass Checks(ABC):\n    def test_neg(self):\n        pass\n",  # noqa: E501
     "deleted_init": "class TestA:\n    def __init__(self):\n        pass\n    del __init__\n    def test_neg(self):\n        pass\n",  # noqa: E501
+    "test_off_deleted": "class TestX:\n    __test__ = False\n    del __test__\n    def test_x(self):\n        pass\n",  # noqa: E501
+    "test_off_rebound": "class TestX:\n    __test__ = False\n    __test__ = True\n    def test_x(self):\n        pass\n",  # noqa: E501
+    "dict_update": "import sys, _c\nsys.modules[__name__].__dict__.update(test_neg=_c.test_neg)\n",  # noqa: E501
+    "try_star_else": "try:\n    pass\nexcept* ValueError:\n    pass\nelse:\n    def test_neg():\n        pass\n",  # noqa: E501
+    "try_star_finally": "try:\n    pass\nfinally:\n    def test_neg():\n        pass\n",
     "except_star": "try:\n    from _c import test_neg\nexcept* ValueError:\n    pass\n",
 }
 PLAIN = {
@@ -145,7 +151,24 @@ def test_a_directory_pattern_does_not_count_a_file_pytest_never_walks(repo):
 
 def test_selected_files_give_their_parent_directories():
     files = ("a/b/test_x.py", "a/test_y.py", "c/test_z.py", "test_root.py")
-    assert _dirs(files) == ("a", "a/b", "c")
+    assert _dirs(files) == (".", "a", "a/b", "c")
+
+
+def test_a_root_test_file_is_counted_and_its_subdirectories_are_not_read(repo):
+    base = commit_change(
+        repo, {"test_root.py": "def test_a(): pass\n", "tests/test_b.py": "def test_b(): pass\n"}
+    )
+    task = SimpleNamespace(repo=repo, base_commit=base)
+    assert _counted(task, (".",)) == ["test_root.py"]
+    assert "tests" in _ignored(task, (".",))
+
+
+@pytest.mark.parametrize(
+    "name", ["a\nb.py", "a\x1b[31m.py", "a\u202eb.py", "a]; b:c.py", "a\rb.py"]
+)
+def test_a_shown_path_has_no_newline_control_or_record_delimiter(name):
+    out = _shown(name)
+    assert out.isprintable() and not set("[];:") & set(out)
 
 
 def test_a_run_ignores_the_subdirectories_it_does_not_select(repo):
@@ -188,6 +211,18 @@ def test_a_hook_that_empties_a_module_with_tests_is_refused(repo, tmp_path):
     hook = EMPTY_HOOK
     result = _case(repo, tmp_path, hook, {"tests/test_hidden.py": TESTS["function"]})
     assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
+
+
+@pytest.mark.sandbox
+def test_a_hidden_root_test_file_is_refused(repo, tmp_path):
+    result = _case(repo, tmp_path, EMPTY_HOOK, {"test_hidden.py": TESTS["function"]})
+    assert result.reason.startswith("P2P_BASE_FILES_UNCOLLECTED: "), result.reason
+
+
+@pytest.mark.sandbox
+def test_a_plain_root_test_file_is_not_refused(repo, tmp_path):
+    result = _case(repo, tmp_path, "", {"test_plain.py": TESTS["function"]})
+    assert result.status == "COMPLETED" and result.verified, result.reason
 
 
 HIDDEN = {
