@@ -23,7 +23,7 @@ RESOLVER = (
 NAME = "pkg/mod.py"
 
 
-def _verdict(tmp_path, base_extra, added, extra_files=()):
+def _verdict(tmp_path, base_extra, added, extra_files=(), other=None):
     repo = tmp_path / "repo"
     repo.mkdir()
     git(repo, "init", "-q")
@@ -39,11 +39,13 @@ def _verdict(tmp_path, base_extra, added, extra_files=()):
     for name in extra_files:
         (repo / name).parent.mkdir(parents=True, exist_ok=True)
         (repo / name).write_text("X = 1\n")
+    for name, text in (other or {}).items():  # more changed own files
+        (repo / name).write_text(text)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "candidate")
     cand = git(repo, "rev-parse", "HEAD")
     try:
-        refuse_new_sys_path_mutation(repo, base, cand, [NAME])
+        refuse_new_sys_path_mutation(repo, base, cand, [NAME, *(other or {})])
     except CandidateRejected as err:
         return err.code
     return None
@@ -218,6 +220,18 @@ UNTRUSTED_RE = [
     ("", "P = re.exec(x)\n", ()),
     ("", "P = re.compile_all(x)\n", ()),
     ("", "import os as re\nP = re.compile(x)\n", ()),
+    ("", "re.compile = hook\n", ()),
+    ("", "del re.compile\n", ()),
+    ("", "re.compile += 1\n", ()),
+    ("", "re.compile: object = hook\n", ()),
+    ("", "for re.compile in items:\n    pass\n", ()),
+    ("", "with ctx() as re.compile:\n    pass\n", ()),
+    ("import regex\n", "regex.compile = hook\n", ()),
+    ("import regex\n", "del regex.compile\n", ()),
+    ("import regex\n", "regex.compile += 1\n", ()),
+    ("import regex\n", "regex.compile: object = hook\n", ()),
+    ("import regex\n", "for regex.compile in items:\n    pass\n", ()),
+    ("import regex\n", "with ctx() as regex.compile:\n    pass\n", ()),
 ]
 
 
@@ -243,3 +257,82 @@ def test_re_compile_pass_needs_a_plain_unshadowed_import(tmp_path, base_extra, a
 
 def test_aliased_plain_import_of_re_keeps_the_pass(tmp_path):
     assert _verdict(tmp_path, "import re as r\n", "P = r.compile(x)\n") is None
+
+
+RUN = "f2 = type(lambda: 0)(re.compile(SRC, '<s>', 'single'), {})\n"
+SPLIT_BASE = (
+    "import importlib\nMODS = 'json'\nfor _m in MODS.{sp}:\n    importlib.import_module(_m)\n"
+)
+ENTRY_BASE = (
+    "import importlib\nT = 'a=json:loads'\ndef res(t):\n"
+    "    m, _, a = t.split('=')[1].partition(':')\n"
+    "    return getattr(importlib.import_module(m), a)\n"
+)
+PKG_B = "import inspect\nfrom pkg import mod\n"
+
+# Round 3 (shape families found by the independent review): (base_extra, added, other, extra_files).
+ROUND3_BLOCK = [
+    ("", "match inspect.getmodule(len):\n    case object(exec=e):\n        e(s)\n", {}, ()),
+    ("", "match inspect.getmodule(len):\n    case object(eval=g):\n        v = g(s)\n", {}, ()),
+    ("", "re.compile = hook\n", {}, ()),
+    ("", "del re.compile\n", {}, ()),
+    ("", "import pkg.mod as me\nme.re = inspect.getmodule(len)\n" + RUN, {}, ()),
+    ("", "from pkg import mod as me\nme.re = inspect.getmodule(len)\n" + RUN, {}, ()),
+    ("", "import pkg.mod as me\nsetattr(me, 're', inspect.getmodule(len))\nP = re.compile(x)\n", {}, ()),
+    ("", "inspect.getmodule(f).re = inspect.getmodule(len)\nP = re.compile(x)\n", {}, ()),
+    ("", RUN, {"pkg/b.py": PKG_B + "mod.re = inspect.getmodule(len)\n"}, ()),
+    (
+        "",
+        RUN,
+        {"pkg/b.py": PKG_B + "setattr(mod, 're', inspect.getmodule(len))\n"},
+        (),
+    ),
+    ("", "P = re.compile(x)\n", {}, ("pkg/re.cpython-313-darwin.so",)),
+    ("", "P = re.compile(x)\n", {}, ("pkg/re.pyc",)),
+    ("", "from compat import execfile\nexecfile(p)\n", {}, ()),
+    ("", "from zodbpickle import fastpickle\nv = fastpickle.loads(b)\n", {}, ()),
+    ("", "import asteval\nv = asteval.Interpreter()(s)\n", {}, ()),
+    ("", "import simpleeval\n", {}, ()),
+    ("import cloudpickle\ndef load(b):\n    return cloudpickle.loads(b)\n", "v = load(x)\n", {}, ()),
+    (
+        "from zodbpickle import fastpickle\ndef load(b):\n    return fastpickle.loads(b)\n",
+        "v = load(x)\n",
+        {},
+        (),
+    ),
+    (SPLIT_BASE.format(sp="split(',')"), "MODS = 'json,pickle'\n", {}, ()),
+    (SPLIT_BASE.format(sp="split()"), "MODS = 'json pickle'\n", {}, ()),
+    (ENTRY_BASE, "T = 'a=pickle:loads'\n", {}, ()),
+    ("", "T = 'x\\\\exec'\n", {}, ()),
+    ("", "T = 'json;marshal'\n", {}, ()),
+]
+ROUND3_PASS = [
+    ("", "match obj:\n    case object(name=n):\n        pass\n", {}, ()),
+    ("", "import pkg.mod as me\nv = me.f\nP = re.compile(x)\n", {}, ()),
+    ("", "from compat import basestring\nbasestring(p)\n", {}, ()),
+    ("", "from zodb import storage\nv = storage.loads(b)\n", {}, ()),
+    ("import json\ndef load(b):\n    return json.loads(b)\n", "v = load(x)\n", {}, ()),
+    ("", "executor_count = 1\nevaluation = run()\n", {}, ()),
+    (SPLIT_BASE.format(sp="split(',')"), "MODS = 'json,csv'\n", {}, ()),
+    (SPLIT_BASE.format(sp="split()"), "MODS = 'json csv'\n", {}, ()),
+    (ENTRY_BASE, "T = 'a=json:dumps'\n", {}, ()),
+    (RESOLVER, "T = 'json:dumps'\n", {}, ()),
+    ("", "P = re.compile(x)\n", {"pkg/b.py": PKG_B + "v = mod.f\n"}, ()),
+]
+
+
+@pytest.mark.parametrize(("base_extra", "added", "other", "extra_files"), ROUND3_BLOCK)
+def test_round3_families_stay_refused(tmp_path, base_extra, added, other, extra_files):
+    got = _verdict(tmp_path, base_extra, added, extra_files, other)
+    assert got == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+@pytest.mark.parametrize(("base_extra", "added", "other", "extra_files"), ROUND3_PASS)
+def test_round3_honest_edits_still_pass(tmp_path, base_extra, added, other, extra_files):
+    assert _verdict(tmp_path, base_extra, added, extra_files, other) is None
+
+
+def test_lowercase_prose_with_a_bare_word_is_refused_like_main(tmp_path):
+    assert _verdict(tmp_path, "", "log = 'failed to compile the rules'\n") == (
+        "CANDIDATE_SYS_PATH_MUTATION"
+    )

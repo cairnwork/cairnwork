@@ -303,7 +303,11 @@ def _identifiers(node: ast.AST) -> Iterator[str]:
 
 
 def _safe_read(node: ast.Attribute, safe: Mapping[str, str]) -> bool:
-    return isinstance(node.value, ast.Name) and safe.get(node.value.id) == node.attr
+    return (
+        isinstance(node.ctx, ast.Load)  # a store or delete rewrites the module's attribute
+        and isinstance(node.value, ast.Name)
+        and safe.get(node.value.id) == node.attr
+    )
 
 
 def _safe_roots(tree: ast.Module, shadowed: frozenset[str]) -> dict[str, str]:
