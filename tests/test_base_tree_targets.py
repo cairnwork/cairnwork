@@ -9,7 +9,8 @@ from types import SimpleNamespace
 import pytest
 
 from cairnwork import base_fixture_names as bfn
-from cairnwork.base_tree_targets import base_tree_targets, conftest_dir_targets
+from cairnwork import base_tree_targets as btt
+from cairnwork.base_tree_targets import base_tree_targets, conftest_dir_targets, pick_dir_targets
 
 FILES = {
     "tests/conftest.py": "",
@@ -187,3 +188,48 @@ def test_conftest_dir_targets_name_one_test_file_under_each_conftest_directory(t
     got = conftest_dir_targets(task.repo, task.base_commit, ("tests",))
     assert got == ("tests/quiet/test_q.py", "tests/sib/deep/test_d.py")  # empty/ has no test file
     assert conftest_dir_targets(task.repo, "no-such-commit", ("tests",)) is None
+
+
+def _layout(rnd):
+    """A random nested tree: test files, and conftest directories (some with no test below)."""
+    names = ["a", "b", "c", "d"]
+    dirs = {"tests"}
+    for _ in range(rnd.randint(1, 25)):
+        dirs.add("/".join(["tests", *rnd.choices(names, k=rnd.randint(1, 4))]))
+    tree = sorted(
+        f"{d}/test_{i}.py"
+        for i, d in enumerate(rnd.sample(sorted(dirs), rnd.randint(0, len(dirs))))
+    )
+    return tree, sorted(rnd.sample(sorted(dirs), rnd.randint(0, len(dirs))))
+
+
+def test_every_conftest_directory_with_a_test_below_it_is_covered_by_a_picked_file():
+    """Layer1 ruling: the property, over many random nested layouts (not a two-level example)."""
+    import random
+
+    rnd = random.Random(1769)
+    for _ in range(500):
+        tree, dirs = _layout(rnd)
+        picked = pick_dir_targets(tuple(tree), dirs)
+        assert picked is not None
+        assert set(picked) <= set(tree)
+        for d in dirs:
+            below = [t for t in tree if t.startswith(d + "/")]
+            assert not below or any(t.startswith(d + "/") for t in picked), (d, tree, picked)
+        assert len(picked) <= len(dirs)
+
+
+def test_a_conftest_directory_with_no_test_below_it_is_not_an_error():
+    assert pick_dir_targets(("tests/a/test_a.py",), ["tests", "tests/empty"]) == (
+        "tests/a/test_a.py",
+    )
+    assert pick_dir_targets((), ["tests"]) == ()
+    assert pick_dir_targets(("tests/a/test_a.py",), []) == ()
+
+
+def test_more_conftest_directories_than_the_measured_cap_are_not_picked(monkeypatch):
+    """Measured 4.7 s collect-only for 600 conftest directories (50: 1.1 s, 1500: 10.7 s)."""
+    assert btt.MAX_CONFTEST_DIRS == 600
+    tree = tuple(f"tests/d{i}/test_{i}.py" for i in range(601))
+    assert len(pick_dir_targets(tree, [f"tests/d{i}" for i in range(600)]) or ()) == 600
+    assert pick_dir_targets(tree, [f"tests/d{i}" for i in range(601)]) is None

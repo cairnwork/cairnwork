@@ -170,14 +170,23 @@ def test_a_base_over_the_cap_still_refuses_a_changed_archive_a_conftest_puts_on_
     assert caught.value.code == CODE
 
 
-def test_a_base_over_the_cap_with_no_conftest_directory_target_is_incomplete_and_refuses(
+def test_a_base_over_the_cap_with_unpickable_conftest_directories_is_incomplete_and_refuses(
     task, monkeypatch
 ):
     monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
-    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: ())
+    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: None)
     Runs(monkeypatch, [_record(task)])
     with pytest.raises(TestCommitRejected):
         check(task, ("tests/lib/helper_mod.py",))
+
+
+def test_a_base_over_the_cap_whose_conftest_directories_hold_no_test_is_complete(task, monkeypatch):
+    """Layer1 ruling 1: no test loads those conftests, so an empty pick is not 'cannot pick'."""
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
+    monkeypatch.setattr(bfn, "conftest_dir_targets", lambda *a: ())
+    runs = Runs(monkeypatch, [_record(task)])
+    check(task, ("tests/lib/helper_mod.py",))
+    assert runs.targets == [("tests/lib/helper_mod.py",)]
 
 
 def test_an_unreadable_tree_is_incomplete_and_refuses(task, monkeypatch):
