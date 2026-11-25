@@ -62,7 +62,7 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
 
 
 def _base_paths(task) -> tuple[str, ...] | None:
-    """Every file of the base (None when unreadable: a case variant then counts as the same file)."""
+    """Every file of the base (None when unreadable: a case variant is then the same file)."""
     try:
         raw = run_git_bytes(task.repo, "ls-tree", "-r", "--name-only", "-z", task.base_commit)
         return tuple(p for p in raw.decode("utf-8", "surrogateescape").split("\0") if p)
