@@ -1,7 +1,7 @@
-"""#1814 (follow-ups of #1812's review): the Linux sweep decodes the mount table with errors=replace, so a
-mount path that is not valid UTF-8 cannot crash it (unknown stays "restricted", never "ours"), and the
-DISPATCHED mark is read in the one spelling the journal writes (``<boot id> <repr(float)>``), as
-the start mark of #1802. Fake mountinfo and a fake /proc only."""
+"""#1814 (follow-ups of #1812's review): the Linux sweep decodes the mount table with
+errors=replace, so a mount path that is not valid UTF-8 cannot crash it (unknown stays
+"restricted", never "ours"), and the DISPATCHED mark is read in the one spelling the journal
+writes (``<boot id> <repr(float)>``), as the start mark of #1802. Fake mountinfo and /proc only."""
 
 import pytest
 from test_proc_start import BOOT, _fake_proc
