@@ -146,3 +146,64 @@ def test_only_one_of_the_two_files_changed_passes_as_before(tmp_path):
     only_types = {"pkg/types.py": new["pkg/types.py"]}
     assert _verdict(tmp_path, base, only_validator, "a") is None
     assert _verdict(tmp_path, base, only_types, "b") is None
+
+
+# A file that names __package__ or __spec__ can point a relative import at the standard library
+# (``__package__ = "unittest"`` then ``from .mock import patch``), so the exemption holds only
+# for a file whose syntax tree has neither word in any name, attribute or string.
+RESOLVING = [
+    '__package__ = "unittest"',
+    '__package__ += "x"',
+    '__package__: str = "unittest"',
+    "__spec__ = None",
+    'globals()["__package__"] = "unittest"',
+    'vars()["__spec__"] = None',
+    'setattr(me, "__package__", "unittest")',
+    "del __package__",
+    'NAME = "__package__"',
+    'NAME = "set __spec__ first"',
+    "from m import __package__ as p",
+    "from m import a as __spec__",
+    "import m as __package__",
+    "class __package__:\n    pass",
+    "def __spec__():\n    pass",
+    "for __package__ in items:\n    pass",
+    "with ctx() as __spec__:\n    pass",
+    "match value:\n    case __package__:\n        pass",
+    'obj.__package__ = "unittest"',
+    "def f(__package__):\n    pass",
+    "global __package__",
+]
+RELATIVE = [
+    "from .mock import patch",
+    "from ..mock import patch",
+    "from .mock import *",
+    "from .types import type_ok",
+    "from .types import *",
+]
+
+
+@pytest.mark.parametrize("relative", RELATIVE)
+@pytest.mark.parametrize("resolving", RESOLVING)
+def test_a_file_that_can_repoint_relative_imports_is_scanned_as_before(
+    tmp_path, resolving, relative
+):
+    base, new = _pair(resolving + "\n" + relative)
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+def test_the_taint_added_by_the_candidate_counts_too(tmp_path):
+    base, new = _pair("from .mock import patch", validator_rest='\n__package__ = "unittest"\n')
+    assert _verdict(tmp_path, base, new) == REFUSED
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "# __package__ and __spec__ are not touched here\nfrom .types import type_ok, type_name",
+        "from .types import type_ok, type_name  # __spec__",
+    ],
+)
+def test_a_comment_naming_the_words_does_not_block(tmp_path, line):
+    base, new = _pair(line)
+    assert _verdict(tmp_path, base, new) is None
