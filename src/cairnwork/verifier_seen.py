@@ -13,16 +13,19 @@ import re
 import subprocess
 import sys
 
-from cairnwork import survivor_argv
+from cairnwork import confined, survivor_argv
 
 REASON = "account-escaped"
 _STAT = re.compile(r"[A-Za-z+<>]{1,5}")
-_AGE = re.compile(r"[0-9]{1,2}(-[0-9]{2})?(:[0-9]{2}){1,2}")
+_AGE = re.compile(r"[0-9]{1,3}(-[0-9]{2})?(:[0-9]{2}){1,2}")
 
 
 def snapshot(user: str, timeout: float) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(argv entries, reasons) for ``user``'s processes; ((), ()) when ps cannot be read."""
+    """(argv entries, reasons) for ``user``'s processes; ((), ()) when ps cannot be read.
+    ``timeout`` is the time left to the caller; at most a quarter (and PS_TIMEOUT_SECONDS) is
+    used, so this can never take the time the kill needs."""
     try:
+        timeout = min(timeout / 4, confined.PS_TIMEOUT_SECONDS)
         flag = ["-x"] if sys.platform == "darwin" else []
         done = subprocess.run(  # noqa: S603 - fixed argv
             ["/bin/ps", *flag, "-U", user, "-o", "pid=,ppid=,stat=,etime=,comm="],
@@ -30,11 +33,13 @@ def snapshot(user: str, timeout: float) -> tuple[tuple[str, ...], tuple[str, ...
         )  # fmt: skip
         if done.returncode not in (0, 1) or done.stderr.strip():
             return (), ()
-        entries = []
+        rows = []
         for line in done.stdout.split("\n"):
             parts = line.split(None, 4)
             if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit():
-                entries.append(_entry(parts[2], parts[3], parts[4]))
+                rows.append(parts)
+        rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
+        entries = [_entry(*row[2:]) for row in rows]
         return tuple(entries[: survivor_argv.MAX_LISTED]), ((REASON,) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return (), ()

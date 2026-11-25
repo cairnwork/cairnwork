@@ -251,7 +251,7 @@ class VerifierAccount:
             lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
         )
 
-    def reap(self, main: int = 0) -> int:
+    def reap(self, main: int = 0) -> survivor_argv.Survivors:
         """Kill everything the account runs; return how many escaped processes were running.
         Before the kill a failed ps is not retried (that gives a survivor time to hide). An
         unknown count is one more, so "cannot tell" is never "nothing escaped". ``main`` (#1671):
@@ -265,7 +265,7 @@ class VerifierAccount:
             )
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
-            return 1
+            return survivor_argv.Survivors(1)
         count = max(before, 0) + 1 if before < 0 or left != 0 else max(before - main, 0)
         return survivor_argv.Survivors(count, *seen) if count else survivor_argv.Survivors(0)
 

@@ -50,11 +50,9 @@ class Survivors(int):
 
     def __add__(self, other: int) -> Survivors:
         # #1819: an added Survivors (reap()'s account count) keeps its listing too
-        return Survivors(
-            int(self) + other,
-            self.argv + getattr(other, "argv", ()),
-            self.reasons + getattr(other, "reasons", ()),
-        )
+        argv = self.argv + tuple(getattr(other, "argv", ()))
+        reasons = tuple(dict.fromkeys(self.reasons + tuple(getattr(other, "reasons", ()))))
+        return Survivors(int(self) + other, argv[:MAX_LISTED], reasons)
 
 
 def _allowed(words: list[str]) -> list[str]:

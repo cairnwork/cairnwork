@@ -27,7 +27,7 @@ def _snap(monkeypatch, stdout, **kw):
 
 def test_rows_become_bounded_argv_prefixes_with_state_and_age(monkeypatch):
     argv, reasons = _snap(monkeypatch, PS)
-    assert argv == ("python3.13 S 01.02", "sleep Z+ 00.03")
+    assert argv == ("sleep Z+ 00.03", "python3.13 S 01.02")  # launchd child last
     assert reasons == ("account-escaped",)
 
 
@@ -115,3 +115,21 @@ def test_merge_keeps_both_listings():
     assert both.reasons == ("marked", "account-escaped")
     plain = sa.Survivors(0) + 2
     assert plain == 2 and plain.argv == ()
+
+
+def test_launchd_children_are_listed_after_the_others(monkeypatch):
+    rows = "".join(f"{n} 1 S 00:01 sleep\n" for n in range(10, 20)) + "99 50 S 00:09 python\n"
+    argv, _ = _snap(monkeypatch, rows)
+    assert argv[0] == "python S 00.09"
+
+
+def test_merged_listing_is_bounded_and_reasons_not_repeated():
+    one = sa.Survivors(1, ("sleep",) * 5, ("account-escaped",))
+    two = sa.Survivors(1, ("sh",) * 5, ("account-escaped",))
+    both = one + two
+    assert len(both.argv) == sa.MAX_LISTED and both.reasons == ("account-escaped",)
+
+
+def test_a_three_digit_day_age_is_shown(monkeypatch):
+    argv, _ = _snap(monkeypatch, "5 1 S 123-04:05:06 sleep\n")
+    assert argv == ("sleep S 123-04.05.06",)
