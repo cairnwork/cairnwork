@@ -36,8 +36,8 @@ PLUGIN = {
 BROKEN = "import no_such_module_for_the_reach_run\n\n\n" + OK
 
 
-def go(project, tmp_path, base_files, test_files, extra=(), delete=()):
-    commit_change(project, base_files)
+def go(project, tmp_path, base_files, test_files, extra=(), delete=(), base_delete=()):
+    commit_change(project, base_files, delete=base_delete)
     files = {"tests/test_regression.py": REGRESSION, **test_files}
     base, tests = _test_commit(project, files, [], delete=delete)
     verifiers = (("pytest", (*CHECK, *extra)),)
