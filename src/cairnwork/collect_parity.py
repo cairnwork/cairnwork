@@ -31,7 +31,7 @@ NESTED = "P2P_BASE_NESTED_NAMING"
 UNCOLLECTED = "P2P_BASE_FILES_UNCOLLECTED"
 UNUSABLE = "P2P_BASE_COLLECT_UNUSABLE"
 _FORMS = {(name, section): form for name, section, form in _CANDIDATES}
-_NAMES = frozenset(name for name, _ in _FORMS)
+_NAMES = frozenset(name.casefold() for name, _ in _FORMS)  # APFS reads PYTEST.INI
 
 
 def nested_naming(task) -> None:
@@ -43,7 +43,7 @@ def nested_naming(task) -> None:
         raise _refuse("the base tree cannot be listed") from exc
     for entry in filter(None, listing.decode("utf-8", "surrogateescape").split("\0")):
         meta, _, path = entry.partition("\t")
-        if "/" not in path or path.rsplit("/", 1)[1] not in _NAMES:
+        if "/" not in path or path.rsplit("/", 1)[1].casefold() not in _NAMES:
             continue
         mode, kind, oid = meta.split()
         if kind != "blob" or mode not in ("100644", "100755"):
@@ -60,9 +60,10 @@ def nested_naming(task) -> None:
 def _keys(name: str, text: str) -> list[str]:
     found: set[str] = set()
     for (file, section), form in _FORMS.items():
-        if file == name:
-            table = _section(text, section, form, name)
-            found |= {k for k in NAMING_KEYS if table and k in table}
+        if file == name.casefold():
+            table = _section(text, section, form, file)
+            opts = str(table.get("addopts", "")) if table else ""  # ``-o python_files=...``
+            found |= {k for k in NAMING_KEYS if table and (k in table or k in opts)}
     return sorted(found)
 
 
