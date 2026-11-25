@@ -12,11 +12,17 @@
 - nothing can repoint the resolution: no changed Python file and no file of the top-level package
   touches ``__package__``, ``__spec__`` or ``__name__`` other than as a plain read of ``__name__``
   (``__package__ = "unittest"`` in a star-imported sibling, ``v.__package__ = ...`` through a
-  cycle, a script run with ``__name__`` set). A file that cannot be read or parsed counts.
+  cycle, a script run with ``__name__`` set). A file that cannot be read or parsed counts, and
+  so does a package whose files together exceed ``MAX_TOTAL_BYTES`` (one file ``MAX_FILE_BYTES``)
+  or ``MAX_FILES``: the answer is then "not exempt", never a partial read.
 
 Anything else keeps the module part compared with ``IMPORT_MODULES``, as before. A comment that
-names the words does not count. Code outside the package that the candidate did not change is the
-target repository's own and is not read.
+names the words does not count. The taint read covers every tracked file of the top-level
+package (unchanged ones too) and the changed files anywhere, for the words as names or literal
+strings. Not read: unchanged code outside the package, and an unchanged base file that sets those
+attributes through encoded bytes (``exec`` of a bytes constant): the base is the target
+repository's own, and the threat model is an untrusted candidate patch on a trusted base. A top
+level package named like a third-party module (``requests``) is exempt like any other (#1807).
 """
 
 from __future__ import annotations
@@ -31,6 +37,8 @@ from cairnwork.gitcmd import GitCommandError, run_git
 from cairnwork.sys_path_names import names_resolution_attrs
 from cairnwork.sys_path_scan import MAX_FILES, _read_blobs  # pyright: ignore[reportPrivateUsage]
 
+MAX_FILE_BYTES = 2 << 20  # one source file; a larger one is not read
+MAX_TOTAL_BYTES = 32 << 20  # all files read for one package's taint
 _REGULAR = ("100644", "100755")
 _SOURCE = (".py", ".pyw")
 
@@ -41,23 +49,25 @@ class RelativeScope:
     def __init__(self, repo: Path, commit: str, changed: Iterable[str]) -> None:
         self._repo, self._commit = repo, commit
         self._changed = [p for p in changed if p.endswith(_SOURCE)]
-        self._tree: dict[str, str] | None = None  # tracked regular file -> blob id
+        self._tree: dict[str, tuple[str, int]] | None = None  # tracked regular file -> (blob, size)
         self._tainted: dict[str, bool] = {}
 
     def resolver(self, path: str) -> Callable[[int, str], bool]:
         """The check the scan calls for each relative import (level, module) of file ``path``."""
         return lambda level, module: self._resolves(path, level, module)
 
-    def _files(self) -> dict[str, str]:
+    def _files(self) -> dict[str, tuple[str, int]]:
         if self._tree is None:
             self._tree = {}
             try:
-                listing = run_git(self._repo, "ls-tree", "-r", "-z", "--full-tree", self._commit)
+                listing = run_git(
+                    self._repo, "ls-tree", "-r", "-l", "-z", "--full-tree", self._commit
+                )
                 for entry in filter(None, listing.split("\0")):
                     meta, path = entry.split("\t", 1)
-                    mode, kind, oid = meta.split()
-                    if kind == "blob" and mode in _REGULAR:
-                        self._tree[path] = oid
+                    mode, kind, oid, size = meta.split()
+                    if kind == "blob" and mode in _REGULAR and size.isdigit():
+                        self._tree[path] = (oid, int(size))
             except (GitCommandError, OSError, ValueError):
                 self._tree = {}  # nothing resolves: every relative import is scanned as before
         return self._tree
@@ -87,9 +97,10 @@ class RelativeScope:
             tree = self._files()
             inside = [p for p in tree if p.startswith(package + "/") and p.endswith(_SOURCE)]
             paths = sorted({*inside, *(p for p in self._changed if p in tree)})
-            self._tainted[package] = len(paths) > MAX_FILES or _repoints(
-                self._repo, [tree[p] for p in paths]
-            )
+            sizes = [tree[p][1] for p in paths]
+            too_big = len(paths) > MAX_FILES or sum(sizes) > MAX_TOTAL_BYTES
+            too_big = too_big or any(size > MAX_FILE_BYTES for size in sizes)
+            self._tainted[package] = too_big or _repoints(self._repo, [tree[p][0] for p in paths])
         return self._tainted[package]
 
 

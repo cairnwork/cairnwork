@@ -8,6 +8,7 @@ import pytest
 from conftest import git
 from test_candidate_relative_import_1807 import GUARD, MOCK, REFUSED, TYPES, _verdict
 
+from cairnwork import relative_import_scope as scope
 from cairnwork.sys_path_scan import may_edit_sys_path, scan_sys_path_blob
 
 # --- design (layer1 ruling): a relative import is the package's own only when the judged tree
@@ -165,3 +166,44 @@ def test_the_scan_without_a_resolver_and_the_sealed_check_keep_the_old_rule(tmp_
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
     assert may_edit_sys_path(repo, git(repo, "rev-parse", "HEAD")) is True
+
+
+@pytest.mark.parametrize("top", ["requests", "numpy", "yaml", "attr", "pkg"])
+def test_a_third_party_named_top_package_is_exempt_like_any_other(tmp_path, top):
+    """Only standard-library names are barred: a package called like a popular third-party module
+    is the candidate's own code in this tree, so its sibling import is exempt (main refused it)."""
+    base = {
+        f"{top}/__init__.py": "",
+        f"{top}/types.py": TYPES,
+        f"{top}/validator.py": "from .types import type_ok\n",
+    }
+    new = {path: text + "\nEXTRA = 1\n" for path, text in base.items()}
+    assert _verdict(tmp_path, base, new) is None
+
+
+SIZED = {
+    "pkg/__init__.py": "",
+    "pkg/types.py": TYPES,
+    "pkg/validator.py": "from .types import type_ok\n",
+}
+SIZED_NEW = {path: text + "\nEXTRA = 1\n" for path, text in SIZED.items()}
+SIZES = [len(text.encode()) for text in SIZED_NEW.values()]
+
+
+@pytest.mark.parametrize(
+    ("limit", "value", "refused"),
+    [
+        ("MAX_TOTAL_BYTES", sum(SIZES), False),
+        ("MAX_TOTAL_BYTES", sum(SIZES) - 1, True),
+        ("MAX_FILE_BYTES", max(SIZES), False),
+        ("MAX_FILE_BYTES", max(SIZES) - 1, True),
+    ],
+    ids=["total-at-limit", "total-over", "file-at-limit", "file-over"],
+)
+def test_the_package_read_is_bounded_and_over_the_bound_is_not_exempt(
+    tmp_path, monkeypatch, limit, value, refused
+):
+    monkeypatch.setattr(scope, "MAX_TOTAL_BYTES", 1 << 30)
+    monkeypatch.setattr(scope, "MAX_FILE_BYTES", 1 << 30)
+    monkeypatch.setattr(scope, limit, value)
+    assert (_verdict(tmp_path, SIZED, SIZED_NEW) == REFUSED) is refused
