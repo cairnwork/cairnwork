@@ -288,7 +288,13 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
     Verifier logs (the private dirs themselves) are kept as evidence."""
     if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
-    root = Path(run_root)
+    try:
+        _remove_leftovers_in(Path(run_root), attempt_id)
+    except OSError:
+        pass  # a directory that cannot be listed or searched (any Python): the re-scan names it
+
+
+def _remove_leftovers_in(root: Path, attempt_id: str) -> None:
     for name in _index_names(attempt_id):
         _unlink(root / name)
     works, privates, clones = _run_dirs(root, attempt_id)
@@ -342,6 +348,13 @@ def _remove_account_leftovers(account: VerifierAccount, attempt_id: str) -> None
     verify run's log directory as evidence, as ``_remove_leftovers`` does."""
     if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
         return
+    try:
+        _remove_account_in(account, attempt_id)
+    except OSError:
+        pass  # not listable or searchable: the re-scan names it
+
+
+def _remove_account_in(account: VerifierAccount, attempt_id: str) -> None:
     root = account.run_root
     if not root.is_dir():
         return
@@ -367,22 +380,34 @@ def _leftover_names(root: Path, attempt_id: str) -> list[str]:
     if not _run_attempt(attempt_id):
         return []
     root = Path(root)
-    try:  # a root that exists but cannot be listed and searched is "cannot see", never "empty"
-        os.listdir(root)
-        if not os.access(root, os.X_OK):
-            raise PermissionError(root)
-    except (FileNotFoundError, NotADirectoryError):
+    seen = _searchable(root)
+    if seen is None:
         return []
-    except OSError:
+    if not seen:
         return [UNSEARCHABLE]
-    works, privates, clones = _run_dirs(root, attempt_id)
-    own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
-    indexes = [
-        root / name for name in _index_names(attempt_id)
-    ]  # whatever _remove_leftovers unlinks
-    names = {
-        p.name if p.name != "run" else p.parent.name + "/run"
-        for p in works + privates + clones + own + indexes
-        if os.path.lexists(p)  # a dangling symlink is still a leftover
-    }
-    return sorted(names)
+    try:
+        works, privates, clones = _run_dirs(root, attempt_id)
+        own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
+        indexes = [
+            root / name for name in _index_names(attempt_id)
+        ]  # what _remove_leftovers unlinks
+        names = {
+            p.name if p.name != "run" else p.parent.name + "/run"
+            for p in works + privates + clones + own + indexes
+            if os.path.lexists(p)  # a dangling symlink is still a leftover
+        }
+    except OSError:  # a directory below could not be listed or searched (pathlib raises < 3.14)
+        return [UNSEARCHABLE]
+    return sorted(names) if _searchable(root) else [UNSEARCHABLE]  # still searchable after the scan
+
+
+def _searchable(root: Path) -> bool | None:
+    """None: no such directory. False: exists but cannot be listed and searched ("cannot see",
+    never "empty"). True otherwise."""
+    try:
+        os.listdir(root)
+        return True if os.access(root, os.X_OK) else False
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except OSError:
+        return False
