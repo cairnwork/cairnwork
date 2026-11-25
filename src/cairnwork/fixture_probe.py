@@ -23,7 +23,7 @@ import stat
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork.collected_names import collected_names
+from cairnwork.collected_names import CollectedRecord, collected_record
 
 PREFIX = "_cairnwork_fixture_record_"
 RECORDER = Path(__file__).with_name("fixture_record.py")
@@ -61,6 +61,10 @@ class Probe:
             os.close(fd)
 
     def read(self, returncode: object, timed_out: bool) -> frozenset[str] | None:
+        record = self.read_record(returncode, timed_out)
+        return None if record is None else record.names
+
+    def read_record(self, returncode: object, timed_out: bool) -> CollectedRecord | None:
         if self.record_dir is None or self.plugin_file is None or timed_out:
             return None
         try:
@@ -68,13 +72,13 @@ class Probe:
                 self.record_dir, self.module, self.plugin_file, self.nonce
             ):
                 return None
-            return collected_names(
+            return collected_record(
                 self.record_dir,
                 exit_code=returncode,
                 settings_digest=self.settings_digest,
                 base_sha=self.base_sha,
             )
-        except Exception:  # noqa: BLE001 - any fault means no names (the #916 rule)
+        except Exception:  # noqa: BLE001 - any fault means no record (the #916 rule)
             return None
 
 
@@ -109,6 +113,12 @@ def start(spec, ctx, private: Path, env: dict, ini_text: bytes, candidate_commit
 
 def finish(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run):
     """After the run and before its private dir is dropped: the names, or None."""
+    record = finish_record(spec, ctx, candidate_commit, private, ini_text, run)
+    return None if record is None else record.names
+
+
+def finish_record(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run):
+    """The same read, whole (#1769): the validated record, or None."""
     if not spec.record_fixtures or ctx.account is not None:
         return None
     try:
@@ -121,7 +131,7 @@ def finish(spec, ctx, candidate_commit: str, private: Path, ini_text: bytes, run
     digest = hashlib.sha256(ini_text).hexdigest()
     base = ctx.base_commit or candidate_commit
     probe = Probe(("-p", module), module, record_dir, plugin_file, digest, base, nonce)
-    return probe.read(run.returncode, run.timed_out)
+    return probe.read_record(run.returncode, run.timed_out)
 
 
 def _nonce_pipe(nonce: str) -> int:
