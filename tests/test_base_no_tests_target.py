@@ -12,6 +12,7 @@ from cairnwork.deferred_tests import base_comparison
 def with_targets(name, targets, rc=5, failed=(), **fields):
     stand_in = run(name, rc=rc, failed=failed, **fields)
     stand_in.spec = SimpleNamespace(verifier_id=name, targets=tuple(targets))
+    stand_in.hidden_tests = fields.get("hidden_tests", False)
     return stand_in
 
 
@@ -44,3 +45,18 @@ def test_a_run_without_targets_keeps_the_old_detail():
     assert base_comparison([run("v", rc=5, failed=())], TARGETS).detail == (
         "v: BASE_NO_TESTS (exit 5)"
     )
+
+
+HIDDEN = "tests/test_only_in_the_test_commit.py"
+
+
+def test_a_hidden_run_gives_the_count_and_no_file_name():
+    stand_in = with_targets("pytest-0", [HIDDEN, "tests/conftest.py"], hidden_tests=True)
+    got = base_comparison([stand_in], TARGETS)
+    assert got.detail == "pytest-0: BASE_NO_TESTS (exit 5); pytest collected no test in 2 target(s)"
+    assert "tests/" not in got.detail.split("(exit 5)")[1]
+
+
+def test_a_run_that_is_not_hidden_is_named_as_before():
+    stand_in = with_targets("pytest-0", [HIDDEN], hidden_tests=False)
+    assert f"collected no test in 1: {HIDDEN}" in base_comparison([stand_in], TARGETS).detail
