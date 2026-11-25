@@ -74,7 +74,7 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
         tree = base_tree_targets(task.repo, task.base_commit, tuple(task.test_roots))
         if tree is not None and len(tree) > MAX_TREE_TARGETS:
             tree = conftest_dir_targets(task.repo, task.base_commit, tuple(task.test_roots))
-        whole = bool(tree)
+        whole = tree is not None
         tree = tree or ()
         edited = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
