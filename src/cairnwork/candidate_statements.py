@@ -14,6 +14,11 @@ Residual (#1115): an edit to other control flow inside a function that reaches m
 early return before it), and base machinery reached through aliases, registries or dunders, are
 not hot; broader lexical matching raised hot statements in real signalling files, so these are
 left to the blackbox and verifier checks.
+Exact names (#1779): vars, globals, locals, exec, eval, compile, breakpoint, marshal and pickle
+count only as a bare name, an import of that name, a string constant containing it, or an
+attribute reached from a receiver that is not a plain chain of names or that mentions builtins
+(or a same-file alias of it). A longer identifier (``evaluate``, ``compiled``) or ``re.compile`` is
+not a hit; the receiver of ``.compile`` is still rebindable, which only the later checks see.
 """
 
 from __future__ import annotations
@@ -22,12 +27,37 @@ import ast
 import copy
 from collections import Counter
 from collections.abc import Iterator
+from dataclasses import dataclass
 
 _BLOCKS = ("body", "orelse", "finalbody", "handlers", "cases")
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 _PARSE_ERRORS = (SyntaxError, ValueError, UnicodeError, RecursionError, MemoryError)
 
 Key = tuple[str, str]
+_EXACT = frozenset(
+    {"vars", "globals", "locals", "exec", "eval", "compile", "breakpoint", "marshal", "pickle"}
+)
+
+
+@dataclass(frozen=True)
+class _Words:
+    """A word table split into substring words and exact-name words, plus the file's aliases."""
+
+    sub: tuple[bytes, ...]
+    exact: tuple[str, ...]
+    aliases: frozenset[str]
+
+    @classmethod
+    def make(cls, words: tuple[bytes, ...], aliases: frozenset[str]) -> _Words:
+        names = [word.decode() for word in words]
+        return cls(
+            tuple(w for w, n in zip(words, names, strict=True) if n not in _EXACT),
+            tuple(n for n in names if n in _EXACT),
+            aliases,
+        )
+
+    def without(self, *dropped: bytes) -> _Words:
+        return _Words(tuple(w for w in self.sub if w not in dropped), self.exact, self.aliases)
 
 
 def machinery_changed(
@@ -55,23 +85,24 @@ def _hot_statements(
 ) -> tuple[Counter[Key], set[Key]] | None:
     try:
         tree = ast.parse(data)
-        hot_names = _hot_defs(tree, reach)
+        aliases = _builtins_aliases(tree)
+        hot_names = _hot_defs(tree, _Words.make(reach, aliases))
         found: Counter[Key] = Counter()
         hot: set[Key] = set()
-        _visit(list(tree.body), "", words, hot_names, denylist, found, hot)
+        _visit(list(tree.body), "", _Words.make(words, aliases), hot_names, denylist, found, hot)
     except _PARSE_ERRORS:
         return None
     return found, hot
 
 
-def _hot_defs(tree: ast.Module, words: tuple[bytes, ...]) -> set[str]:
+def _hot_defs(tree: ast.Module, words: _Words) -> set[str]:
     """Names of defs and classes whose body names a ``words`` entry or another hot def."""
     refs: dict[str, set[str]] = {}
     hot: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, _DEFS):
             refs.setdefault(node.name, set()).update(_names(node))
-            if _has_word(ast.unparse(node), words):
+            if _hit(node, words):
                 hot.add(node.name)
     grew = True
     while grew:  # reach machinery through same-file calls
@@ -84,7 +115,7 @@ def _hot_defs(tree: ast.Module, words: tuple[bytes, ...]) -> set[str]:
 def _visit(
     nodes: list[ast.AST],
     scope: str,
-    words: tuple[bytes, ...],
+    words: _Words,
     hot_names: set[str],
     denylist: frozenset[str],
     found: Counter[Key],
@@ -99,7 +130,7 @@ def _visit(
         text = ast.unparse(own)
         key = (scope, text)
         found[key] += 1
-        scan_hit = _has_word(text, words)
+        scan_hit = _hit(own, words)
         exempt = scan_hit and _exempt_dynamic_word_scan(text, own, words, denylist)
         if (scan_hit and not exempt) or _names(own) & hot_names:
             hot.add(key)
@@ -154,11 +185,10 @@ def _unsafe_dynamic_access(node: ast.AST, denylist: frozenset[str]) -> bool:
 
 
 def _exempt_dynamic_word_scan(
-    text: str, node: ast.AST, words: tuple[bytes, ...], denylist: frozenset[str]
+    text: str, node: ast.AST, words: _Words, denylist: frozenset[str]
 ) -> bool:
     """Exempt only word hits fully accounted for by safe direct getattr/setattr calls."""
-    other_words = tuple(word for word in words if word not in {b"getattr", b"setattr"})
-    if _has_word(text, other_words) or _unsafe_dynamic_access(node, denylist):
+    if _hit(node, words.without(b"getattr", b"setattr")) or _unsafe_dynamic_access(node, denylist):
         return False
     calls = [part for part in ast.walk(node) if isinstance(part, ast.Call)]
     direct = sum(
@@ -210,3 +240,105 @@ def _names(node: ast.AST) -> set[str]:
 def _has_word(text: str, words: tuple[bytes, ...]) -> bool:
     raw = text.encode("utf-8", "surrogatepass")
     return any(word in raw for word in words)
+
+
+def _hit(node: ast.AST, words: _Words) -> bool:
+    """Substring words match the unparsed text as before; exact-name words match by AST form."""
+    if _has_word(ast.unparse(node), words.sub):
+        return True
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Name) and sub.id in words.exact:
+            return True
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, (str, bytes)):
+            if _has_word(_as_text(sub.value), tuple(w.encode() for w in words.exact)):
+                return True
+        if isinstance(sub, (ast.Import, ast.ImportFrom)):
+            names = [a.name for a in sub.names] + [a.asname or "" for a in sub.names]
+            if any(
+                w in n for n in (*names, getattr(sub, "module", None) or "") for w in words.exact
+            ):
+                return True
+        if isinstance(sub, ast.Attribute) and sub.attr in words.exact:
+            if _reaches_builtins(sub.value, words.aliases):
+                return True
+    return False
+
+
+def _as_text(value: str | bytes) -> str:
+    return value if isinstance(value, str) else value.decode("latin-1")
+
+
+def _reaches_builtins(receiver: ast.AST, aliases: frozenset[str]) -> bool:
+    """A receiver is trusted only as a plain chain of names that never mentions builtins or an
+    alias of it; a call, subscript or literal in front of the attribute could return anything."""
+    for part in ast.walk(receiver):
+        if isinstance(part, ast.Name):
+            ident = part.id
+        elif isinstance(part, ast.Attribute):
+            ident = part.attr
+        elif isinstance(part, ast.expr_context):
+            continue
+        else:
+            return True
+        if "builtins" in ident or ident in aliases:
+            return True
+    return False
+
+
+def _mentions_builtins(node: ast.AST, aliases: set[str]) -> bool:
+    for part in ast.walk(node):
+        if isinstance(part, ast.Name):
+            ident = part.id
+        elif isinstance(part, ast.Attribute):
+            ident = part.attr
+        elif isinstance(part, ast.Constant) and isinstance(part.value, str):
+            ident = part.value
+        else:
+            continue
+        if "builtins" in ident or ident in aliases:
+            return True
+    return False
+
+
+def _bindings(tree: ast.Module) -> Iterator[tuple[list[ast.AST], ast.AST | None]]:
+    """(targets, value) pairs for every form that binds a name from an expression."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            yield list(node.targets), node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            yield [node.target], node.value
+        elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            yield [node.target], node.iter
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            yield [node.optional_vars], node.context_expr
+        elif isinstance(node, ast.arguments):
+            args = [*node.posonlyargs, *node.args]
+            pairs = zip(args[len(args) - len(node.defaults) :], node.defaults, strict=True)
+            kw = ((a, d) for a, d in zip(node.kwonlyargs, node.kw_defaults, strict=True) if d)
+            for arg, default in (*pairs, *kw):
+                yield [arg], default
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                src = f"{getattr(node, 'module', None) or ''}.{alias.name}"
+                yield [ast.Name(alias.asname or alias.name.split(".")[0])], ast.Constant(src)
+
+
+def _builtins_aliases(tree: ast.Module) -> frozenset[str]:
+    """Names bound anywhere in the file to a value that mentions builtins, or to another alias."""
+    pairs = list(_bindings(tree))
+    aliases: set[str] = set()
+    grew = True
+    while grew:
+        before = len(aliases)
+        for targets, value in pairs:
+            if value is not None and _mentions_builtins(value, aliases):
+                for target in targets:
+                    for part in ast.walk(target):
+                        if isinstance(part, ast.Name):
+                            aliases.add(part.id)
+                        elif isinstance(part, ast.Attribute):
+                            aliases.add(part.attr)
+                        elif isinstance(part, ast.arg):
+                            aliases.add(part.arg)
+        grew = len(aliases) > before
+    return frozenset(aliases)

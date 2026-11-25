@@ -94,6 +94,20 @@ MUST_BLOCK = [
     ("", "import marshal\n"),
     ("import pickle\n", "v = pickle.loads(b)\n"),
     ("", "import os\nos.execv(p, a)\n"),
+    ("", "m = inspect.getmodule(print).exec(s)\n"),
+    ("", "import pydoc\npydoc.locate('buil' + 'tins').eval(s)\n"),
+    ("def get():\n    return builtins\n", "get().compile(s, 'f', 'exec')\n"),
+    ("", "import _pickle\n"),
+    ("", "import cloudpickle\n"),
+    ("", "v = np.load(f, allow_pickle=True)\n"),
+    ("", "v = pd.read_pickle(p)\n"),
+    ("", "import py_compile\npy_compile.compile(p, cfile=c)\n"),
+    ("", "import compileall\ncompileall.compile_dir(d)\n"),
+    ("", "import sys\nsys.breakpointhook = hook\n"),
+    ("", "from os import execv\n"),
+    ("", "import os as o\no.execv(p, a)\n"),
+    ("", "from pickle import *\n"),
+    ("", "m = modules[n].exec(s)\n"),
 ]
 
 
@@ -105,3 +119,15 @@ def test_honest_edit_next_to_a_signal_is_not_refused(tmp_path, added):
 @pytest.mark.parametrize(("base_extra", "added"), MUST_BLOCK)
 def test_machinery_by_name_stays_refused(tmp_path, base_extra, added):
     assert _verdict(tmp_path, base_extra, added) == "CANDIDATE_SYS_PATH_MUTATION"
+
+
+# Gemini design review: the statement that introduces the handle names the builtins itself, so it
+# is hot on its own; these must stay refused even though the later use has no builtins word.
+MUST_BLOCK += [
+    ("", "r = (lambda b: b.exec(p))(__builtins__)\n"),
+    ("", "b = (lambda: __builtins__)()\n"),
+    ("", "match __builtins__:\n    case b:\n        pass\n"),
+    ("", "d = {}\nd[0] = __builtins__\n"),
+    ("", "type Callback[T = eval] = list[T]\n"),
+    ("", "s = f'{eval(x)}'\n"),
+]

@@ -68,8 +68,18 @@ _REACH_WORDS = tuple(
         "marshal", "pickle", "FunctionType", "CodeType", "copyreg",
     )
 )  # fmt: skip
-_MACHINERY_WORDS = _REACH_WORDS + tuple(
-    word.encode() for word in (*sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS))
+# Names that embed a word candidate_statements matches by exact name (#1779) but are machinery.
+_EMBEDDED_WORDS = tuple(
+    word.encode()
+    for word in (
+        "os.exec", "execv", "execl", "py_compile", "compileall", "breakpointhook", "_pickle",
+        "cloudpickle", "read_pickle", "allow_pickle",
+    )
+)  # fmt: skip
+_MACHINERY_WORDS = (
+    _REACH_WORDS
+    + tuple(word.encode() for word in (*sorted(DYNAMIC_NAMES), *sorted(DYNAMIC_ATTRS)))
+    + _EMBEDDED_WORDS
 )
 
 # Literal attribute names that can expose import machinery, execute code, intercept runtime
