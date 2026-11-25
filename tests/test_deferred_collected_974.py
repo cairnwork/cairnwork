@@ -242,3 +242,59 @@ def test_a_large_but_legal_collect_still_passes(monkeypatch):
     )
     monkeypatch.setattr(deferred_collected, "read_collected", lambda run: Collected(ids))
     _check(SimpleNamespace(test_commit="t", base_commit="b"), set())
+
+
+@pytest.fixture(autouse=True)
+def _fresh_reasons():
+    """Tests that call ``_collect`` directly leave keys; start every test from an empty dict."""
+    deferred_collected._WHY.clear()
+
+
+def _stub(monkeypatch, usable_for):
+    """Real _collect/_collect_all over stubbed runs; read_collected is unusable unless the commit
+    is in ``usable_for``; a commit named 'boom' makes run_verifiers raise."""
+    monkeypatch.setattr(deferred_collected, "_exists", lambda *a: True)
+
+    def verifiers(ctx, commit, specs, run_id):
+        if commit == "boom":
+            raise RuntimeError("x")
+        return (
+            SimpleNamespace(log_path="/nonexistent/x/log", commit=commit, files=specs[0].targets),
+        )
+
+    def read(run):
+        if run.commit in usable_for:
+            return NONE
+        return Collected(unusable="collect-timeout" if len(run.files) > 1 else "collect-over-cap")
+
+    monkeypatch.setattr(deferred_collected, "run_verifiers", verifiers)
+    monkeypatch.setattr(deferred_collected, "read_collected", read)
+
+
+def _go(task, files=(PATH,)):
+    deferred_collected.check(None, task, files, set(), "r")
+
+
+def test_nothing_is_left_behind_when_both_runs_fail(monkeypatch):
+    _stub(monkeypatch, usable_for=())  # the test commit and the base probe both fail
+    _go(SimpleNamespace(test_commit="t", base_commit="b"))  # returns (UNCOMPARABLE path)
+    assert deferred_collected._WHY == {}
+
+
+def test_nothing_is_left_behind_after_a_refusal_or_a_fault(monkeypatch):
+    _stub(monkeypatch, usable_for=("b",))
+    with pytest.raises(Rejected):
+        _go(SimpleNamespace(test_commit="t", base_commit="b"))
+    assert deferred_collected._WHY == {}
+    with pytest.raises(Rejected) as err:  # a fault in the run itself, named collect-fault
+        _go(SimpleNamespace(test_commit="boom", base_commit="b"))
+    assert "collect-fault" in str(err.value) and deferred_collected._WHY == {}
+
+
+def test_a_many_batch_failure_leaves_nothing_and_names_the_first_failing_batch(monkeypatch):
+    _stub(monkeypatch, usable_for=("b",))
+    files = tuple(f"tests/test_f{i}.py" for i in range(deferred_collected.MAX_FILES + 1))
+    with pytest.raises(Rejected) as err:
+        _go(SimpleNamespace(test_commit="t", base_commit="b"), files)
+    assert "collect-timeout" in str(err.value)  # batch 0 holds 50 files: the first failing batch
+    assert deferred_collected._WHY == {}

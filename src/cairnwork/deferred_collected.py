@@ -52,6 +52,14 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> 
 
 def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
     """Refuse a new collected test that ``targets`` (``new_tests``) does not hold."""
+    try:
+        _check(ctx, task, paths, targets, run_id)
+    finally:  # no exit leaves this run's reasons behind (#1792)
+        for key in [k for k in _WHY if k[: len(run_id) + 1] in {f"{run_id}{c}" for c in "tpb"}]:
+            del _WHY[key]
+
+
+def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
     skip = set(conftest_of(paths))
     files = tuple(p for p in paths if p.endswith(".py") and p not in skip)
     if not files:
