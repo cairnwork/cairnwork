@@ -172,7 +172,7 @@ def _boom(*args, **kwargs):
 
 
 def _read_with(**override):
-    real = fixture_probe.Probe.read
+    real = fixture_probe.Probe.read_record
 
     def read(self, returncode, timed_out):
         return real(
@@ -229,7 +229,7 @@ def _break(monkeypatch, how, arg):
     if how == "raise":
         monkeypatch.setattr(base_fixture_names, "run_verifiers", _boom)
     elif how == "read":
-        monkeypatch.setattr(fixture_probe.Probe, "read", _read_with(**arg))
+        monkeypatch.setattr(fixture_probe.Probe, "read_record", _read_with(**arg))
     elif how == "nosandbox":
         monkeypatch.setattr("cairnwork_sandbox.select", lambda *a, **k: None)
     elif how == "timeout":

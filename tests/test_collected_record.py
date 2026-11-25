@@ -75,6 +75,49 @@ def test_probe_read_record_applies_the_nonce_check(tmp_path: Path) -> None:
     assert probe.read_record(0, True) is None  # timed out
 
 
+def test_finish_record_is_none_in_account_mode(tmp_path: Path) -> None:
+    spec = SimpleNamespace(record_fixtures=True)
+    ctx = SimpleNamespace(account="acct", base_commit="b")
+    assert fixture_probe.finish_record(spec, ctx, "c", tmp_path, b"", None) is None
+    assert fixture_probe.finish(spec, ctx, "c", tmp_path, b"", None) is None
+
+
+@pytest.mark.parametrize("missing", ["probe_module", "probe_nonce"])
+def test_finish_record_is_none_when_the_private_files_are_missing(
+    tmp_path: Path, missing: str
+) -> None:
+    for name in ("probe_module", "probe_nonce"):
+        if name != missing:
+            (tmp_path / name).write_text("x", encoding="utf-8")
+    spec = SimpleNamespace(record_fixtures=True)
+    ctx = SimpleNamespace(account=None, base_commit="b")
+    run = SimpleNamespace(returncode=0, timed_out=False)
+    assert fixture_probe.finish_record(spec, ctx, "c", tmp_path, b"", run) is None
+    assert fixture_probe.finish(spec, ctx, "c", tmp_path, b"", run) is None
+
+
+@pytest.mark.parametrize("target", ["collected_record", "_recorded_by"])
+def test_a_fault_while_reading_gives_none_never_an_empty_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str
+) -> None:
+    def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(fixture_probe, "_recorded_by", lambda *args: True)  # reach the next call
+    monkeypatch.setattr(fixture_probe, target, boom)
+    module = "_cairnwork_fixture_record_abc"
+    plugin_file = tmp_path / "guard" / f"{module}.py"
+    probe = fixture_probe.Probe(("-p", module), module, tmp_path, plugin_file, DIGEST, SHA, "n")
+    assert probe.read_record(0, False) is None and probe.read(0, False) is None
+
+
+def test_a_genuinely_empty_record_is_not_a_missing_one(tmp_path: Path) -> None:
+    rec = good_record()
+    rec["plugin_modules"], rec["sys_path"], rec["sys_path_finish"] = [], [], []
+    record = got(write_record(tmp_path, rec))
+    assert record == CollectedRecord(frozenset({"a", "tmp_path"}), (), (), ())
+
+
 def test_finish_record_is_none_without_a_recorder(tmp_path: Path) -> None:
     spec = SimpleNamespace(record_fixtures=False)
     ctx = SimpleNamespace(account=None, base_commit="b")
