@@ -38,8 +38,8 @@ def _zombie(base: str) -> bool:
     too, and is alive. Its own stat not being Z means alive, and the threads are not read. No
     task directory at all (FileNotFoundError): its own Z decides. Any other failure to list the
     threads, or an empty list: not a zombie (strict). The threads are listed again after the
-    reads: a different set means one was made meanwhile, so it is not one. The state is the first field after
-    the LAST ")" (the command name may hold any bytes); stat is read as bytes."""
+    reads: a different set means one was made meanwhile, so it is not one. The state is the first field after the
+    LAST ")" (the command name may hold any bytes); stat is read as bytes."""
     if _state(f"{base}/stat") != b"Z":
         return False
     try:
