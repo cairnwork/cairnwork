@@ -16,7 +16,8 @@ from pathlib import Path, PurePosixPath
 
 from cairnwork.base_tree_targets import base_tree_targets
 from cairnwork.conftest_check import check_conftests, conftest_of, governed
-from cairnwork.runtime_reach import check_runtime_reach
+from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.runtime_reach import CODE, check_runtime_reach
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -42,36 +43,42 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
     on_base = tuple(p for p in paths if _on_base(task.repo, task.base_commit, p))
-    if all(PurePosixPath(p).name == "conftest.py" for p in on_base):
-        return  # only a conftest, or only new files: no run, as before (#1769)
-    record = reach_record(ctx, task, on_base, run_id)
     added = tuple(p for p in paths if p not in on_base)
+    if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
+        return  # only conftest edits: no run, as before (#1769)
+    record, complete = reach_record(ctx, task, on_base, run_id)
+    if record is None:
+        return  # no run, no evidence: the static verdict stands
     check_runtime_reach(record, on_base, added)
+    if not complete:  # fail closed: a record that left out a changed file or part of the tree
+        raise TestCommitRejected(CODE, "the base run did not cover every changed or base test file")
 
 
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
-    """The recorder's record of one collect-only run of the base's whole test tree (#1767's
-    ``base_tree_targets``; a base with more than MAX_TREE_TARGETS files gets one file of it) plus
-    the changed base .py files, or None. A changed file that cannot be collected on the base is
-    left out and the rest is run again, so it cannot void the record."""
+    """(record, complete): the recorder's record of one collect-only run of the base's whole test
+    tree (#1767's ``base_tree_targets``) plus the changed base .py files, or (None, False).
+    ``complete`` is False when the record left something out: a tree over MAX_TREE_TARGETS (one tree
+    file is run), an unreadable tree, or a changed file that cannot be collected on the base (it is
+    dropped and the rest run again, so it cannot void the record)."""
     if ctx.account is not None:
-        return None
+        return None, False
     try:
-        tree = base_tree_targets(task.repo, task.base_commit, tuple(task.test_roots)) or ()
-        tree = tree if len(tree) <= MAX_TREE_TARGETS else tree[:1]
+        tree = base_tree_targets(task.repo, task.base_commit, tuple(task.test_roots))
+        whole = tree is not None and len(tree) <= MAX_TREE_TARGETS
+        tree = (tree or ())[: None if whole else 1]
         edited = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
         )[:MAX_TARGETS]
         rest = tuple(p for p in tree if p not in edited)
-        for targets, tag in (((*edited, *rest), "r"), (rest, "r2")):
+        for targets, tag, kept in (((*edited, *rest), "r", True), (rest, "r2", False)):
             if not targets or (tag == "r2" and not edited):
                 continue
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
             if record is not None:
-                return record
+                return record, whole and kept
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
-        return None
-    return None
+        return None, False
+    return None, False
 
 
 def _record_run(ctx, task, targets: tuple[str, ...], run_id: str):

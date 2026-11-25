@@ -38,10 +38,9 @@ def check_runtime_reach(
     """Refuse when the record names a changed base file. ``added`` are the paths the test commit
     adds: only a ``sys.path`` entry may match one (an entry the base named but did not have, which
     the commit now supplies); a plugin file the base ran always exists on it."""
-    changed = frozenset(changed_on_base)
-    if record is None or not record.root or not changed:
+    changed, on_path = frozenset(changed_on_base), frozenset(changed_on_base) | frozenset(added)
+    if record is None or not record.root or not on_path:
         return
-    on_path = changed | frozenset(added)
     for name, file in record.plugins:
         if (hit := _plugin_hit(record.root, name, file, changed)) is not None:
             _refuse(f"pytest loads {hit} as a plugin, and the test commit changes it")

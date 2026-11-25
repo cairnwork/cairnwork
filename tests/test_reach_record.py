@@ -85,13 +85,29 @@ def test_an_edited_base_test_file_is_not_collected_twice(task, monkeypatch):
     assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py")]
 
 
-@pytest.mark.parametrize(
-    "paths", [("tests/conftest.py",), ("tests/new.py",), ("tests/conftest.py", "tests/new.py")]
-)
-def test_a_conftest_alone_or_new_files_alone_make_no_reach_run(task, monkeypatch, paths):
+def test_only_a_conftest_edit_makes_no_reach_run(task, monkeypatch):
     runs = Runs(monkeypatch, [_record(task)])
-    check(task, paths)
+    check(task, ("tests/conftest.py",))
     assert runs.targets == []
+
+
+@pytest.mark.parametrize("beside", [(), ("tests/conftest.py",)])
+def test_a_sys_path_entry_the_base_lacks_is_refused_for_an_added_file_alone(
+    task, monkeypatch, beside
+):
+    """Added files alone (or with a conftest edit) still get the run (review, round 1)."""
+    runs = Runs(monkeypatch, [_record(task, sys_path=("tests/data/missing.zip",))])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, (*beside, "tests/data/missing.zip"))
+    assert caught.value.code == CODE
+    assert len(runs.targets) == 1
+
+
+@pytest.mark.parametrize("beside", [(), ("tests/conftest.py",)])
+def test_an_added_file_no_entry_names_is_accepted_alone(task, monkeypatch, beside):
+    runs = Runs(monkeypatch, [_record(task, sys_path=("tests/data/missing.zip",))])
+    check(task, (*beside, "tests/new.py"))
+    assert len(runs.targets) == 1
 
 
 def test_a_conftest_beside_a_changed_base_file_does_get_the_run(task, monkeypatch):
@@ -109,27 +125,39 @@ def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, 
     assert runs.targets == [("tests/sib/test_s.py", "tests/test_a.py"), ("tests/test_a.py",)]
 
 
+def test_a_record_without_the_changed_file_is_incomplete_and_refuses(task, monkeypatch):
+    """Fail closed (review, round 1): the rerun without the edited file saw nothing of it."""
+    Runs(monkeypatch, [None, _record(task)])
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/sib/test_s.py",))
+    assert caught.value.code == CODE
+
+
 def test_a_failed_run_with_no_changed_py_file_is_not_repeated(task, monkeypatch):
     runs = Runs(monkeypatch, [None])
     check(task, ("tests/data/lib.zip",))
     assert len(runs.targets) == 1
 
 
-def test_a_base_with_more_files_than_the_cap_runs_one_tree_file_and_the_changed(task, monkeypatch):
+def test_a_base_with_more_files_than_the_cap_is_incomplete_and_refuses(task, monkeypatch):
+    """Fail closed: one tree file is not the base's tree."""
     monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 1)
     runs = Runs(monkeypatch, [_record(task)])
-    check(task, ("tests/lib/helper_mod.py",))
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, ("tests/lib/helper_mod.py",))
+    assert caught.value.code == CODE
     assert runs.targets == [("tests/lib/helper_mod.py", "tests/sib/test_s.py")]
 
 
-def test_an_unreadable_tree_runs_the_changed_py_files_only(task, monkeypatch):
+def test_an_unreadable_tree_is_incomplete_and_refuses(task, monkeypatch):
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: None)
     runs = Runs(monkeypatch, [_record(task)])
-    check(task, ("tests/lib/helper_mod.py", "tests/data/lib.zip"))
+    with pytest.raises(TestCommitRejected):
+        check(task, ("tests/lib/helper_mod.py", "tests/data/lib.zip"))
     assert runs.targets == [("tests/lib/helper_mod.py",)]
     runs = Runs(monkeypatch, [_record(task)])
     check(task, ("tests/data/lib.zip",))
-    assert runs.targets == []  # nothing to run, nothing to refuse: the static rules stand
+    assert runs.targets == []  # no target at all: no record, the static rules stand
 
 
 def test_an_account_run_makes_no_reach_run(task, monkeypatch):
