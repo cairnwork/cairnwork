@@ -37,11 +37,8 @@ Rules (from Nexus-new's experience, see docs/LESSONS_FROM_NEXUS.md):
 
 from __future__ import annotations
 
-import fnmatch
 import json
 import os
-import re
-import shutil
 import time
 from contextlib import nullcontext, suppress
 from dataclasses import dataclass
@@ -54,9 +51,20 @@ from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
 from cairnwork.proc_cwd import attempt_dirs
 from cairnwork.reasons import _names
-from cairnwork.run_tags import EVIDENCE_MARK
-from cairnwork.run_tags import RUN_TAGS as _RUN_TAGS
-from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
+from cairnwork.verifier_account import VerifierAccount
+from cairnwork.verify_cleanup import (  # noqa: F401 - re-exported: tests and callers import them here
+    _RUN_TAGS,
+    UNSEARCHABLE,
+    _index_names,
+    _is_dir,
+    _is_link,
+    _leftover_names,
+    _remove_account_leftovers,
+    _remove_inside,
+    _run_attempt,
+    _run_dirs,
+    _unlink,
+)
 from cairnwork.workspace import WorkspaceError, remove_attempt_clone
 
 
@@ -216,13 +224,6 @@ def _owner_roots(run_root, dispatched: list[str]) -> tuple[list[Path], Path | No
     return [Path(run_root)], None if same else Path(dispatched[-1])
 
 
-def _run_attempt(attempt_id) -> bool:
-    """An id a run makes (pipeline.py, verify_candidate.py: ``a`` + 16 hex). Only such an id
-    names directories or working directories here: the journal is a file, do not trust it for
-    paths, and a looser id could name another entry of the run root (``a1-q-v0``)."""
-    return isinstance(attempt_id, str) and _RUN_ATTEMPT_ID.fullmatch(attempt_id) is not None
-
-
 def _cwd_dirs(roots, account, attempt_id: str) -> tuple[str, ...]:
     """The attempt's own run directories (realpaths) under the owner's roots and the verifier
     account's run root, whose verifier checkouts the owner makes: an owner process whose
@@ -253,40 +254,7 @@ _OTHER_ROOT = (
     " nothing there was removed or swept, its names are listed"
 )
 _NOT_A_RUN_ID = "ATTEMPT_ID_NOT_A_RUN_ID: no directory was looked for"
-_RUN_ATTEMPT_ID = re.compile(r"a[0-9a-f]{16}")
 _RESULTS = ("COMPLETED", "FAILED")  # the run's own FINISHED details (pipeline.py)
-
-
-def _run_dirs(root: Path, attempt_id: str) -> tuple[list[Path], list[Path], list[Path]]:
-    """The attempt's run directories under ``root``: verifier checkouts (``.work``), private
-    run dirs (``.priv``...; a verify log stays as evidence, only its run/ goes) and clones.
-    One walk for both sides; raises OSError if ``root`` is unlistable."""
-    # #1190: second-seed base runs made before the "s" tag used "-b2"
-    patterns = (f"{attempt_id}-[{_RUN_TAGS}]-v*", f"{attempt_id}-b2-v*")
-
-    # symlinks are listed too (dangling or not): they are unlinked, never followed (_remove_inside)
-    def real(p: Path) -> bool:
-        return p.is_symlink() or p.is_dir()
-
-    listed = os.listdir(root)  # Path.glob would answer [] on 3.14
-
-    def glob(pattern: str) -> list[Path]:
-        return [root / n for n in listed if fnmatch.fnmatchcase(n, pattern)]
-
-    works = [w for pattern in patterns for w in glob(f"{pattern}.work") if real(w)]
-    privates = []
-    for private in (p for pattern in patterns for p in glob(f"{pattern}.*")):  # P2P too
-        if private.suffix == ".work" or not real(private):
-            continue
-        # a base-test or P2P run is not Core evidence and would show the tests: all of it goes
-        keep_log = not private.is_symlink() and (
-            f"{attempt_id}-v-" in private.name or (private / EVIDENCE_MARK).is_file()
-        )  # #1698: run directories no longer carry the run id; the Core run's has a mark
-        privates.append(private / "run" if keep_log else private)
-    clones = sorted(
-        p for pattern in patterns for p in glob(pattern) if real(p) and "." not in p.name
-    )
-    return works, privates, clones
 
 
 def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
@@ -302,7 +270,7 @@ def _remove_leftovers_in(root: Path, attempt_id: str) -> None:
         _unlink(root / name)
     works, privates, clones = _run_dirs(root, attempt_id)
     for work in works:  # a verifier checkout's own dir
-        if not work.is_symlink():
+        if not _is_link(work):
             with suppress(WorkspaceError):
                 remove_attempt_clone(work, work.name.removesuffix(".work"))
         _remove_inside(root, work)
@@ -310,90 +278,8 @@ def _remove_leftovers_in(root: Path, attempt_id: str) -> None:
         _remove_inside(root, private)
     for name in [attempt_id] + [p.name for p in clones]:
         path = root / name
-        if path.is_symlink():
+        if _is_link(path):
             _unlink(path)
-        elif path.is_dir():
+        elif _is_dir(path):
             with suppress(WorkspaceError):  # a leftover directory is disk space, not a wrong status
                 remove_attempt_clone(root, name)
-
-
-def _index_names(attempt_id: str) -> list[str]:
-    """Index files: one list for the remover and the re-scan, so they cannot drift."""
-    return [f"{attempt_id}.index", f"{attempt_id}.tests.index"]
-
-
-def _unlink(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        pass  # the re-scan reports what is still there
-
-
-def _remove_inside(root: Path, target: Path) -> None:
-    """Delete ``target`` only if it is strictly inside ``root``. A symlink is unlinked itself,
-    never followed: a name the dead run (or its account) swapped must not aim rmtree elsewhere."""
-    if target.is_symlink():
-        _unlink(target)
-        return
-    real = Path(os.path.realpath(target))
-    if Path(os.path.realpath(root)) in real.parents:
-        shutil.rmtree(target, ignore_errors=True)
-
-
-def _remove_account_leftovers(account: VerifierAccount, attempt_id: str) -> None:
-    """Remove the attempt's run directories under the account's OWN run root (owned by the
-    account, so only ``account.remove`` can delete them); verify logs stay as evidence."""
-    if not _run_attempt(attempt_id):  # the journal is a file: do not trust it for paths
-        return
-    with suppress(OSError):  # not listable or searchable: the re-scan names it
-        _remove_account_in(account, attempt_id)
-
-
-def _remove_account_in(account: VerifierAccount, attempt_id: str) -> None:
-    root = account.run_root
-    if not root.is_dir():
-        return
-    works, privates, clones = _run_dirs(root, attempt_id)
-    for target in works + privates + clones:
-        with suppress(VerifierAccountError):  # the re-scan reports what is still there
-            account.remove(target)
-        # the verifier checkout and its work dir are the OWNER's (verifiers.py makes them), so
-        # the account's rm cannot remove them: the owner finishes what the account could not
-        _remove_inside(root, target)
-
-
-UNSEARCHABLE = "run-root-unsearchable"  # named in place of what could not be looked for
-
-
-def _leftover_names(root: Path, attempt_id: str) -> list[str]:
-    """Names (only) of the attempt's directories still under ``root`` after cleanup: anything
-    that can hold laid-over hidden tests. A verify run's private dir is evidence and does not
-    count, its ``run/`` scratch does. Re-scans from disk; it trusts nothing the removers said."""
-    if not _run_attempt(attempt_id):
-        return []
-    root = Path(root)
-    if (seen := _searchable(root)) is not True:
-        return [] if seen is None else [UNSEARCHABLE]
-    try:
-        works, privates, clones = _run_dirs(root, attempt_id)
-        own = [root / attempt_id] if os.path.lexists(root / attempt_id) else []
-        indexes = [root / name for name in _index_names(attempt_id)]
-        names = {
-            p.name if p.name != "run" else p.parent.name + "/run"
-            for p in works + privates + clones + own + indexes
-            if os.path.lexists(p)  # a dangling symlink is still a leftover
-        }
-    except OSError:  # the root or a directory below it could not be listed or searched
-        return [UNSEARCHABLE]
-    return sorted(names) if _searchable(root) else [UNSEARCHABLE]  # still searchable after the scan
-
-
-def _searchable(root: Path) -> bool | None:
-    """None: no such directory. False: cannot be listed and searched ("cannot see"). True."""
-    try:
-        os.listdir(root)
-        return os.access(root, os.X_OK)
-    except (FileNotFoundError, NotADirectoryError):
-        return None
-    except OSError:
-        return False

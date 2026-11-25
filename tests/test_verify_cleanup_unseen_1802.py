@@ -225,7 +225,7 @@ def test_cleanup_never_calls_it_clean_after_one_failed_stat(
 @pytest.mark.parametrize("name", ["lstat", "stat"])
 @pytest.mark.parametrize("shape", _SHAPES)
 def test_recover_never_counts_zero_after_one_failed_stat(
-    project,
+    project,  # noqa: F811
     tmp_path,
     monkeypatch,
     shape,
@@ -234,6 +234,7 @@ def test_recover_never_counts_zero_after_one_failed_stat(
 ):
     crash(project, tmp_path, "WORKER_STARTED")
     attempt = own_attempt(tmp_path)
+    assert attempt
     root = tmp_path / "runs"
     _lay(root, shape, attempt)
     ledger, notary, journal = stores(tmp_path)
