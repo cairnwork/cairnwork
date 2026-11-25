@@ -47,9 +47,11 @@ LOG = logging.getLogger(__name__)
 _WHY: ContextVar[dict[str, str] | None] = ContextVar("deferred_collected_why", default=None)
 
 
-def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> None:
+def check_with_base(
+    ctx, task, paths: tuple[str, ...], run_id: str, targets, deleted=()
+) -> None:
     """The base fixture names check (#986), then this one (#974): one call for the judge."""
-    base_fixture_names.check_with_base(ctx, task, paths, run_id)
+    base_fixture_names.check_with_base(ctx, task, paths, run_id, deleted)
     check(ctx, task, paths, targets, f"{run_id}c")
 
 

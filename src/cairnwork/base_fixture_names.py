@@ -44,12 +44,12 @@ def _on_base(repo: Path, base: str, path: str) -> bool:
     return done.returncode == 0
 
 
-def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
+def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, deleted=()) -> None:
     """``check_conftests`` with the base's collected fixture names (None when not obtained), then
     the runtime plugin and sys.path reach (#1769; refusals only)."""
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
-    on_base = tuple(p for p in paths if _on_base(task.repo, task.base_commit, p))
+    on_base = (*(p for p in paths if _on_base(task.repo, task.base_commit, p)), *deleted)
     added = tuple(p for p in paths if p not in on_base)
     if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
         return  # only conftest edits: no run, as before (#1769)
@@ -93,17 +93,15 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
     try:
         edited = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
-        )[:MAX_TARGETS]
+        )
         for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
             if tag == "r2" and not edited:
                 break
             left = tuple(p for p in tree if p not in dropped)
             picked = pick_dir_targets(left, dirs) or ()
             base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
-            named = (*(p for p in edited if p not in dropped), *base, *picked)
-            targets = tuple(dict.fromkeys(named))
-            if not targets:
-                continue
+            named = (*(p for p in edited[:MAX_TARGETS] if p not in dropped), *base, *picked)
+            targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest and ini load
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
             if record is not None:
                 return record, not dropped or _quiet(task, edited)
