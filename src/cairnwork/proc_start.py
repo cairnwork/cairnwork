@@ -19,10 +19,12 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import sys
 import time
 
 LINUX = sys.platform.startswith("linux")
+_CANONICAL = re.compile(r"(0|[1-9][0-9]*)\.[0-9]+")  # repr() of a boot-relative float, ASCII only
 BOOT_ID = "sys/kernel/random/boot_id"
 
 
@@ -71,6 +73,8 @@ def _dispatched(mark: str, proc: str) -> float | None:
     if not LINUX or not mark:
         return None
     boot, _, at = mark.partition(" ")
+    if not _CANONICAL.fullmatch(at):
+        return None  # only the spelling boot_mark() writes; anything else keeps the strict rule
     try:
         dispatched = float(at)
     except ValueError:

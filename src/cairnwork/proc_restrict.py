@@ -19,7 +19,7 @@ _OPEN = frozenset({"0", "off"})
 def restriction(mountinfo: str = "/proc/self/mountinfo") -> str:
     """Why other users' processes may be hidden (e.g. "hidepid=2 on /proc"); empty if none."""
     try:
-        with open(mountinfo) as handle:
+        with open(mountinfo, encoding="utf-8", errors="replace") as handle:
             options = _proc_options(handle.read())
     except OSError:
         options = None
