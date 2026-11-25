@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from cairnwork import survivor_argv
 from cairnwork.node_file import file_part, name_part
 
 
@@ -40,6 +41,8 @@ def read_collected(run) -> Collected:
         raise ValueError(f"{run.spec.verifier_id}: not a collect-only run")
     why = _unclean(run)
     if why:
+        if why == "collect-survivors":  # #1819: name what outlived collection (text only)
+            why += survivor_argv.listing(run.survivors)
         return Collected(unusable=why)
     targets = frozenset(run.spec.targets)
     error_files = _files(run.collect_errors, targets)
