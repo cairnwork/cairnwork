@@ -23,6 +23,8 @@ RESOLVER = (
     "    return getattr(importlib.import_module(m), a)\n"
 )
 NAME = "pkg/mod.py"
+# Type parameters with defaults are a syntax error before Python 3.13 (nothing to scan there).
+NEEDS_313 = pytest.mark.skipif(sys.version_info < (3, 13), reason="PEP 696 syntax needs 3.13")
 
 
 def _verdict(tmp_path, base_extra, added, extra_files=(), other=None):
@@ -134,7 +136,7 @@ MUST_BLOCK = [
     ("", "b = (lambda: __builtins__)()\n"),
     ("", "match __builtins__:\n    case b:\n        pass\n"),
     ("", "d = {}\nd[0] = __builtins__\n"),
-    ("", "type Callback[T = eval] = list[T]\n"),
+    pytest.param("", "type Callback[T = eval] = list[T]\n", marks=NEEDS_313),
     ("", "s = f'{eval(x)}'\n"),
     ("", "n = 'exec'\n"),
     ("", "n = 'builtins.exec'\n"),
@@ -193,7 +195,7 @@ MUST_BLOCK = [
     ("import os as o\n", "o.execvpe(p, a, e)\n"),
     ("import subprocess, sys\n", "subprocess.Popen([sys._base_executable])\n"),
     ("", "x: 'eval' = 1\n"),
-    ("", "def q[T = eval]():\n    pass\n"),
+    pytest.param("", "def q[T = eval]():\n    pass\n", marks=NEEDS_313),
 ]
 
 # Honest-looking edits that stay refused (listed as known false refusals in the PR): an attribute

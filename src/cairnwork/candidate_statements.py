@@ -290,6 +290,12 @@ def _string_hit(value: str | bytes, exact: frozenset[str]) -> bool:
     return any(part in exact for part in re.split(r"\W+", text))
 
 
+# Type-parameter nodes exist only on Python 3.12 and later; CI runs the full suite on 3.11.
+_TYPE_PARAMS = tuple(
+    getattr(ast, name) for name in ("TypeVar", "ParamSpec", "TypeVarTuple") if hasattr(ast, name)
+)
+
+
 def _identifiers(node: ast.AST) -> Iterator[str]:
     """Identifiers a node introduces or reads, besides attribute names."""
     if isinstance(node, ast.Name):
@@ -297,7 +303,7 @@ def _identifiers(node: ast.AST) -> Iterator[str]:
     elif isinstance(node, ast.ImportFrom):
         yield from (node.module or "").split(".")
         yield from _bound_identifiers(node)
-    elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
+    elif isinstance(node, _TYPE_PARAMS):
         yield node.name
     elif isinstance(node, ast.MatchClass):
         yield from node.kwd_attrs  # case object(exec=e) reads the attribute
