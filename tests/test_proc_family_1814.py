@@ -51,11 +51,13 @@ def test_an_ordinary_table_parses_as_before(tmp_path):
     assert proc_restrict.restriction(plain) == "hidepid=1 on /proc"
 
 
-CANONICAL = ["10000.0", "0.5", "12345.678901", "1.0", "9999999999.123456"]
+CANONICAL = ["10000.0", "0.5", "12345.678901", "1.0", "0.0", repr(9999999999.123456)]
 LOOSE = [
     "+10000.0", "-10000.0", "1e4", "1.0e4", "1E4", "1_0000.0", "10_000.5", "10000", "10000.",
     ".5", "007.5", "٣٢.٥", "10000.0\n", " 10000.0", "10000.0 ", "10000.0\t", "1 0.0",
     "nan", "inf", "-inf", "1e400", "0x10.0", "", "9" * 400 + ".0",
+    "10000.50", "1.00", "0.50", "12345.6780", "00.5", "0.10", "1.5000000000",
+    "0.1000000000000000055", "123456789.123456789123", "1e+16", "1e16", "1e-05", "1.0e-05",
 ]  # fmt: skip
 
 
@@ -87,3 +89,13 @@ def test_what_boot_mark_writes_matches_the_canonical_spelling(
     mark = proc_start.boot_mark(proc)
     assert mark.startswith(f"{BOOT} ")
     assert proc_start._dispatched(mark, proc) == seconds
+
+
+def test_a_value_repr_would_write_in_exponent_form_is_refused_so_the_strict_rule_holds(
+    tmp_path, linux
+):
+    # repr() writes 1e+16 / 1e-05 for such values; boot-relative seconds never get there, and a
+    # refused mark only ever means "strict" (every pid counts), so refusing is the safe direction.
+    proc = _fake_proc(tmp_path / "proc")
+    for at in (repr(1e16), repr(1e-05)):
+        assert proc_start._dispatched(f"{BOOT} {at}", proc) is None

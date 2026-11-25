@@ -24,7 +24,9 @@ import sys
 import time
 
 LINUX = sys.platform.startswith("linux")
-_CANONICAL = re.compile(r"(0|[1-9][0-9]*)\.[0-9]+")  # repr() of a boot-relative float, ASCII only
+_CANONICAL = re.compile(
+    r"(0|[1-9][0-9]*)\.[0-9]+"
+)  # positional repr() shape, ASCII only; exponent forms stay refused (strict side)
 BOOT_ID = "sys/kernel/random/boot_id"
 
 
@@ -69,7 +71,11 @@ def boot_start(pid: int, proc: str = "/proc") -> float | None:
 
 
 def _dispatched(mark: str, proc: str) -> float | None:
-    """The mark's seconds since boot, if it was taken in the current boot; else None."""
+    """The mark's seconds since boot, if it was taken in the current boot; else None.
+
+    Only the exact ``repr(float)`` spelling boot_mark() writes is read; any other spelling (extra
+    zeros or digits, exponent form, sign, spaces) returns None, the strict side (every pid
+    counts)."""
     if not LINUX or not mark:
         return None
     boot, _, at = mark.partition(" ")
@@ -78,6 +84,8 @@ def _dispatched(mark: str, proc: str) -> float | None:
     try:
         dispatched = float(at)
     except ValueError:
+        return None
+    if repr(dispatched) != at:  # no extra zeros or digits: exactly what boot_mark() wrote
         return None
     if not boot or boot != _boot_id(proc) or not math.isfinite(dispatched):
         return None
