@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import ast
 import builtins
+import re
 import shutil
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from cairnwork.pytest_config import (
     configured_python_files,
 )
 from cairnwork.pytest_config_files import _CANDIDATES, PytestConfigError, _section
+from cairnwork.textclean import replace_hidden
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -76,8 +78,11 @@ def _keys(name: str, text: str) -> list[str]:
     return sorted(found)
 
 
+_DELIMITERS = re.compile(r"[\[\];:]")  # the record delimiters of a reason
+
+
 def _shown(path: str) -> str:
-    return path.encode("ascii", "backslashreplace").decode()[:80]  # a path is candidate text
+    return _DELIMITERS.sub("?", replace_hidden(path))[:80]  # a path is candidate text
 
 
 def _refuse(why: str) -> BaseUncomparable:
@@ -116,7 +121,11 @@ def file_parity(task, files, ctx, budget, attempt_id) -> None:
 def _dirs(files) -> tuple[str, ...]:
     """The parent directories of ``files``: where the P2P run reads (a module-dir run takes the
     files of a directory, not of its subdirectories)."""
-    return tuple(sorted({f.rsplit("/", 1)[0] for f in files if "/" in f}))
+    return tuple(sorted({_parent(f) for f in files}))
+
+
+def _parent(path: str) -> str:
+    return path.rsplit("/", 1)[0] if "/" in path else "."  # "." is the root directory
 
 
 def _tracked(task) -> list[str]:
@@ -134,7 +143,7 @@ def _ignored(task, dirs) -> tuple[str, ...]:
         parent
         for p in _tracked(task)
         for parent in _above(p)
-        if any(parent.startswith(f"{d}/") for d in dirs)
+        if any(d == "." or parent.startswith(f"{d}/") for d in dirs)
     }
     return tuple(sorted(below - keep))
 
@@ -156,9 +165,7 @@ def _counted(task, dirs) -> list[str]:
     return sorted(
         p
         for p in _tracked(task)
-        if "/" in p
-        and p.rsplit("/", 1)[0].casefold() in where
-        and any(_file_matches(x, p) for x in patterns)
+        if _parent(p).casefold() in where and any(_file_matches(x, p) for x in patterns)
     )
 
 
@@ -310,11 +317,29 @@ def _has_constructor(node: ast.ClassDef) -> bool:
     return bool(direct) and binds == len(direct)
 
 
+def _test_off(node: ast.ClassDef) -> bool:
+    """``__test__ = False`` bound once in the class body and never deleted."""
+    direct = [
+        m
+        for m in node.body
+        if isinstance(m, ast.Assign)
+        and [getattr(x, "id", None) for x in m.targets] == ["__test__"]
+        and isinstance(m.value, ast.Constant)
+        and m.value.value is False
+    ]
+    binds = 0
+    for n in _scope(node.body):
+        if isinstance(n, ast.Delete):
+            return False
+        binds += isinstance(n, ast.Name) and n.id == "__test__"
+    return len(direct) == 1 and binds == 1
+
+
 def _class_may_collect(node: ast.ClassDef, bound) -> bool:
     if node.decorator_list or node.keywords or not all(_plain_base(b, bound) for b in node.bases):
         return True  # a decorator, a metaclass or an unknown base may make it collectable
-    if not node.name.startswith("Test") or _has_constructor(node):
-        return False  # a mixin or a helper, or a class pytest skips for its constructor
+    if not node.name.startswith("Test") or _has_constructor(node) or _test_off(node):
+        return False  # a mixin or a helper, or a class pytest skips (constructor, __test__)
     return any(isinstance(n, ast.ClassDef) or _binds(n, bound) for n in _scope(node.body))
 
 
