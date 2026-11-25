@@ -99,16 +99,16 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
         for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
             if tag == "r2" and not edited:
                 break
-            if tag == "r" and len(edited) > MAX_TARGETS:
-                continue  # the run cannot name them all: drop them and read their text instead
             left = tuple(p for p in tree if p not in dropped)
             picked = pick_dir_targets(left, dirs) or ()
             base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
             named = (*(p for p in edited[:MAX_TARGETS] if p not in dropped), *base, *picked)
             targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest and ini load
-            record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
+            # a dropped file is --ignore'd on the rerun, so a lone one cannot break it again
+            record = _record_run(ctx, task, targets, f"{run_id}-{tag}", tuple(sorted(dropped)))
             if record is not None:
-                return record, not dropped or _quiet(task, edited)
+                unseen = tuple(p for p in edited if p not in dropped and p not in targets)
+                return record, _quiet(task, (*dropped, *unseen)) if dropped or unseen else True
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
         return None, False
     return None, False
@@ -128,9 +128,11 @@ def _quiet(task, dropped: tuple[str, ...]) -> bool:
         return False
 
 
-def _record_run(ctx, task, targets: tuple[str, ...], run_id: str):
+def _record_run(ctx, task, targets: tuple[str, ...], run_id: str, ignore: tuple[str, ...] = ()):
     try:
-        spec = VerifierSpec("fixture-names", targets, collect_only=True, record_fixtures=True)
+        spec = VerifierSpec(
+            "fixture-names", targets, collect_only=True, record_fixtures=True, ignore=ignore
+        )
         runs = run_verifiers(ctx, task.base_commit, (spec,), run_id)
         return runs[0].collect_record if len(runs) == 1 else None
     except Exception:  # noqa: BLE001 - never read the exception: the candidate shapes its name

@@ -236,6 +236,6 @@ def _below_named(tail: str, sources: dict[str, str], exact: frozenset[str] | Non
             if _key("/".join(parts[end - depth : end])) != _key(tail):
                 continue
             init = package + "/__init__.py"
-            if exact is None or init in exact or init in sources:
+            if exact is None or init in exact:
                 return original
     return None
