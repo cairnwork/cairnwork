@@ -14,7 +14,9 @@ variable, walrus or class attribute, ``''.join([...])`` or ``f'CL{"EAN"}'``, and
 returns ``e.state``. A carrier name may be passed as a keyword value to a call that builds a
 value, held as a field, tested bare in an ``if`` whose body only calls ``append`` or a logger, or
 put in an f-string that is an argument of such a logging call; a bare call argument is refused
-because the callee could be len, bool or re.match.
+because the callee could be len, bool or re.match. An alias of the ``denied`` attribute is
+tracked through assignment, tuple, walrus and loop targets (#1797) and refused as a keyword value;
+not followed: a class attribute, a function return, an attribute store (``self.x = ev.denied``).
 """
 
 import ast
@@ -170,19 +172,48 @@ def _allowed_use(node, parent):
     return isinstance(up, ast.If) and up.test is node and not up.orelse and _logs(up, parent)
 
 
+def _has_denied(node, names):
+    """The attribute ``.denied`` or a name already known to hold it, anywhere inside ``node``."""
+    return any(
+        (isinstance(n, ast.Attribute) and n.attr == "denied")
+        or (isinstance(n, ast.Name) and n.id in names)
+        for n in ast.walk(node)
+    )
+
+
+def _denied_aliases(tree):
+    """Names bound from ``.denied`` or from another such name (assignment, walrus, loop, with)."""
+    found = set()
+    while True:
+        before = len(found)
+        for n in ast.walk(tree):
+            if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr) and n.value is not None:
+                pairs = [
+                    (t, n.value) for t in (n.targets if isinstance(n, ast.Assign) else [n.target])
+                ]
+            elif isinstance(n, ast.For | ast.comprehension):
+                pairs = [(n.target, n.iter)]
+            else:
+                continue
+            for target, value in pairs:
+                if isinstance(target, ast.Tuple) and isinstance(value, ast.Tuple):
+                    if len(target.elts) == len(value.elts):  # a, b = x, y: pair them up
+                        pairs += list(zip(target.elts, value.elts, strict=True))
+                        continue
+                if _has_denied(value, found):
+                    found.update(_targets(target))
+        if len(found) == before:
+            return found
+
+
 def _findings(tree, rel):
     """What in one parsed file reads deny evidence where it should not."""
     found = []
     parent = {c: n for n in ast.walk(tree) for c in ast.iter_child_nodes(n)}
     clean_names, aliases = _clean_names(tree), _aliases(tree)
-    kept = {  # d = ev.denied ... d(o, t); fns = [ev.denied] ... fns[0](o, t)
-        t
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Assign | ast.AnnAssign | ast.NamedExpr)
-        and n.value is not None
-        and any(isinstance(m, ast.Attribute) and m.attr == "denied" for m in ast.walk(n.value))
-        for t in _targets(n.targets[0] if isinstance(n, ast.Assign) else n.target)
-    }
+    kept = _denied_aliases(
+        tree
+    )  # d = ev.denied ... d(o, t); e = d; fns = [ev.denied]; fns[0](o, t)
 
     def add(node, what):
         found.append(f"{rel}:{getattr(node, 'lineno', 0)} {what}")
@@ -204,6 +235,8 @@ def _findings(tree, rel):
         elif name in NAMES and isinstance(node, ast.Attribute | ast.Name | ast.Constant):
             if not _allowed_use(node, parent):
                 add(node, f"reads {name} beyond passing it on")
+        if isinstance(node, ast.keyword) and kept and _has_denied(node.value, kept):
+            add(node.value, "hands denied to a caller")  # #1797: an alias as a keyword value
         if isinstance(node, ast.Attribute) and node.attr == "denied":
             up = parent.get(node)
             if isinstance(up, ast.keyword):
@@ -286,3 +319,43 @@ def test_the_exempt_files_exist():
     assert all((SRC / rel).is_file() for rel in EXEMPT), (
         "a renamed file would hand its exemption on"
     )
+
+
+def _flags(source):
+    return [f for f in _findings(ast.parse(source), "cairnwork/x.py") if "denied" in f]
+
+
+MUST_BLOCK = [  # #1797: an alias of the deny-evidence attribute read as a keyword value
+    "d = ev.denied\nf(x=d)",
+    "d = ev.denied\ne = d\nf(x=e)",  # alias of an alias
+    "a, b = ev.denied, 1\nf(x=a)",  # tuple target
+    "d = ev.denied if ok else None\nf(x=d)",
+    "d = [ev.denied]\nf(x=d[0])",  # held in a list, read by index
+    "d = {'k': ev.denied}\nf(x=d['k'])",
+    "(d := ev.denied)\nf(x=d)",
+    "for d in (ev.denied,):\n    f(x=d)",
+    "d = ev.denied\nf(x=d if ok else None)",  # inside a conditional value
+    "d = ev.denied\nf(x=(d))",
+    "d = ev.denied\nf(x=lambda o, t: d(o, t))",
+    "d = ev.denied\nf(x=[d])",  # inside a container value
+    "d = ev.denied\ne = (d,)\nf(x=e)",
+    "d = ev.denied\nf(**{'x': d})",  # splatted into keywords
+]
+MUST_PASS = [  # today's legal shapes: no alias, or never a keyword value
+    "f(ev.denial_of('open', '/x'))",
+    "d = ev.denied\nf(d)",  # positional (verifiers.py hands the report plugin's record on so)
+    "d = other.value\nf(x=d)",  # an alias of something else
+    "f(denied=3)",  # a keyword that is merely named denied
+    "x = 1\nd = ev.denied\ny = x\nf(k=y)",  # y never came from the attribute
+    "a, b = ev.denied, 1\nf(x=b)",  # the other half of a tuple pair
+]
+
+
+def test_an_alias_of_denied_read_as_a_keyword_value_is_found():
+    missed = [s for s in MUST_BLOCK if not _flags(s)]
+    assert missed == []
+
+
+def test_the_legal_shapes_stay_unflagged():
+    wrongly = [s for s in MUST_PASS if _flags(s)]
+    assert wrongly == []
