@@ -4,6 +4,7 @@ as a top-level module (only ever as ``pkg.types``). Real interpreter, one subpro
 
 from __future__ import annotations
 
+import ast
 import subprocess
 import sys
 
@@ -38,5 +39,6 @@ def test_a_relative_import_never_loads_the_candidate_file_as_a_top_level_name(tm
     out = subprocess.run(
         [sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60, check=False
     )
-    loaded = set(eval(out.stdout.strip() or "[]"))  # noqa: S307  (our own printed list of names)
+    assert out.returncode == 0, out.stderr[-300:]
+    loaded = set(ast.literal_eval(out.stdout.strip()))
     assert loaded <= {"pkg.types"}, (prefix, out.stdout, out.stderr[-200:])

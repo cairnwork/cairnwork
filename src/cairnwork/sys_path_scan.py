@@ -5,14 +5,13 @@ in the repository) can put it in front of sys.path. The tests, conftests and the
 can live anywhere in the checkout: ``python -m pytest`` puts the checkout root on sys.path, a
 directory without ``__init__.py`` imports as a namespace package, a conftest in one test root can
 import a root-level package, and another test root's conftest runs in the same session. So every
-Python file of the commit is read, not only those near a test root.
+Python file of the commit is read, not only near a test root.
 
 Scope: the base and the test commit are the target repository's own code, not the candidate's.
-The scan is meant to catch the ways ordinary code changes sys.path or starts Python: the path
+The scan catches the ways ordinary code changes sys.path or starts Python: the path
 words (the tables live in ``sys_path_names``), ``sys``/``os`` and the import-system modules under
 any name or by ``from`` import, in every Python file of the commit, modules handed on as values,
-names built at run time, and files it cannot read. It is not meant to resist code written so that
-such a change goes unseen.
+names built at run time, and files it cannot read. It does not resist code written to go unseen.
 
 A commit may change it when one of its Python files (``.py``/``.pyw``, any case)
 
@@ -261,7 +260,8 @@ def _uses_import_system(tree: ast.AST, relative_target: RelativeTarget = None) -
             from_modules.update(
                 alias.asname or alias.name for alias in node.names if alias.name.islower()
             )
-            own = bool(node.module and relative_target and relative_target(node.level, node.module))
+            mod = node.module or ""
+            own = bool(node.level and relative_target and relative_target(node.level, mod))
             if _imports_held(node.module, names, node.level, own):  # ``from logging ...``
                 return True
             if node.level == 0 and node.module == "sys":

@@ -77,5 +77,4 @@ EXPECT = {name: None for name in ROWS} | {"subprocess-runs-package-script": REFU
 @pytest.mark.parametrize("name", list(ROWS))
 def test_shape(tmp_path, name):
     got = _verdict(tmp_path, *ROWS[name])
-    print(f"VERDICT {name} {got}")  # noqa: T201  (read by the main-vs-new comparison)
     assert got == EXPECT[name]

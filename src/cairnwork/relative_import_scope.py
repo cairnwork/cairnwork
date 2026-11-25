@@ -33,9 +33,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from cairnwork.candidate_shadow import _ALWAYS_SHADOW  # pyright: ignore[reportPrivateUsage]
-from cairnwork.gitcmd import GitCommandError, run_git
+from cairnwork.git_read_cap import read_git_bytes
+from cairnwork.gitcmd import GitCommandError
 
 _REGULAR = ("100644", "100755")
+_BARRED = {n.casefold() for n in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
 
 
 class RelativeScope:
@@ -58,7 +60,9 @@ class RelativeScope:
         return self._trees
 
     def _list(self, commit: str) -> set[str]:
-        listing = run_git(self._repo, "ls-tree", "-r", "-z", "--full-tree", commit)
+        listing = read_git_bytes(self._repo, "ls-tree", "-r", "-z", "--full-tree", commit).decode(
+            "utf-8", "surrogateescape"
+        )
         found: set[str] = set()
         for entry in filter(None, listing.split("\0")):
             meta, name = entry.split("\t", 1)
@@ -73,9 +77,9 @@ class RelativeScope:
         top = len(dirs)
         while top > 0 and (init := "/".join([*dirs[:top], "__init__.py"])) in base and init in cand:
             top -= 1
-        if top == len(dirs) or level < 1:
+        if top == len(dirs) or level < 1 or not module:
             return False  # no package here
-        if dirs[top] in sys.stdlib_module_names or dirs[top] in _ALWAYS_SHADOW:
+        if dirs[top].casefold() in _BARRED:
             return False
         start = len(dirs) - (level - 1)
         if start <= top:
