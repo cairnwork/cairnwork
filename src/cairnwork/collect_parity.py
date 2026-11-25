@@ -188,13 +188,16 @@ def _may_have_tests(task, path: str) -> bool:
             RecursionError, MemoryError):  # fmt: skip
         return True
     try:
-        return _dynamic(tree) or _scan(tree.body)
+        return _dynamic(tree) or _scan(tree.body, _bound_names(tree.body))
     except RecursionError:
         return True
 
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef)
-_DYNAMIC = frozenset({"globals", "locals", "vars", "setattr", "exec", "eval", "__import__"})
+_DYNAMIC = frozenset(
+    {"globals", "locals", "vars", "setattr", "exec", "eval", "__import__", "__dict__", "modules"}
+)
+_CTOR = ("__init__", "__new__")
 
 
 def _named(name: str) -> bool:
@@ -202,65 +205,117 @@ def _named(name: str) -> bool:
 
 
 def _dynamic(tree) -> bool:
-    """A star import, or a call that can bind a name at run time."""
+    """A star import, a ``global``, a test-named walrus, or any way to bind a name at run time
+    (by name or by attribute, called or just referenced)."""
     for node in ast.walk(tree):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            return True
         if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
             return True
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) in _DYNAMIC:
+        if isinstance(node, ast.NamedExpr) and _named(getattr(node.target, "id", "")):
+            return True
+        if isinstance(node, ast.Name) and node.id in _DYNAMIC:
+            return True
+        if isinstance(node, ast.Attribute) and node.attr in _DYNAMIC:
             return True
     return False
 
 
-def _binds(stmt) -> bool:
-    """Whether a simple statement binds a ``test*``/``Test*`` name (import alias, target)."""
-    if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-        return any(_named((a.asname or a.name).split(".")[0]) for a in stmt.names)
-    return any(
-        isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and _named(n.id)
-        for n in ast.walk(stmt)
-    )
+def _scope(nodes):
+    """Every node of this scope: statements and expressions, not the bodies of functions and
+    lambdas (their names are local), not the body of a class (it is its own scope)."""
+    stack = list(nodes)
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (*_DEFS, ast.Lambda, ast.ClassDef)):
+            stack.extend(ast.iter_child_nodes(node))
 
 
-def _scan(nodes) -> bool:
-    for node in nodes:
-        if isinstance(node, _DEFS):
-            hit = _named(node.name)
-        elif isinstance(node, ast.ClassDef):
-            hit = _class_may_collect(node)
-        elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.AsyncFor, ast.AsyncWith)):
-            hit = _binds_target(node) or _scan([*node.body, *getattr(node, "orelse", [])])
-        elif isinstance(node, ast.Try):
-            handlers = [s for h in node.handlers for s in h.body]
-            hit = _scan([*node.body, *handlers, *node.orelse, *node.finalbody])
-        else:
-            hit = _binds(node)
-        if hit:
-            return True
+def _binds(node, bound=None) -> bool:
+    """Whether this node binds a ``test*``/``Test*`` name, or is a class that may collect."""
+    if isinstance(node, _DEFS):
+        return _named(node.name)
+    if isinstance(node, ast.ClassDef):
+        return _class_may_collect(node, bound if bound is not None else set())
+    if isinstance(node, (ast.Import, ast.ImportFrom)):
+        return any(_named((a.asname or a.name).split(".")[0]) for a in node.names)
+    if isinstance(node, ast.Name):
+        return isinstance(node.ctx, (ast.Store, ast.Del)) and _named(node.id)
+    if isinstance(node, ast.ExceptHandler):
+        return bool(node.name) and _named(node.name)
+    if isinstance(node, (ast.MatchAs, ast.MatchStar)):
+        return bool(node.name) and _named(node.name)
+    if isinstance(node, ast.MatchMapping):
+        return bool(node.rest) and _named(node.rest)
     return False
 
 
-def _binds_target(node) -> bool:
-    """A loop target or ``with ... as`` name that is test-named."""
-    heads = [getattr(node, "target", None), *(i.optional_vars for i in getattr(node, "items", ()))]
-    return any(isinstance(n, ast.Name) and _named(n.id) for h in heads if h for n in ast.walk(h))
+def _scan(nodes, bound) -> bool:
+    return any(_binds(n, bound) for n in _scope(nodes))
 
 
-def _plain_base(base) -> bool:
-    name = base.id if isinstance(base, ast.Name) else None
-    return name in ("object", "ABC") or (
-        name is not None and isinstance(getattr(builtins, name, None), type)
-    )
+def _bound_names(nodes) -> set[str]:
+    """Every name the module scope binds, except the plain ``import abc`` and
+    ``from abc import ABC`` (a rebound ``object``/``ABC``/``list`` is not a plain base)."""
+    out: set[str] = set()
+    for n in _scope(nodes):
+        if isinstance(n, (ast.Import, ast.ImportFrom)):
+            for a in n.names:
+                plain = (
+                    isinstance(n, ast.Import) and a.name == "abc" and a.asname is None
+                ) or (isinstance(n, ast.ImportFrom) and n.module == "abc" and a.name == "ABC"
+                      and a.asname in (None, "ABC"))  # fmt: skip
+                if not plain:
+                    out.add((a.asname or a.name).split(".")[0])
+        elif isinstance(n, (*_DEFS, ast.ClassDef)):
+            out.add(n.name)
+        elif isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
+            out.add(n.id)
+        elif isinstance(n, (ast.MatchAs, ast.MatchStar, ast.ExceptHandler)) and n.name:
+            out.add(n.name)
+        elif isinstance(n, ast.MatchMapping) and n.rest:
+            out.add(n.rest)
+    return out
 
 
-def _class_may_collect(node: ast.ClassDef) -> bool:
-    if node.decorator_list or node.keywords or not all(_plain_base(b) for b in node.bases):
-        return True  # a decorator, a metaclass or an unknown base may make it collectable
-    if not node.name.startswith("Test"):
+def _plain_base(base, bound) -> bool:
+    if isinstance(base, ast.Attribute):  # ``abc.ABC``
+        return (
+            base.attr == "ABC"
+            and isinstance(base.value, ast.Name)
+            and base.value.id == "abc"
+            and "abc" not in bound
+        )
+    if not isinstance(base, ast.Name) or base.id in bound:
         return False
-    body = [m for m in node.body if not isinstance(m, ast.Expr)]
-    if any(isinstance(m, _DEFS) and m.name in ("__init__", "__new__") for m in body):
-        return False  # pytest skips a class with a constructor
-    return any(isinstance(m, ast.ClassDef) or _scan([m]) for m in body)
+    return base.id in ("object", "ABC") or isinstance(getattr(builtins, base.id, None), type)
+
+
+def _has_constructor(node: ast.ClassDef) -> bool:
+    """A class whose ``__init__``/``__new__`` is bound once, by a def, and never deleted."""
+    direct = [m for m in node.body if isinstance(m, _DEFS) and m.name in _CTOR]
+    binds = 0
+    for n in _scope(node.body):
+        if isinstance(n, ast.Delete):
+            return False
+        binds += (
+            (isinstance(n, _DEFS) and n.name in _CTOR)
+            or (isinstance(n, ast.Name) and n.id in _CTOR)
+            or (
+                isinstance(n, (ast.Import, ast.ImportFrom))
+                and any((a.asname or a.name) in _CTOR for a in n.names)
+            )  # fmt: skip
+        )
+    return bool(direct) and binds == len(direct)
+
+
+def _class_may_collect(node: ast.ClassDef, bound) -> bool:
+    if node.decorator_list or node.keywords or not all(_plain_base(b, bound) for b in node.bases):
+        return True  # a decorator, a metaclass or an unknown base may make it collectable
+    if not node.name.startswith("Test") or _has_constructor(node):
+        return False  # a mixin or a helper, or a class pytest skips for its constructor
+    return any(isinstance(n, ast.ClassDef) or _binds(n, bound) for n in _scope(node.body))
 
 
 def _refuse_with(code: str, why: str) -> BaseUncomparable:
