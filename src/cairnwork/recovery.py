@@ -42,7 +42,7 @@ import os
 import re
 import shutil
 import time
-from contextlib import nullcontext
+from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -294,10 +294,8 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
     works, privates, clones = _run_dirs(root, attempt_id)
     for work in works:  # a verifier checkout's own dir
         if not work.is_symlink():
-            try:
+            with suppress(WorkspaceError):
                 remove_attempt_clone(work, work.name.removesuffix(".work"))
-            except WorkspaceError:
-                pass
         _remove_inside(root, work)
     for private in privates:
         _remove_inside(root, private)
@@ -306,10 +304,8 @@ def _remove_leftovers(run_root: Path, attempt_id: str) -> None:
         if path.is_symlink():
             _unlink(path)
         elif path.is_dir():
-            try:
+            with suppress(WorkspaceError):  # a leftover directory is disk space, not a wrong status
                 remove_attempt_clone(root, name)
-            except WorkspaceError:
-                pass  # a leftover directory is disk space, not a wrong status
 
 
 def path_absent(path: Path) -> bool:
@@ -323,19 +319,25 @@ def path_absent(path: Path) -> bool:
 
 
 def write_start_mark(fd: int) -> None:
-    """Note in a run's held marker when it started (boot mark, "" off Linux), as the journal does
-    at DISPATCHED: cleanup then does not count a hidden process older than the run as its own."""
-    try:
+    """Note in a run's held marker when it started (boot mark, "" off Linux), as DISPATCHED does."""
+    with suppress(OSError):  # no mark: cleanup keeps the strict rule
         os.write(fd, proc_start.boot_mark().encode())
-    except OSError:
-        pass  # no mark: cleanup keeps the strict rule
 
 
 def read_start_mark(fd: int) -> str:
+    """The marker's start mark, or "" (strict rule) unless it is ``"<this boot's id> <seconds>"``
+    with 0 <= seconds <= now: the file is not trusted, a mark from the future hides survivors."""
     try:
-        return os.pread(fd, 256, 0).decode("utf-8", "replace")
-    except OSError:
+        text = os.pread(fd, 256, 0).decode("utf-8", "replace")
+        mine, now = text.split(" "), proc_start.boot_mark().split(" ")
+        ok = (
+            len(mine) == len(now) == 2
+            and mine[0] == now[0]
+            and 0 <= float(mine[1]) <= float(now[1])
+        )
+    except (OSError, ValueError):
         return ""
+    return text if ok else ""
 
 
 def _unlink(path: Path) -> None:
