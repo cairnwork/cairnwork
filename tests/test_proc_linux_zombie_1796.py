@@ -113,3 +113,43 @@ def test_an_unreadable_thread_stat_does_not_hide_the_process(tmp_path):
 def test_an_exited_process_state_x_is_not_taken_for_a_zombie(tmp_path):
     _proc(tmp_path, 70, "X", tasks={70: "X"})
     assert _pids(tmp_path) == [70]
+
+
+def _task_is_a_file(base):
+    (base / "task").write_text("not a directory")
+
+
+def _task_is_empty(base):
+    (base / "task").mkdir()
+
+
+def _task_is_closed(base):
+    (base / "task").mkdir()
+    os.chmod(base / "task", 0)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [_task_is_a_file, _task_is_empty, _task_is_closed],
+    ids=["task-is-a-file", "task-is-empty", "task-is-mode-000"],
+)
+def test_a_task_list_that_cannot_be_read_does_not_hide_the_process(tmp_path, shape):
+    """Its own stat says Z but the threads cannot be listed: it may be alive, so it stays."""
+    if shape is _task_is_closed and os.getuid() == 0:
+        pytest.skip("root lists any directory")
+    base = _proc(tmp_path, 80, "Z")
+    base_environ = base / "environ"
+    base_environ.unlink()
+    base_environ.mkdir()  # cannot be read, as for a process that hides its environment
+    shape(base)
+    try:
+        assert _pids(tmp_path) == [80]
+    finally:
+        if (base / "task").is_dir():
+            os.chmod(base / "task", 0o700)
+
+
+def test_a_process_whose_own_stat_is_not_z_is_alive_without_reading_its_tasks(tmp_path):
+    base = _proc(tmp_path, 81, "S", tasks={81: "Z"})  # inconsistent: the main thread decides
+    assert _pids(tmp_path) == [81]
+    assert base.exists()

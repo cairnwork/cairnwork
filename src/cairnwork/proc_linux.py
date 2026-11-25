@@ -32,22 +32,22 @@ def _linux_processes(proc: str = "/proc"):
 
 
 def _zombie(base: str) -> bool:
-    """True only if every thread of the process is a zombie (state Z): it then runs nothing.
+    """True only if the process is a zombie: its own stat says Z and every thread says Z.
 
     A process whose main thread has exited but whose other threads run shows Z on its own stat
-    too, and is alive. The state is the first field after the LAST ")" (the command name may
-    hold any bytes); stat is read as bytes. Anything unreadable: not a zombie (strict)."""
-    states = _thread_states(base)
-    return bool(states) and all(state == b"Z" for state in states)
-
-
-def _thread_states(base: str) -> list[bytes | None]:
+    too, and is alive. Its own stat not being Z means alive, and the threads are not read. No
+    task directory at all (FileNotFoundError): its own Z decides. Any other failure to list the
+    threads, or an empty list: not a zombie (strict). The state is the first field after the
+    LAST ")" (the command name may hold any bytes); stat is read as bytes."""
+    if _state(f"{base}/stat") != b"Z":
+        return False
     try:
         tids = os.listdir(f"{base}/task")
+    except FileNotFoundError:
+        return True
     except OSError:
-        tids = []
-    paths = [f"{base}/task/{tid}/stat" for tid in tids] or [f"{base}/stat"]
-    return [_state(path) for path in paths]
+        return False
+    return bool(tids) and all(_state(f"{base}/task/{tid}/stat") == b"Z" for tid in tids)
 
 
 def _state(path: str) -> bytes | None:
