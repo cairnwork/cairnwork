@@ -4,12 +4,14 @@ else keeps the marker, lists the attempt under "kept", and the `cleanup` command
 
 import json
 import os
+import subprocess
+import sys
 
 import pytest
 
+from cairnwork import confined, proc_start, verify_cli
 from cairnwork import verify_candidate as module
-from cairnwork import verify_cli
-from cairnwork.confined import UNLISTED, Sweep
+from cairnwork.confined import ATTEMPT_ENV, UNLISTED, Sweep
 from cairnwork.intake import Intake
 
 AID = "a0123456789abcdef"
@@ -104,3 +106,84 @@ def test_the_cleanup_command_exits_0_when_everything_is_cleaned(tmp_path, capsys
     code, out = _run_cleanup(tmp_path, capsys)
     assert code == 0
     assert out == {"cleaned": [AID]}
+
+
+def _marker_taken_at(marker, mark):
+    marker.write_text(mark)  # what a run writes into its marker when it starts
+
+
+def _hidden_old_process(monkeypatch, started):
+    """A same-account process whose environment cannot be read, started at `started` seconds."""
+    monkeypatch.setattr(proc_start, "LINUX", True)
+    monkeypatch.setattr(proc_start, "_boot_id", lambda proc: "boot1")
+    monkeypatch.setattr(proc_start, "boot_start", lambda pid, proc="/proc": started)
+    monkeypatch.setattr(confined, "_restricted", lambda: "")
+    monkeypatch.setattr(confined, "_reread", lambda pids: None)
+    row = (999999, 999999, os.getuid(), None)
+    monkeypatch.setattr(confined, "_processes_with_environment", lambda: [row])
+
+
+def test_an_unreadable_process_older_than_the_run_does_not_keep_the_marker(tmp_path, monkeypatch):
+    marker, _ = _orphan(tmp_path)
+    _marker_taken_at(marker, "boot1 1000.0")
+    _hidden_old_process(monkeypatch, 10.0)  # started long before the run
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert not marker.exists()
+
+
+def test_an_unreadable_process_newer_than_the_run_keeps_the_marker(tmp_path, monkeypatch):
+    marker, _ = _orphan(tmp_path)
+    _marker_taken_at(marker, "boot1 1000.0")
+    _hidden_old_process(monkeypatch, 2000.0)  # started after the run began
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID]
+    assert marker.exists()
+
+
+def test_an_unreadable_process_keeps_the_marker_when_the_run_left_no_start_mark(
+    tmp_path, monkeypatch
+):
+    marker, _ = _orphan(tmp_path)  # empty marker: macOS, or a run from before the mark
+    _hidden_old_process(monkeypatch, 10.0)
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID]
+
+
+def test_a_run_writes_its_start_mark_into_its_marker(tmp_path, monkeypatch):
+    monkeypatch.setattr(proc_start, "boot_mark", lambda proc="/proc": "boot1 1000.0")
+    with module._marked(Intake(tmp_path), AID):
+        assert (tmp_path / "verify-runs" / AID).read_text() == "boot1 1000.0"
+
+
+def _looks(monkeypatch, *results, then):
+    queue = list(results)
+    monkeypatch.setattr(module, "sweep_marked", lambda *a, **k: queue.pop(0) if queue else then)
+
+
+def test_a_process_seen_only_on_the_second_look_keeps_the_marker(tmp_path, monkeypatch):
+    marker, _ = _orphan(tmp_path)
+    _looks(monkeypatch, Sweep(listed=True), then=Sweep(listed=True, denied=1))
+    out = module.cleanup(Intake(tmp_path))
+    assert out["cleaned"] == [] and out["kept"] == [AID]
+    assert marker.exists()
+
+
+def test_two_clean_looks_in_a_row_after_unclean_ones_clean_the_attempt(tmp_path, monkeypatch):
+    marker, _ = _orphan(tmp_path)
+    unclean = Sweep(listed=True, killed=1)
+    _looks(monkeypatch, unclean, unclean, then=Sweep(listed=True))
+    assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    assert not marker.exists()
+
+
+def test_a_marked_orphan_that_can_be_killed_is_killed_and_the_attempt_cleaned(tmp_path):
+    marker, _ = _orphan(tmp_path)
+    sleeper = "import time; time.sleep(60)"
+    child = f"import subprocess, sys; subprocess.Popen([sys.executable, '-c', {sleeper!r}])"
+    env = {**os.environ, ATTEMPT_ENV: AID}
+    subprocess.run([sys.executable, "-c", child], env=env, check=True)  # the grandchild is orphaned
+    try:
+        assert module.cleanup(Intake(tmp_path)) == {"cleaned": [AID]}
+    finally:
+        confined.sweep_marked(ATTEMPT_ENV, AID)
+    assert not marker.exists()
