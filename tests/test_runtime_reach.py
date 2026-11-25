@@ -196,3 +196,83 @@ def test_a_prefix_that_is_not_a_changed_file_is_not_refused(root):
 
 def test_a_file_less_plugin_named_after_a_changed_conftest_is_left_to_the_conftest_rules(root):
     check_runtime_reach(rec(root, plugins=[("sub.conftest", None)]), ["sub/conftest.py"])
+
+
+# review round 4 (cross-family): case folding only where the base has no exact file; packages; messages
+LIB, UP = "data/lib.zip", "data/Lib.zip"
+BOTH = frozenset({LIB, UP, "plug/helper.py"})  # a case-sensitive base holding both spellings
+
+
+def test_a_base_with_both_case_spellings_passes_the_one_that_is_not_on_sys_path(root):
+    check_runtime_reach(rec(root, sys_path=[LIB]), [UP], base_paths=BOTH)
+
+
+def test_a_base_with_both_case_spellings_refuses_the_one_that_is_on_sys_path(root):
+    assert LIB in refused_with(rec(root, sys_path=[LIB]), [LIB, UP], BOTH)
+    refused_with(rec(root, sys_path=[LIB]), [LIB], BOTH)
+
+
+def test_a_case_variant_written_on_a_case_blind_disk_is_refused_when_only_one_file_exists(root):
+    refused_with(rec(root, sys_path=["data/LIB.zip"]), [LIB], frozenset({LIB}))
+    refused_with(rec(root, sys_path=["data/LIB.zip"]), [LIB], None)  # unknown base: fold
+
+
+def refused_with(record, changed, base_paths, added=()):
+    with pytest.raises(TestCommitRejected) as caught:
+        check_runtime_reach(record, changed, added, base_paths=base_paths)
+    assert caught.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+    return str(caught.value)
+
+
+@pytest.mark.parametrize("changed", ["vendor/PKG/HELPER.py", "vendor/pkg/Helper.py", "PKG/helper.py"])
+def test_a_file_less_plugin_matches_a_case_variant_of_its_file(root, changed):
+    refused_with(rec(root, plugins=[("pkg.helper", None)]), [changed], frozenset({changed}))
+
+
+def test_a_file_less_plugin_passes_a_case_variant_when_the_exact_file_exists_too(root):
+    both = frozenset({"vendor/pkg/helper.py", "vendor/PKG/HELPER.py"})
+    check_runtime_reach(rec(root, plugins=[("pkg.helper", None)]), ["vendor/PKG/HELPER.py"], base_paths=both)
+    refused_with(rec(root, plugins=[("pkg.helper", None)]), ["vendor/pkg/helper.py"], both)
+
+
+PKG = ("custom_plugin", "custom_plugin/__init__.py")
+
+
+@pytest.mark.parametrize(
+    ("changed", "added", "refuses"),
+    [
+        (["custom_plugin/hooks.py"], [], True),
+        (["custom_plugin/sub/deep.py"], [], True),
+        ([], ["custom_plugin/new_hooks.py"], True),
+        (["custom_plugin/__init__.py"], [], True),
+        (["custom_plugin_extra/x.py"], [], False),
+        (["custom_plugin.py"], [], False),
+        ([], ["custom_plugin_extra/x.py"], False),
+        (["custom_plugin/data.txt"], [], False),
+    ],
+)
+def test_a_changed_or_added_py_file_under_a_loaded_plugin_package_is_refused(
+    root, changed, added, refuses
+):
+    (root / "custom_plugin").mkdir()
+    record = rec(root, plugins=[(PKG[0], str(root / PKG[1]))])
+    if not refuses:
+        check_runtime_reach(record, changed, added)
+        return
+    refused_with(record, changed, None, added)
+
+
+def test_a_plugin_module_that_is_not_a_package_does_not_widen_to_its_directory(root):
+    record = rec(root, plugins=[("plug.helper", str(root / "plug" / "helper.py"))])
+    check_runtime_reach(record, ["plug/other.py"], ["plug/new.py"])
+
+
+def test_the_message_says_adds_when_the_hit_is_an_added_file(root):
+    record = rec(root, sys_path=["data/bundle.bin"])
+    assert "adds" in refused_with(record, [], None, added=["data/bundle.bin"])
+    assert "changes" in refused(rec(root, sys_path=["data/bundle.bin"]), ["data/bundle.bin"])
+
+
+def test_a_pycache_bytecode_plugin_maps_back_to_its_source(root):
+    path = str(root / "plug" / "__pycache__" / "helper.cpython-311.pyc")
+    refused(rec(root, plugins=[("plug.helper", path)]), ["plug/helper.py"])
