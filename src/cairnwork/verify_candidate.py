@@ -370,12 +370,10 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
 
 
 def cleanup(intake: Intake) -> dict[str, Any]:
-    """Remove what runs that died left behind: their orphan processes, clones, scratch
-    clones and baseline directories. A run that is still alive holds its marker's lock and
-    is left alone; a marker is only removed by whoever holds its lock and still sees the
-    same file at that path."""
+    """Remove what dead runs left behind (processes, clones, scratch, baselines). A live run's
+    marker lock protects it; the marker goes only once the scratch is gone, else it is "kept"."""
     markers = intake.state / "verify-runs"
-    cleaned: list[str] = []
+    out: dict[str, list[str]] = {"cleaned": []}
     for marker in sorted(markers.iterdir()) if markers.is_dir() else []:
         if marker.is_symlink() or not ATTEMPT_ID.fullmatch(marker.name):
             continue
@@ -390,11 +388,13 @@ def cleanup(intake: Intake) -> dict[str, Any]:
                 continue  # replaced by a run that started meanwhile
             sweep_marked(ATTEMPT_ENV, marker.name)
             _remove_leftovers(intake.run_root, marker.name)
-            shutil.rmtree(intake.state / "verify-scratch" / marker.name, ignore_errors=True)
-            marker.unlink(missing_ok=True)
-            cleaned.append(marker.name)
+            shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
+            gone = not os.path.lexists(work)  # not gone: keep the marker, a later run retries
+            if gone:
+                marker.unlink(missing_ok=True)
+            out.setdefault("cleaned" if gone else "kept", []).append(marker.name)
         except BlockingIOError:
             pass  # alive: it holds the lock
         finally:
             os.close(fd)
-    return {"cleaned": cleaned}
+    return out
