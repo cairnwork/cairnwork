@@ -47,12 +47,7 @@ from cairnwork.intake import Intake, IntakeRefused
 from cairnwork.notary_verify import binding_extras, binding_hash
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
-from cairnwork.pipeline import (
-    TaskRejected,
-    TaskResult,
-    TaskSpec,
-    tests_with_teeth,
-)
+from cairnwork.pipeline import TaskRejected, TaskResult, TaskSpec, tests_with_teeth
 from cairnwork.pipeline_judge import judge_candidate
 from cairnwork.recovery import _remove_leftovers
 from cairnwork.textclean import shown
@@ -350,9 +345,8 @@ def _same_file(fd: int, path: Path) -> bool:
 
 @contextmanager
 def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
-    """Hold a locked marker file for the duration of a run. The lock is taken before the
-    marker counts, and only if the path still names the file we locked (a cleaner may
-    have removed it in between): otherwise try again."""
+    """Hold a locked marker file for the duration of a run. The lock is taken before the marker
+    counts, and only if the path still names the file we locked (a cleaner may have removed it)."""
     path = intake.state / "verify-runs" / attempt_id
     path.parent.mkdir(mode=0o700, exist_ok=True)
     while True:
@@ -369,9 +363,16 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
         os.close(fd)
 
 
+def _absent(path: Path) -> bool:
+    try:
+        os.lstat(path)
+    except OSError as exc:  # only "no such file" is gone; any other error: still there
+        return isinstance(exc, (FileNotFoundError, NotADirectoryError))
+    return False
+
+
 def cleanup(intake: Intake) -> dict[str, Any]:
-    """Remove what dead runs left behind (processes, clones, scratch, baselines). A live run's
-    marker lock protects it; the marker goes only once the scratch is gone, else it is "kept"."""
+    """Remove what dead runs left behind; a marker goes only once its scratch is known gone."""
     markers = intake.state / "verify-runs"
     out: dict[str, list[str]] = {"cleaned": []}
     for marker in sorted(markers.iterdir()) if markers.is_dir() else []:
@@ -389,8 +390,7 @@ def cleanup(intake: Intake) -> dict[str, Any]:
             sweep_marked(ATTEMPT_ENV, marker.name)
             _remove_leftovers(intake.run_root, marker.name)
             shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
-            gone = not os.path.lexists(work)  # not gone: keep the marker, a later run retries
-            if gone:
+            if gone := _absent(work):  # not known gone: keep the marker, a later run retries
                 marker.unlink(missing_ok=True)
             out.setdefault("cleaned" if gone else "kept", []).append(marker.name)
         except BlockingIOError:
