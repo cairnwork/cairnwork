@@ -24,6 +24,7 @@ collects is not seen by ids: the AST comparison still decides it.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
@@ -39,6 +40,8 @@ from cairnwork.verifiers import run_verifiers
 
 MAX_FILES = 50  # files per collect-only run; more changed files are collected in batches
 NONE = Collected()
+LOG = logging.getLogger(__name__)
+_WHY: dict[str, str] = {}  # run id -> why that run gave no record (a fixed word; #1792)
 
 
 def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets) -> None:
@@ -61,10 +64,13 @@ def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
         # here (e.g. a table plugin that fails to load): the base run reports UNCOMPARABLE (#804)
         if _collect_all(ctx, task.base_commit, _probe_files(task, on_base), f"{run_id}p") is None:
             return
+        why = _WHY.pop(f"{run_id}t", "collect-no-record")
+        LOG.warning("DEFERRED_TESTS_COLLECT_FAILED: %s (%d files)", why, len(files))
         raise TestCommitRejected(
             "DEFERRED_TESTS_COLLECT_FAILED",
-            "pytest's collect-only run on the test commit gave no usable record (timeout,"
-            " crash or no report), so Cairnwork cannot tell which tests it adds; rerun the task",
+            f"pytest's collect-only run on the test commit gave no usable record ({why}: timeout,"
+            " crash, output over the cap or no report), so Cairnwork cannot tell which tests it"
+            " adds; rerun the task",
         )
     before = _collect_all(ctx, task.base_commit, on_base, f"{run_id}b") if on_base else NONE
     if before is None:  # the base's own run failed: the old ids are unknown, the static rule stays
@@ -90,6 +96,8 @@ def _collect_all(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Colle
         for i in range(0, len(files), MAX_FILES)
     ]
     if any(part is None for part in parts):
+        first = next(f"{run_id}{i}" for i, part in enumerate(parts) if part is None)
+        _WHY[run_id] = _WHY.pop(first, "collect-no-record")
         return None
     got: list[Collected] = [p for p in parts if p is not None]
     return Collected(
@@ -105,13 +113,17 @@ def _collect(ctx, commit: str, files: tuple[str, ...], run_id: str) -> Collected
         spec = VerifierSpec("collected-974", files, collect_only=True, announce=False)  # #1671
         runs = run_verifiers(ctx, commit, (spec,), run_id)
     except Exception:  # noqa: BLE001 - a fault leaves the static rule alone
+        _WHY[run_id] = "collect-fault"
         return None
     try:
         got = read_collected(runs[0]) if len(runs) == 1 else None
     finally:
         for run in runs:  # evidence for this check only, not for Core
             shutil.rmtree(Path(run.log_path).parent, ignore_errors=True)
-    return None if got is None or got.unusable else got
+    if got is None or got.unusable:
+        _WHY[run_id] = got.unusable if got else "collect-no-record"
+        return None
+    return got
 
 
 def _probe_files(task, on_base: tuple[str, ...]) -> tuple[str, ...]:
