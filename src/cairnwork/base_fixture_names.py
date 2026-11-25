@@ -1,11 +1,16 @@
 """#986 step 5b: the fixture names pytest itself collects on the base, for ``check_conftests``.
 
-One owner collect-only run on the base commit with the recorder on (``record_fixtures``, see
-fixture_probe.py). It targets the existing base test files the test commit changes, so it sees the
-plugins, ``pytest_plugins`` and dynamic fixtures those files meet. The result is advisory
-(``check_conftests`` only unions it with the static names, so it can add a refusal and never remove
-one); any fault, an account run, a conftest-free test commit or no base target gives None, and the
-#916 rule then stands alone, as before this step.
+Two owner collect-only runs on the base commit with the recorder on (``record_fixtures``, see
+fixture_probe.py).
+1. The names run (``probe``): the base tests under a conftest the test commit adds or edits, plus
+   the changed base files. It sees the plugins, ``pytest_plugins`` and dynamic fixtures those files
+   meet. The result is advisory (``check_conftests`` only unions it with the static names, so it
+   can add a refusal and never remove one); any fault, an account run or a conftest-free commit
+   gives None, and the #916 rule then stands alone.
+2. The reach run (``reach_record``, #1769): whenever the commit changes a base file or adds a file
+   (a conftest-only edit makes none), the base's whole test tree (``base_tree_targets``) plus the
+   changed base .py files. ``check_runtime_reach`` refuses on the runtime record; a record that left
+   something out (tree over the cap or unreadable, a changed file dropped) refuses too.
 """
 
 from __future__ import annotations

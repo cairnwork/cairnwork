@@ -22,7 +22,9 @@ fixture_probe.py): a run that forges it can hide an entry, which is the limit al
 from __future__ import annotations
 
 import os
+import unicodedata
 from collections.abc import Iterable
+from dataclasses import replace
 from pathlib import PurePosixPath
 
 from cairnwork.collected_names import CollectedRecord
@@ -41,39 +43,76 @@ def check_runtime_reach(
     changed, on_path = frozenset(changed_on_base), frozenset(changed_on_base) | frozenset(added)
     if record is None or not record.root or not on_path:
         return
+    real = dict(record.real)
     for name, file in record.plugins:
-        if (hit := _plugin_hit(record.root, name, file, changed)) is not None:
+        if (hit := _plugin_hit(record.root, name, file, changed, real)) is not None:
             _refuse(f"pytest loads {hit} as a plugin, and the test commit changes it")
     for entry in (*record.sys_path, *record.sys_path_finish):
-        if (hit := _path_hit(record.root, entry, on_path)) is not None:
+        if (hit := _path_hit(record.root, entry, on_path, real)) is not None:
             _refuse(f"{hit} is on sys.path in the base run, and the test commit changes it")
+
+
+def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
+    """The record with its checkout root and the realpath of every entry and plugin file, read
+    while the checkout still exists (a symlink cannot be followed once it is removed)."""
+    root = os.path.realpath(checkout)
+    paths = (*record.sys_path, *record.sys_path_finish, *(f for _, f in record.plugins if f))
+    real = {}
+    for path in paths:
+        try:
+            real[path] = os.path.realpath(_full(root, path))
+        except (ValueError, OSError):
+            continue
+    return replace(record, root=root, real=tuple(sorted(real.items())))
 
 
 def _refuse(why: str) -> None:
     raise TestCommitRejected(CODE, why)
 
 
-def _plugin_hit(root: str, name: str, file: str | None, changed: frozenset[str]) -> str | None:
+def _key(path: str) -> str:
+    """Case and Unicode-normalisation folded, so a variant of a name is the same name (this can
+    only refuse more)."""
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", path).casefold())
+
+
+def _plugin_hit(
+    root: str, name: str, file: str | None, changed: frozenset[str], real: dict[str, str]
+) -> str | None:
     if file is None:
         return _named(name, changed)
-    for rel in _rels(root, file):
+    keys = {_key(c): c for c in changed}
+    for rel in _rels(root, file, real):
         if rel.lower().endswith(_BYTECODE):
             rel = rel[: rel.rindex(".")] + ".py"
-        if rel in changed and PurePosixPath(rel).name != "conftest.py":
-            return rel
+        if (hit := keys.get(_key(rel))) is not None and PurePosixPath(hit).name != "conftest.py":
+            return hit
     return None
 
 
-def _path_hit(root: str, entry: str, changed: frozenset[str]) -> str | None:
-    return next((rel for rel in _rels(root, entry) if rel in changed), None)
+def _path_hit(root: str, entry: str, changed: frozenset[str], real: dict[str, str]) -> str | None:
+    """A changed file that is the entry or any leading part of it (``lib.zip/pkg`` is inside
+    ``lib.zip``)."""
+    keys = {_key(c): c for c in changed}
+    for rel in _rels(root, entry, real):
+        parts = PurePosixPath(rel).parts
+        for end in range(1, len(parts) + 1):
+            if (hit := keys.get(_key("/".join(parts[:end])))) is not None:
+                return hit
+    return None
 
 
-def _rels(root: str, path: str) -> tuple[str, ...]:
-    """``path`` as repo-relative POSIX paths, as written and with symlinks resolved; none when it
-    cannot be read or lies outside the checkout. A relative entry is read against the checkout."""
+def _full(root: str, path: str) -> str:
+    return path if os.path.isabs(path) else os.path.join(root, path)
+
+
+def _rels(root: str, path: str, real: dict[str, str]) -> tuple[str, ...]:
+    """``path`` as repo-relative POSIX paths, as written and with symlinks resolved (from the run
+    when it was resolved there, else now); none when it cannot be read or lies outside the
+    checkout. A relative entry is read against the checkout."""
     try:
-        full = path if os.path.isabs(path) else os.path.join(root, path)
-        found = {os.path.normpath(full), os.path.realpath(full)}
+        full = _full(root, path)
+        found = {os.path.normpath(full), real.get(path) or os.path.realpath(full)}
         rels = (os.path.relpath(p, root) for p in found if _within(root, p))
         return tuple(sorted(r.replace(os.sep, "/") for r in rels if r != "."))
     except (ValueError, OSError):

@@ -20,10 +20,11 @@ import json
 import os
 import secrets
 import stat
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.collected_names import CollectedRecord, collected_record
+from cairnwork.runtime_reach import resolve_record
 
 PREFIX = "_cairnwork_fixture_record_"
 RECORDER = Path(__file__).with_name("fixture_record.py")
@@ -137,7 +138,7 @@ def finish_record(
     record = probe.read_record(run.returncode, run.timed_out)
     if record is None or checkout is None:
         return record
-    return replace(record, root=os.path.realpath(checkout))
+    return resolve_record(record, checkout)
 
 
 def _nonce_pipe(nonce: str) -> int:
