@@ -7,6 +7,8 @@ that main refused; MUST_BLOCK lines reach the import machinery or execute code b
 stay refused (they were refused on main too).
 """
 
+import sys
+
 import pytest
 from conftest import git
 
@@ -347,3 +349,11 @@ def test_lowercase_prose_with_a_bare_word_is_refused_like_main(tmp_path):
     assert _verdict(tmp_path, "", "log = 'failed to compile the rules'\n") == (
         "CANDIDATE_SYS_PATH_MUTATION"
     )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="type parameters need Python 3.12")
+@pytest.mark.parametrize("added", ["def f[exec](x): return x\n", "class C[eval]: pass\n"])
+def test_type_parameter_named_like_a_word_is_refused(tmp_path, added):
+    """A type parameter introduces a name; the node types exist only on 3.12 and later (#1779).
+    The check also has to run at all on 3.11, the minimum version CI runs the full suite on."""
+    assert _verdict(tmp_path, "", added) == "CANDIDATE_SYS_PATH_MUTATION"
