@@ -30,6 +30,7 @@ def _verdict(tmp_path, base_extra, added, extra_files=(), other=None):
     git(repo, "config", "user.email", "a@b")
     git(repo, "config", "user.name", "a")
     (repo / "pkg").mkdir()
+    (repo / "pkg/__init__.py").write_text("")
     base_text = HEAD + base_extra + TAIL
     (repo / NAME).write_text(base_text)
     git(repo, "add", "-A")
@@ -278,7 +279,12 @@ ROUND3_BLOCK = [
     ("", "del re.compile\n", {}, ()),
     ("", "import pkg.mod as me\nme.re = inspect.getmodule(len)\n" + RUN, {}, ()),
     ("", "from pkg import mod as me\nme.re = inspect.getmodule(len)\n" + RUN, {}, ()),
-    ("", "import pkg.mod as me\nsetattr(me, 're', inspect.getmodule(len))\nP = re.compile(x)\n", {}, ()),
+    (
+        "",
+        "import pkg.mod as me\nsetattr(me, 're', inspect.getmodule(len))\nP = re.compile(x)\n",
+        {},
+        (),
+    ),
     ("", "inspect.getmodule(f).re = inspect.getmodule(len)\nP = re.compile(x)\n", {}, ()),
     ("", RUN, {"pkg/b.py": PKG_B + "mod.re = inspect.getmodule(len)\n"}, ()),
     (
@@ -293,7 +299,12 @@ ROUND3_BLOCK = [
     ("", "from zodbpickle import fastpickle\nv = fastpickle.loads(b)\n", {}, ()),
     ("", "import asteval\nv = asteval.Interpreter()(s)\n", {}, ()),
     ("", "import simpleeval\n", {}, ()),
-    ("import cloudpickle\ndef load(b):\n    return cloudpickle.loads(b)\n", "v = load(x)\n", {}, ()),
+    (
+        "import cloudpickle\ndef load(b):\n    return cloudpickle.loads(b)\n",
+        "v = load(x)\n",
+        {},
+        (),
+    ),
     (
         "from zodbpickle import fastpickle\ndef load(b):\n    return fastpickle.loads(b)\n",
         "v = load(x)\n",

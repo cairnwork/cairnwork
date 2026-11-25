@@ -36,6 +36,7 @@ Write-side residuals (#1178): subprocess/shell/archive writes, ``open`` reached 
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 from collections.abc import Iterable
@@ -47,8 +48,11 @@ from cairnwork.candidate_alias import (
     runtime_shadow_added,
 )
 from cairnwork.candidate_shadow import find_shadow_file
-from cairnwork.candidate_statements import _SAFE_ATTRS as _SAFE_MODULES
-from cairnwork.candidate_statements import machinery_changed
+from cairnwork.candidate_statements import (
+    SAFE_ATTRS,
+    machinery_changed,
+    rebound_safe_modules,
+)
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.gitcmd import GitCommandError
@@ -68,7 +72,7 @@ _REACH_WORDS = tuple(
         "sys.modules", "meta_path", "path_hooks", "path_importer_cache", "importlib", "runpy",
         "pytest_plugins", "__import__", "getmembers", "getattr_static",
         "marshal", "pickle", "FunctionType", "CodeType", "copyreg",
-        "pickler", "Pickler", "unpickl", "jsonpickle",
+        "pickler", "Pickler", "unpickl", "jsonpickle", "cloudpickle", "zodbpickle", "fastpickle",
     )
 )  # fmt: skip
 # Names that embed a word candidate_statements matches by whole word (#1779) in a way the word
@@ -80,7 +84,8 @@ _EMBEDDED_WORDS = tuple(
         "os.exec", "execv", "execl", "py_compile", "compileall", "breakpointhook", "_pickle",
         "cloudpickle", "read_pickle", "allow_pickle", "executable",
         "codeop", "InteractiveInterpreter", "InteractiveConsole", "execnet", "makegateway",
-        "ccompiler", "CCompiler", "new_compiler",
+        "ccompiler", "CCompiler", "new_compiler", "execfile", "zodbpickle", "fastpickle",
+        "pickleshare", "asteval", "simpleeval",
     )
 )  # fmt: skip
 _MACHINERY_WORDS = (
@@ -168,7 +173,9 @@ def refuse_new_sys_path_mutation(
             for e in changes.entries
             if e.change_type in _OWN_KINDS and e.path in own
         }
-        shadowed = _same_name_modules(e.path for e in changes.entries)
+        shadowed = _same_name_modules(e.path for e in changes.entries) | _rebound_elsewhere(
+            repo, candidate, [e.path for e in changes.entries if e.change_type in _OWN_KINDS]
+        )
         for path in changed:
             signal = path.endswith(".py") and _blob_signal(
                 repo, base, candidate, path, changed, shadowed
@@ -208,13 +215,30 @@ def refuse_new_sys_path_mutation(
 
 
 def _same_name_modules(paths: Iterable[str]) -> frozenset[str]:
-    """Safe-attribute modules (``re``, ``regex``) the change set adds a file or package for."""
+    """Safe-attribute modules (``re``, ``regex``) the change set adds a file or package for: a
+    path part before its first dot is the name (``re.py``, ``re/``, ``re.cpython-313.so``)."""
     return frozenset(
-        part.removesuffix(".py")
+        part.split(".")[0]
         for path in paths
         for part in path.split("/")
-        if part.removesuffix(".py") in _SAFE_MODULES
+        if part.split(".")[0] in SAFE_ATTRS
     )
+
+
+def _rebound_elsewhere(repo: Path, commit: str, paths: list[str]) -> frozenset[str]:
+    """Safe-attribute modules any changed Python file may rewrite through a handle. A file that
+    cannot be read or parsed here is not trusted: every safe module counts as rewritten."""
+    found: frozenset[str] = frozenset()
+    for path in paths:
+        if not path.endswith(".py"):
+            continue
+        try:
+            found |= rebound_safe_modules(
+                ast.parse(read_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}"))
+            )
+        except (GitCommandError, ValueError, SyntaxError, RecursionError, MemoryError):
+            return frozenset(SAFE_ATTRS)
+    return found
 
 
 def _blob_signal(

@@ -18,10 +18,10 @@ Exact names (#1779): vars, globals, locals, exec, eval, compile, breakpoint, mar
 are matched as whole words, not as substrings. An identifier (name, attribute, def, argument,
 import name) is split into snake_case and camelCase words and hits when any word is one of them
 (``subprocess_exec``, ``compile_command``); ``evaluate``, ``executor`` and ``compiled`` do not. An
-attribute with such a word hits whatever its receiver is, except the fixed pairs in ``_SAFE_ATTRS``
+attribute with such a word hits whatever its receiver is, except the fixed pairs in ``SAFE_ATTRS``
 (``re.compile``) when the file imports the module plainly, never rebinds that name, and the change
-adds no module of that name. A string hits when a component split on ``.``, ``:`` and ``/`` is
-one of the words. Every other word keeps the substring match.
+adds no module of that name. A string hits when a component split on any non-identifier character
+is one of the words. Every other word keeps the substring match.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ _EXACT = frozenset(
 
 
 # Attribute reads that stay honest on a plain ``import <module>`` (#1779); widening needs numbers.
-_SAFE_ATTRS = {"re": "compile", "regex": "compile"}
+SAFE_ATTRS = {"re": "compile", "regex": "compile"}
 _WORD_RE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+")
 
 
@@ -283,10 +283,11 @@ def _word_hit(identifier: str, exact: frozenset[str]) -> bool:
 
 
 def _string_hit(value: str | bytes, exact: frozenset[str]) -> bool:
-    """A string hits when a component split on ``. : /`` is a word (``"exec"``, ``"a.pickle"``,
-    ``"marshal:loads"``, ``"x/exec"``, ``"pickle."``); prose, log lines and docstrings do not."""
+    """A string hits when a component split on any non-identifier character is a word (``"exec"``,
+    ``"a.pickle"``, ``"marshal:loads"``, ``"x\\exec"``, ``"json;marshal"``, ``"json,pickle"``);
+    capitalised prose (``"Compile and evaluate"``) does not."""
     text = value if isinstance(value, str) else value.decode("latin-1")
-    return any(part.strip() in exact for part in re.split(r"[.:/]", text))
+    return any(part in exact for part in re.split(r"\W+", text))
 
 
 def _identifiers(node: ast.AST) -> Iterator[str]:
@@ -298,6 +299,9 @@ def _identifiers(node: ast.AST) -> Iterator[str]:
         yield from _bound_identifiers(node)
     elif isinstance(node, (ast.TypeVar, ast.ParamSpec, ast.TypeVarTuple)):
         yield node.name
+    elif isinstance(node, ast.MatchClass):
+        yield from node.kwd_attrs  # case object(exec=e) reads the attribute
+        yield from _bound_identifiers(node)
     else:
         yield from _bound_identifiers(node)
 
@@ -310,16 +314,30 @@ def _safe_read(node: ast.Attribute, safe: Mapping[str, str]) -> bool:
     )
 
 
+def rebound_safe_modules(tree: ast.AST) -> frozenset[str]:
+    """Safe-attribute modules this tree may rewrite through a handle: a store or delete of an
+    attribute named like the module (``me.re = x``) or a string equal to its name
+    (``setattr(me, "re", x)``)."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and not isinstance(node.ctx, ast.Load):
+            found.add(node.attr)
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            found.add(node.value)
+    return frozenset(found & SAFE_ATTRS.keys())
+
+
 def _safe_roots(tree: ast.Module, shadowed: frozenset[str]) -> dict[str, str]:
     """Names bound only by a plain ``import re`` / ``import regex`` (alias allowed) that nothing in
     the file rebinds, mapped to the one attribute they may read; empty after a star import."""
+    shadowed = shadowed | rebound_safe_modules(tree)
     bound: dict[str, str] = {}
     other: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name in _SAFE_ATTRS and alias.name not in shadowed:
-                    bound[alias.asname or alias.name] = _SAFE_ATTRS[alias.name]
+                if alias.name in SAFE_ATTRS and alias.name not in shadowed:
+                    bound[alias.asname or alias.name] = SAFE_ATTRS[alias.name]
                 else:
                     other.update(alias.name.split("."))
                     other.add(alias.asname or alias.name)
