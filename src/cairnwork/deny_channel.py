@@ -53,6 +53,7 @@ from cairnwork.deny_judge import (  # re-exported: the channel's callers and tes
     judge_stream,
 )
 from cairnwork.deny_sweep import sweep_stale as _sweep_stale
+from cairnwork.safe_kill import safe_killpg
 from cairnwork_sandbox.backend import Policy
 
 __all__ = [
@@ -286,7 +287,7 @@ def _end_group(proc) -> None:
     except KeyError:
         return
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        safe_killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
 

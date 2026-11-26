@@ -62,10 +62,24 @@ worker_pids() {   # prints pids; pgrep rc 1 = none, anything else is an error
   (( rc <= 1 )) || die "pgrep failed (rc $rc)"
   print -r -- "$out"
 }
+# owner_uid_guard (#1849): killing "every process of uid N" as root is the owner's whole desktop when
+# N is the owner's uid (WORKER set or misread as the owner). Every owner we can name (the argument,
+# sudo's caller, the owner of $RUNS) is compared by uid; none resolvable fails closed.
+owner_uid_guard() {   # $1 = worker uid
+  local cand ouid seen=0
+  for cand in "$OWNER" "${SUDO_USER:-}" "$(stat -f %Su "$RUNS" 2>/dev/null || true)"; do
+    [[ -n "$cand" && "$cand" != root ]] || continue
+    ouid=$(id -u "$cand" 2>/dev/null) || continue
+    seen=1
+    [[ "$ouid" != "$1" ]] || die "worker uid $1 is the owner's ($cand); not killing that uid's processes"
+  done
+  (( seen )) || die "cannot tell who the owner is (pass the owner username); not killing by uid"
+}
 if dscl . -read "/Users/$WORKER" UniqueID >/dev/null 2>&1; then
   WUID=$(dscl . -read "/Users/$WORKER" UniqueID | awk '{print $2}')
   [[ "$WUID" == <-> ]] || die "cannot read the worker uid"
   (( WUID > 0 )) || die "worker uid is 0"
+  owner_uid_guard "$WUID"
   pids=$(worker_pids "$WUID")
   if [[ -n "$pids" ]]; then
     echo "stopping worker processes (uid $WUID): ${pids//$'\n'/ }"

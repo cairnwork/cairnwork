@@ -23,6 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cairnwork.safe_kill import safe_killpg
+
 LOG_NAME = "post-verified-hook.jsonl"
 TAIL_CHARS = 2000
 CLEANUP_SECONDS = 5  # after a timeout kill, for pipes a detached descendant still holds
@@ -175,7 +177,7 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
     # After a normal exit the leader is reaped; the pgid stays in use while any member lives,
     # so only a fully gone group whose id was reused at once could be hit (accepted, #731).
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        safe_killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
         pass  # the group is already gone
     except OSError:

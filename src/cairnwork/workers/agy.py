@@ -34,6 +34,7 @@ from pathlib import Path
 
 from cairnwork import proc_start, provenance
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, copy_capped, sweep_marked
+from cairnwork.safe_kill import safe_killpg
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
 from cairnwork.workers.agy_streams import close_streams, fail_cleanup
@@ -370,7 +371,7 @@ def _stop(
     to the attempt when its working directory is inside it, as in confined.execute (#537); those
     count once each, at any look (the run is then fenced, even once they are gone)."""
     try:
-        os.killpg(process.pid, signal.SIGKILL)
+        safe_killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
     process.wait()

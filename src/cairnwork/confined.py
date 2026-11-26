@@ -23,6 +23,7 @@ from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (v
 from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
 from cairnwork.pipe_copy import _limit_file_size, copy_capped
 from cairnwork.proc_linux import _linux_environment, _linux_processes  # moved (#814): size cap
+from cairnwork.safe_kill import safe_killpg
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
@@ -387,6 +388,6 @@ def _parse_ps(stdout: str):
 
 def _kill_group(pgid: int) -> None:
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        safe_killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
