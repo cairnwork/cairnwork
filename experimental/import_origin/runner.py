@@ -120,7 +120,8 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
     )
     profile_path = supervisor / "profile.sb"
     profile_path.write_bytes(profile.text.encode())
-    log, code = run_dir / "pytest.log", None
+    log = run_dir / "pytest.log"
+    code = None
     try:
         with mask_recheck.guard(backend, profile):  # #353, #1681: a run whose masks moved is void
             code, timed_out, _survivors = confined.execute(

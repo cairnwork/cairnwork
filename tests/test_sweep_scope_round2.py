@@ -80,32 +80,45 @@ def test_the_dead_run_cleanup_look_has_a_start_condition(tmp_path):
     run_root = tmp_path / "runs"
     (run_root / f"{ATTEMPT}-q-v0.work").mkdir(parents=True)
     intake = SimpleNamespace(run_root=run_root, verifier_account=lambda: None)
-    seen = {}
-    look = cleanup_sweep.look_for(lambda *a, **kw: seen.update(kw), intake, ATTEMPT, "mark")
+    seen: dict = {}
+
+    def sweep(*args, **kw) -> Sweep:
+        seen.update(kw)
+        return Sweep(listed=True)
+
+    look = cleanup_sweep.look_for(sweep, intake, ATTEMPT, "mark")
     look()
     assert seen["cwd_dirs"] and seen["cwd_since"] == proc_cwd.dirs_since(seen["cwd_dirs"])
     assert (seen["cwd_since"] is not None) == DARWIN
 
 
 def test_a_process_older_than_the_run_dirs_is_not_signalled(tmp_path, monkeypatch, signals):
-    run = os.path.realpath(tmp_path) + "/a1"
+    run = os.path.realpath(tmp_path) + "/runs/a1"
     monkeypatch.setattr(proc_cwd, "_MACOS", True)
     monkeypatch.setattr(proc_cwd, "_temps", lambda: [os.path.realpath(tmp_path)])
     _fake(monkeypatch, {1: 99, 2: 100, 3: 101}, dict.fromkeys((1, 2, 3), run + "/w"))
-    found = proc_cwd.kill_withheld_in(_rows(1, 2, 3), [run], UID, since=100.0)
+    found = proc_cwd.kill_withheld_in(_rows(1, 2, 3), [run], UID, roots=[run[:-3]], since=100.0)
     assert found == ([3], [], 0) and signals == [(3, 9)]
 
 
 def test_the_fake_start_stand_in_of_the_old_tests_still_reads(tmp_path, monkeypatch, signals):
-    run = os.path.realpath(tmp_path) + "/a1"
+    run = os.path.realpath(tmp_path) + "/runs/a1"
     monkeypatch.setattr(proc_cwd, "_MACOS", True)
     monkeypatch.setattr(proc_cwd, "_temps", lambda: [os.path.realpath(tmp_path)])
     monkeypatch.setattr(proc_cwd, "_started", lambda pid: b"same start")  # 10 bytes
     monkeypatch.setattr(proc_cwd, "environment_withheld", lambda pid: True)
     monkeypatch.setattr(proc_cwd, "cwd_of", lambda pid: run + "/w")
-    assert proc_cwd.kill_withheld_in(_rows(7), [run], UID, since=100.0) == ([], [], 0)
+    assert proc_cwd.kill_withheld_in(_rows(7), [run], UID, roots=[run[:-3]], since=100.0) == (
+        [],
+        [],
+        0,
+    )
     assert signals == []  # a real bound cannot be checked against a value it cannot read
-    assert proc_cwd.kill_withheld_in(_rows(7), [run], UID, since=0.0) == ([7], [], 0)
+    assert proc_cwd.kill_withheld_in(_rows(7), [run], UID, roots=[run[:-3]], since=0.0) == (
+        [7],
+        [],
+        0,
+    )
 
 
 def test_a_faked_macos_on_a_linux_temp_dir_keeps_its_temp_allowed(monkeypatch, tmp_path):
@@ -113,7 +126,7 @@ def test_a_faked_macos_on_a_linux_temp_dir_keeps_its_temp_allowed(monkeypatch, t
     monkeypatch.setattr(proc_cwd, "_DARWIN", False)  # a Linux runner: temp is /tmp-shaped
     base = os.path.realpath(tmp_path)
     assert proc_cwd._temps() == [os.path.realpath(tempfile.gettempdir())]
-    assert proc_cwd.scope([f"{base}/a1"]) == (f"{base}/a1",)
+    assert proc_cwd.scope([f"{base}/r/a1"], [f"{base}/r"]) == (f"{base}/r/a1",)
 
 
 def test_the_linux_verifier_account_path_may_start_a_run(tmp_path, monkeypatch):
@@ -146,10 +159,28 @@ def test_home_comes_from_the_account_database_not_the_environment(monkeypatch):
 
 def test_one_bad_dir_skips_only_itself(monkeypatch, tmp_path, signals):
     base = os.path.realpath(tmp_path)
-    good, linked = f"{base}/a1", f"{base}/a2"
+    good, linked = f"{base}/r/a1", f"{base}/r/a2"
+    os.makedirs(f"{base}/r")
     os.symlink("/", linked)
     monkeypatch.setattr(proc_cwd, "_MACOS", True)
     monkeypatch.setattr(proc_cwd, "_temps", lambda: [base])
     _fake(monkeypatch, {1: 10, 2: 10}, {1: good + "/w", 2: "/x"})
-    found = proc_cwd.kill_withheld_in(_rows(1, 2), [linked, good], UID, since=1.0)
+    found = proc_cwd.kill_withheld_in(
+        _rows(1, 2), [linked, good], UID, roots=[f"{base}/r"], since=1.0
+    )
     assert found == ([1], [], 0) and signals == [(1, 9)]
+
+
+@pytest.mark.parametrize("since", [0.0, -1.0])
+def test_dirs_since_birth_at_or_below_zero_fails_closed(tmp_path, monkeypatch, since):
+    (tmp_path / "a").mkdir()
+    monkeypatch.setattr(os, "stat", lambda p: SimpleNamespace(st_birthtime=since))
+    assert proc_cwd.dirs_since([str(tmp_path / "a")]) is None
+
+
+def test_an_undeclared_temp_subtree_is_refused(monkeypatch, tmp_path):
+    base = os.path.realpath(tmp_path)
+    monkeypatch.setattr(proc_cwd, "_temps", lambda: [base])
+    with pytest.raises(proc_cwd.OutOfScope):
+        proc_cwd.scope([f"{base}/a1"])
+    assert proc_cwd.scope([f"{base}/runs/a1"], [f"{base}/runs"]) == (f"{base}/runs/a1",)

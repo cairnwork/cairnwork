@@ -111,11 +111,11 @@ def test_one_str_or_bytes_is_not_a_collection(single):
 
 def test_a_generator_is_read_once_and_the_checked_value_is_the_used_one():
     one = (d for d in [f"{GOOD_TEMP}/a1"])
-    assert proc_cwd.scope(one) == (f"{GOOD_TEMP}/a1",)
-    assert proc_cwd.scope(one) == ()  # spent: nothing left to be checked or used
+    assert proc_cwd.scope(one, [GOOD_TEMP]) == (f"{GOOD_TEMP}/a1",)
+    assert proc_cwd.scope(one, [GOOD_TEMP]) == ()  # spent: nothing left to be checked or used
     mixed = (d for d in [f"{GOOD_TEMP}/a1", "/"])
     with pytest.raises(ValueError):
-        proc_cwd.scope(mixed)
+        proc_cwd.scope(mixed, [GOOD_TEMP])
     assert proc_cwd.kill_withheld_in([], (d for d in [f"{GOOD_TEMP}/a1"]), UID, since=0.0) == (
         [],
         [],
@@ -146,8 +146,8 @@ def test_a_symlink_is_judged_by_its_target(tmp_path, monkeypatch, target):
 @pytest.mark.parametrize(
     "where, roots",
     [
-        (f"{GOOD_TEMP}/a1", ()),
-        (f"{TEMP}/x", ()),
+        (f"{GOOD_TEMP}/a1", [GOOD_TEMP]),
+        (f"{TEMP}/r/x", [f"{TEMP}/r"]),
         (f"{RUNS}/a0123456789abcdef", [RUNS]),
         (f"{RUNS}/a0123456789abcdef-q-v0", [RUNS]),
         ("/Users/Shared/cairnwork/runs/a0123456789abcdef", ["/Users/Shared/cairnwork/runs"]),
@@ -216,8 +216,8 @@ def test_off_macos_the_temp_dir_is_a_strict_ancestor_check(monkeypatch, tmp_path
     monkeypatch.setattr(tempfile, "gettempdir", lambda: base)
     for where in (base, os.path.dirname(base)):
         with pytest.raises(ValueError):
-            proc_cwd.scope([where])
-    assert proc_cwd.scope([f"{base}/c"]) == (f"{base}/c",)
+            proc_cwd.scope([where], [f"{base}/r"])
+    assert proc_cwd.scope([f"{base}/r/c"], [f"{base}/r"]) == (f"{base}/r/c",)
 
 
 def _fake(monkeypatch, started, cwd, withheld=True):
@@ -231,12 +231,12 @@ def _rows(*pids):
 
 
 def test_only_a_process_started_after_the_mark_in_the_run_dir_is_killed(monkeypatch, tmp_path):
-    run = os.path.realpath(tmp_path) + "/a1"
+    run = os.path.realpath(tmp_path) + "/runs/a1"
     started = {1: 100, 2: 200, 3: 300, 4: 301}
     cwd = {1: run + "/x", 2: run, 3: run + "/work", 4: HOME + "/Desktop"}
     _fake(monkeypatch, started, cwd)
     monkeypatch.setattr(proc_cwd, "_temps", lambda: [os.path.realpath(tmp_path)])
-    found = proc_cwd.kill_withheld_in(_rows(1, 2, 3, 4), [run], UID, since=200.0)
+    found = proc_cwd.kill_withheld_in(_rows(1, 2, 3, 4), [run], UID, roots=[run[:-3]], since=200.0)
     assert found == ([3], [], 0)  # 1 older, 2 equal to the mark, 4 elsewhere
     assert CALLS == [("kill", 3, signal.SIGKILL)]
 
@@ -259,7 +259,9 @@ def test_a_row_whose_start_time_is_unreadable_is_left_alone(monkeypatch):
 def test_a_generator_of_one_deep_dir_still_kills(monkeypatch):
     run = f"{GOOD_TEMP}/a1"
     _fake(monkeypatch, {7: 10}, {7: run + "/w"})
-    found = proc_cwd.kill_withheld_in(_rows(7), (d for d in [run]), UID, since=1.0)
+    found = proc_cwd.kill_withheld_in(
+        _rows(7), (d for d in [run]), UID, roots=[GOOD_TEMP], since=1.0
+    )
     assert found == ([7], [], 0) and CALLS == [("kill", 7, signal.SIGKILL)]
 
 

@@ -254,7 +254,8 @@ def dirs_since(dirs) -> float | None:
         births = [getattr(os.stat(d), "st_birthtime", None) for d in dirs]
     except OSError:
         return None
-    return None if not births or None in births else min(births)
+    good = [b for b in births if isinstance(b, float) and b > 0]  # 0 or less: no lower bound
+    return min(good) if births and len(good) == len(births) else None
 
 
 def _canon(item) -> str:
@@ -293,17 +294,16 @@ def _collection(value, what: str) -> tuple:  # one str or bytes is not a collect
 def scope(dirs, roots=(), resolve: bool = False) -> tuple[str, ...]:
     """The sweep directories, checked and returned as ONE tuple the caller then uses (a check on
     one value and a kill on another was the gap): each, by spelling and by realpath, must be
-    strictly inside the private temp dir or a ``roots`` entry the caller declared (itself narrow,
-    ``_root_ok``); else ValueError (OutOfScope when only the place is wrong; a lone str or bytes,
-    a relative path or ".." is plain). ``resolve``: return the realpaths (before the run)."""
+    strictly inside a ``roots`` entry the caller declared (itself narrow, ``_root_ok``); else
+    ValueError (OutOfScope when only the place is wrong; a lone str or bytes, a relative path or
+    ".." is plain). ``resolve``: return the realpaths (before the run)."""
     given = tuple(_canon(d) for d in _collection(dirs, "directories"))
     tops = tuple(os.path.realpath(_canon(r)) for r in _collection(roots, "roots"))
     if any(not _root_ok(r) for r in tops):
         raise OutOfScope("sweep root is not a narrow run root")
     real = tuple(os.path.realpath(d) for d in given)  # a link out of a root is judged by its target
-    temps = _temps()
     for path in {*real, *given}:
-        if not (any(_below(path, t) for t in temps) or any(_below(path, r) for r in tops)):
+        if not any(_below(path, r) for r in tops):
             raise OutOfScope(f"sweep directory is not inside a declared run root: {path!r}")
     return real if resolve else given
 
@@ -351,7 +351,7 @@ def kill_withheld_in(
     not counted (a process that ended after the listing reads so; counting those kept a busy host
     from ever showing the attempt gone). ``seen``: each killed process's allow-listed argv prefix,
     read just before the kill (#814). ``roots``: the run roots the caller declares; each of
-    ``dirs`` must be inside the private temp dir or one of them (``scope``), else only it is
+    ``dirs`` must be inside one of them (``scope``), else only it is
     skipped (#1849); a malformed one raises ValueError before any signal. ``since`` (before the
     run started): only a process that began after it is killed; None: nothing is swept (fail
     closed); 0.0: no lower bound."""
