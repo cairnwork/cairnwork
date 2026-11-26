@@ -3,8 +3,11 @@ tree (name, pid, ppid, pgid, parent name) at the moment reap() starts, right aft
 It asserts nothing about who is left: the CI jobs show whether the leftovers are in main's group
 (see -s output / the recorded property). Skipped when no verifier account is configured."""
 
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -40,12 +43,20 @@ def test_sample_the_accounts_tree_right_after_main_exits(tmp_path, record_proper
         taken.update(group=group, main=main, tree=_tree(account.user))
         return account.reap(main, group=group)
 
-    with account.exclusive():
-        account.require_idle()
-        argv = account.wrap([account.python, "-c", COLLECT_LIKE], None, env)
-        code, timed_out, left = confined.execute(
-            argv, "/", env, 60, tmp_path / "log", reap=reap, reap_group=True
-        )
+    # Never "/": execute's cwd is the leftover sweep's scope, and "/" made it SIGKILL every
+    # env-withheld process of the owner (Chrome, Terminal, Apple agents) on macOS (M5 P0 11/26).
+    # A fresh world-readable dir the verifier account can enter keeps the sweep to this run.
+    work = os.path.realpath(tempfile.mkdtemp(prefix="cw1849-", dir="/private/tmp"))
+    os.chmod(work, 0o755)  # noqa: S103 - the verifier account must be able to enter it
+    try:
+        with account.exclusive():
+            account.require_idle()
+            argv = account.wrap([account.python, "-c", COLLECT_LIKE], None, env)
+            code, timed_out, left = confined.execute(
+                argv, work, env, 60, tmp_path / "log", reap=reap, reap_group=True
+            )
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
     text = "\n".join(taken["tree"]) or "(empty)"
     print(
         f"\n#1849 group={taken['group']} main={taken['main']} exit={code} left={int(left)}\n{text}"
