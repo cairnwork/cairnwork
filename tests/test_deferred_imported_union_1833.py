@@ -10,9 +10,12 @@ shape that three earlier review rounds used to defeat a narrower reading is pinn
 import ast
 
 import pytest
+from conftest import commit_change, git
+from test_deferred_tests import make_test_commit
 
 from cairnwork import deferred_nodes
 from cairnwork.deferred_nodes import test_functions as functions_of
+from cairnwork.deferred_tests import ensure_test_commit, new_tests
 
 HEAD = "import sys\nimport unittest\nfrom unittest import mock\n"
 P = "class P(unittest.TestCase):\n    def test_p(self):\n        pass\n\n"
@@ -250,3 +253,54 @@ def test_a_deeply_nested_base_expression_does_not_raise_recursion_error():
         f"from helpers import Base\n\n\nclass TestI({base}):\n    def test_i(self):\n        pass\n"
     )
     assert "TestI::test_i" in _ids(src)
+
+
+# new_tests compares the base commit's ids with the test commit's. The base side must be read as
+# main reads it (no imported base counts as a possible test case): an id only the union gives on
+# the base side, with the same digest, would cancel main's new id on the test side.
+FILE = "tests/test_cross.py"
+IMPORTED_FOO = (
+    "import unittest\nfrom helpers import B\n\n\nclass Foo(B):\n"
+    "    def test_x(self):\n        assert {n}\n"
+)
+CROSS = {
+    "globals-write-before-foo": (
+        "import unittest\nfrom helpers import B\n\n\n"
+        "class X(unittest.TestCase):\n    globals()['B'] = unittest.TestCase\n\n\n"
+        "class Foo(B):\n    def test_x(self):\n        assert False\n\n\n"
+        "def test_z():\n    assert False\n",
+        "import unittest\nfrom helpers import B\n\n\nclass Foo(B):\n    def test_x(self):\n"
+        "        assert False\n",
+    ),
+}
+
+
+def _cross_commits(project, old, new):
+    commit_change(project, {FILE: old})
+    base = git(project, "rev-parse", "HEAD")
+    _, tc = make_test_commit(project, {FILE: new})
+    ensure_test_commit(project, tc, origin_url=git(project, "remote", "get-url", "origin"))
+    return base, tc
+
+
+def _cross_new_tests(project, old, new):
+    base, tc = _cross_commits(project, old, new)
+    return new_tests(project, base, tc, (FILE,))
+
+
+@pytest.mark.parametrize("shape", CROSS)
+def test_new_tests_across_two_commits_is_never_fewer_than_main(shape, project, monkeypatch):
+    new, old = CROSS[shape]
+    base, tc = _cross_commits(project, old, new)
+    got = new_tests(project, base, tc, (FILE,))
+    with monkeypatch.context() as m:
+        m.setattr(deferred_nodes, "imported_names", lambda tree: frozenset(), raising=False)
+        main = new_tests(project, base, tc, (FILE,))
+    assert main <= got
+    assert f"{FILE}::Foo::test_x" in got and f"{FILE}::test_z" in got
+
+
+def test_a_changed_single_imported_base_class_is_still_a_target(project):
+    old = IMPORTED_FOO.format(n="True")
+    new = IMPORTED_FOO.format(n="1 == 1")
+    assert f"{FILE}::Foo::test_x" in _cross_new_tests(project, old, new)
