@@ -54,11 +54,14 @@ def test_a_closed_file_whose_chmod_is_refused_is_an_error(tmp_path, monkeypatch)
 
 
 def test_a_symlink_entry_is_never_chmodded(tmp_path):
-    victim = tmp_path / "victim"
+    top, outside = tmp_path / "top", tmp_path / "outside"
+    top.mkdir()
+    outside.mkdir()
+    victim = outside / "victim"
     victim.write_text("x\n")
     victim.chmod(0o200)
-    (tmp_path / "link").symlink_to(victim)
-    _entries(tmp_path)
+    (top / "link").symlink_to(victim)
+    assert _entries(top)["link"] == ("link", None)
     assert stat.S_IMODE(victim.stat().st_mode) == 0o200
 
 
