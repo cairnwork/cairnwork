@@ -120,14 +120,14 @@ def test_a_conftest_beside_a_changed_base_file_does_get_the_run(task, monkeypatc
 
 def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, monkeypatch):
     record = _record(task, sys_path=("tests/data/lib.zip",))
-    runs = Runs(monkeypatch, [None, record])  # the first run (with the edited file) gave nothing
+    runs = Runs(monkeypatch, [None, None, record])  # the run, the file alone: nothing
     with pytest.raises(TestCommitRejected) as caught:
         check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
     assert caught.value.code == CODE
     assert runs.targets == [
         ("tests/sib/test_s.py", "tests/test_a.py"),
-        ("tests/test_a.py", "tests/sib/conftest.py"),  # the dropped file's directory picked again
-        ("tests/sib/test_s.py",),  # the dropped file alone: gave nothing, so its text decides
+        ("tests/sib/test_s.py",),  # the file alone: gave nothing, so its text decides
+        ("tests/test_a.py", "tests/sib/conftest.py"),  # the rest, its directory picked again
     ]
 
 
@@ -145,7 +145,7 @@ def test_a_dropped_file_with_a_path_signal_or_no_base_text_is_refused(
     """Fail closed: the rerun saw nothing of a file that may add to sys.path, or cannot be read."""
     if unreadable:
         monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: (_ for _ in ()).throw(OSError()))
-    Runs(monkeypatch, [None, _record(task)])
+    Runs(monkeypatch, [None, None, _record(task)])
     with pytest.raises(TestCommitRejected) as caught:
         check(task, ("tests/test_sig.py" if not unreadable else "tests/sib/test_s.py",))
     assert caught.value.code == CODE
@@ -224,10 +224,10 @@ def test_a_dropped_test_that_was_the_only_one_below_a_conftest_leaves_its_confte
     """Layer1 round 3, 2: the rerun picks again from the tree minus the dropped file."""
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/sib/test_s.py",))
     record = _record(task, sys_path=("tests/data/lib.zip",))
-    runs = Runs(monkeypatch, [None, record])
+    runs = Runs(monkeypatch, [None, None, record])
     with pytest.raises(TestCommitRejected):
         check(task, ("tests/sib/test_s.py", "tests/data/lib.zip"))
-    assert runs.targets[1] == ("tests/conftest.py", "tests/sib/conftest.py")
+    assert runs.targets[2] == ("tests/conftest.py", "tests/sib/conftest.py")
 
 
 @pytest.mark.parametrize(
@@ -236,14 +236,14 @@ def test_a_dropped_test_that_was_the_only_one_below_a_conftest_leaves_its_confte
 )
 def test_each_path_signal_word_in_a_dropped_file_refuses(task, monkeypatch, word):
     monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: f"x = 1  # {word}\n".encode())
-    Runs(monkeypatch, [None, _record(task)])
+    Runs(monkeypatch, [None, None, _record(task)])  # the run, the file alone, the run without it
     with pytest.raises(TestCommitRejected):
         check(task, ("tests/sib/test_s.py",))
 
 
 def test_a_dropped_file_with_no_signal_word_is_accepted(task, monkeypatch):
     monkeypatch.setattr(bfn, "run_git_bytes", lambda *a: b"import no_such_module\n")
-    Runs(monkeypatch, [None, _record(task)])
+    Runs(monkeypatch, [None, None, _record(task)])
     check(task, ("tests/sib/test_s.py",))
 
 
@@ -330,37 +330,18 @@ def test_a_rerun_with_no_tree_file_and_no_conftest_directory_runs_the_test_roots
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/test_a.py",))
     monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ())
     monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    runs = Runs(monkeypatch, [None, _record(task)])
+    runs = Runs(monkeypatch, [None, None, _record(task)])
     check(task, ("tests/test_a.py",))
-    assert runs.targets[1] == ("tests",)
+    assert runs.targets[2] == ("tests",)
 
 
 def test_a_rerun_with_nothing_left_and_no_record_is_not_a_pass_for_a_path_signal(task, monkeypatch):
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: ("tests/test_sig.py",))
     monkeypatch.setattr(bfn, "conftest_dirs", lambda *a: ())
-    Runs(monkeypatch, [None, _record(task)])
+    Runs(monkeypatch, [None, None, _record(task)])
     with pytest.raises(TestCommitRejected) as caught:
         check(task, ("tests/test_sig.py",))
     assert caught.value.code == CODE
-
-
-# #1809 (c): every changed .py file is dropped on the rerun, not only the first MAX_TARGETS
-@pytest.mark.parametrize("count", [bfn.MAX_TARGETS, bfn.MAX_TARGETS + 1, bfn.MAX_TARGETS + 5])
-def test_the_rerun_drops_every_changed_py_file_whatever_their_number(task, monkeypatch, count):
-    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(count))
-    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
-    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
-    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    # main's rerun drops the first MAX_TARGETS; a third run drops every changed file
-    stages = 2 if count <= bfn.MAX_TARGETS else 3
-    runs = Runs(monkeypatch, [None] * (stages - 1) + [_record(task)])
-    check(task, changed)
-    last = runs.targets[stages - 1]
-    assert not set(changed) & set(last)
-    assert "tests/test_a.py" in last
-    # the files a rerun dropped are collected afterwards by runs of their own
-    later = {p for t in runs.targets[stages:] for p in t}
-    assert later == set(changed[: bfn.MAX_TARGETS] if stages == 2 else changed)
 
 
 # #1809: a file the commit deletes is a changed base file for the reach check

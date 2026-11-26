@@ -73,6 +73,17 @@ def _base_paths(task) -> tuple[str, ...] | None:
         return None
 
 
+def _run_targets(tree, dirs, edited, dropped, roots):
+    """What a run names: the edits not dropped, the tree (one file above the cap), and a test file
+    (else the conftest) of every conftest directory, picked again from the tree minus the dropped
+    files."""
+    left = tuple(p for p in tree if p not in dropped)
+    picked = pick_dir_targets(left, dirs) or ()
+    base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
+    named = (*(p for p in edited if p not in dropped), *base, *picked)
+    return tuple(dict.fromkeys(named)) or roots  # roots: the root conftest and ini load
+
+
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
     """(records, complete): the records of the collect-only base runs, or ((), False).
 
@@ -109,13 +120,13 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
                 stages.append((dropped, tag))
             last = dropped
         for dropped, tag in stages:
-            left = tuple(p for p in tree if p not in dropped)
-            picked = pick_dir_targets(left, dirs) or ()
-            base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
-            named = (*(p for p in edited if p not in dropped), *base, *picked)
-            targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest and ini load
+            targets = _run_targets(tree, dirs, edited, dropped, roots)
             # a dropped file is --ignore'd on the rerun, so a lone one cannot break it again
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}", tuple(sorted(dropped)))
+            if record is None and tag == "r" and every:
+                found = _without_unreadable(ctx, task, every, (tree, dirs, edited, roots), run_id)
+                if found is not None:
+                    return found
             if record is None:
                 continue
             # an edited file the run did not name, or dropped, is collected by runs of its own
@@ -127,6 +138,23 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
         return (), False
     return (), False
+
+
+def _without_unreadable(ctx, task, every, shape, run_id):
+    """The first run failed: find the changed files that cannot be collected alone (halving), then
+    run the same targets again with only those ``--ignore``d, so the state the other files set up
+    (an environment value, a path entry, a plugin) is still there. The text signal judges only
+    the files that cannot be collected. None when no changed file is to blame or that run fails."""
+    singles, broken = _collect_all(ctx, task, every, f"{run_id}-b")
+    if not broken:
+        return None
+    targets = _run_targets(*shape[:3], frozenset(broken), shape[3])
+    record = _record_run(ctx, task, targets, f"{run_id}-bf", tuple(sorted(broken)))
+    if record is None:
+        return None
+    unnamed = tuple(p for p in every if p not in broken and p not in targets)
+    more, unread = _collect_all(ctx, task, unnamed, f"{run_id}-bu")
+    return (record, *singles, *more), _quiet(task, (*broken, *unread))
 
 
 MAX_EXTRA_RUNS = 12  # runs for the files the main run did not read; the rest go by text

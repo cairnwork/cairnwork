@@ -66,59 +66,85 @@ def test_uncovered_edited_files_decide_by_their_text(task, monkeypatch, quiet):
     assert asked == [changed[bfn.MAX_TARGETS :]]
 
 
-def test_the_rerun_drops_what_main_dropped_before_it_drops_everything(task, monkeypatch):
-    changed = _over(task, monkeypatch)
-    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 300)
-    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    specs = Specs(monkeypatch, [None, _record(task)])
-    bfn.check_with_base(CTX, task, changed, "r")
-    kept = set(specs.seen[1].targets) & set(changed)
-    assert kept == set(changed[bfn.MAX_TARGETS :])  # no weaker than main's rerun
-    assert set(specs.seen[1].ignore) == set(changed[: bfn.MAX_TARGETS])
+class Smart:
+    """A fake run_verifiers where a run gives no record when it names a ``broken`` file."""
+
+    def __init__(self, monkeypatch, broken, record):
+        self.seen, self.broken, self.record = [], set(broken), record
+        monkeypatch.setattr(bfn, "run_verifiers", self)
+
+    def __call__(self, ctx, commit, specs, run_id, **kwargs):
+        from types import SimpleNamespace
+
+        self.seen.append(specs[0])
+        bad = self.broken & (set(specs[0].targets) - set(specs[0].ignore))
+        rec = None if bad else self.record
+        return (SimpleNamespace(fixture_names=frozenset() if rec else None, collect_record=rec),)
 
 
-def test_the_rerun_ignores_the_dropped_files(task, monkeypatch):
-    changed = ("tests/test_a.py",)
+def test_the_rerun_ignores_only_the_files_that_cannot_be_collected(task, monkeypatch):
+    changed = ("tests/sib/test_s.py", "tests/test_a.py")
     monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
     monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    specs = Specs(monkeypatch, [None, _record(task)])
+    smart = Smart(monkeypatch, {"tests/sib/test_s.py"}, _record(task))
     bfn.check_with_base(CTX, task, changed, "r")
-    assert specs.seen[0].ignore == ()
-    assert specs.seen[1].ignore == changed
+    last = smart.seen[-1]
+    assert last.ignore == ("tests/sib/test_s.py",)
+    assert "tests/test_a.py" in last.targets  # the healthy edit stays named: its state still loads
 
 
-def test_a_dropped_healthy_file_is_found_by_halving_and_can_refuse(task, monkeypatch):
-    """One broken and one healthy dropped file: the pair fails, the healthy one alone is read."""
+@pytest.mark.parametrize("count", [3, bfn.MAX_TARGETS + 5])
+def test_many_edits_with_one_broken_are_found_by_halving_and_the_rest_stay_named(
+    task, monkeypatch, count
+):
+    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(count))
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
     monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
-    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)  # the broken one is quiet
-    seen = Specs(
-        monkeypatch,
-        [None, _record(task), None, None, _record(task, sys_path=("tests/data/lib.zip",))],
-    )
-    changed = ("tests/sib/test_s.py", "tests/test_a.py", "tests/data/lib.zip")
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
+    smart = Smart(monkeypatch, {changed[0]}, _record(task))
+    bfn.check_with_base(CTX, task, changed, "r")
+    full = [s for s in smart.seen if s.ignore == (changed[0],)]
+    assert full and set(changed[1 : bfn.MAX_TARGETS]) <= set(full[0].targets)
+    assert len(smart.seen) <= 2 + 2 * bfn.MAX_EXTRA_RUNS
+
+
+def test_a_healthy_file_next_to_a_broken_one_can_refuse(task, monkeypatch):
+    """The state a sibling sets up is there in the run that ignores only the broken file."""
+    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
+    Smart(monkeypatch, {"tests/sib/test_s.py"}, _record(task, sys_path=("tests/data/lib.zip",)))
     with pytest.raises(TestCommitRejected) as caught:
-        bfn.check_with_base(CTX, task, changed, "r")
+        bfn.check_with_base(
+            CTX, task, ("tests/sib/test_s.py", "tests/test_a.py", "tests/data/lib.zip"), "r"
+        )
     assert caught.value.code == CODE
-    assert [s.targets for s in seen.seen[2:]] == [
-        ("tests/sib/test_s.py", "tests/test_a.py"),
-        ("tests/sib/test_s.py",),
-        ("tests/test_a.py",),
-    ]
+
+
+def test_a_broken_file_decides_by_text_when_the_run_without_it_succeeds(task, monkeypatch):
+    asked = []
+    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
+    monkeypatch.setattr(bfn, "_quiet", lambda t, p: asked.append(tuple(p)) or False)
+    Smart(monkeypatch, {"tests/sib/test_s.py"}, _record(task))
+    with pytest.raises(TestCommitRejected) as caught:
+        bfn.check_with_base(CTX, task, ("tests/sib/test_s.py",), "r")
+    assert caught.value.code == CODE
+    assert asked == [("tests/sib/test_s.py",)]
 
 
 def test_the_extra_runs_are_bounded_and_the_rest_go_by_text(task, monkeypatch):
     monkeypatch.setattr(bfn, "MAX_EXTRA_RUNS", 3)
-    asked = []
-    monkeypatch.setattr(bfn, "_quiet", lambda t, p: asked.append(tuple(p)) or False)
     changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(8))
-    Specs(monkeypatch, [])
-    records, unread = bfn._collect_all(
-        CTX,
-        task,
-        changed,
-        "r",
-    )
+    smart = Smart(monkeypatch, set(changed), _record(task))
+    records, unread = bfn._collect_all(CTX, task, changed, "r")
     assert records == () and set(unread) == set(changed)
+    assert len(smart.seen) == 3  # the bound, not one run per file
+
+
+def test_a_group_that_succeeds_uses_one_run_and_leaves_nothing_unread(task, monkeypatch):
+    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(8))
+    smart = Smart(monkeypatch, set(), _record(task))
+    records, unread = bfn._collect_all(CTX, task, changed, "r")
+    assert len(records) == 1 and unread == () and len(smart.seen) == 1
 
 
 def test_more_changed_py_files_than_the_run_can_name_are_not_taken_as_covered(task, monkeypatch):
