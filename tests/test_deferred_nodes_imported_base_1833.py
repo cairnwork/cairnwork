@@ -66,3 +66,39 @@ def test_a_base_rebound_by_assignment_still_gets_the_cautious_fallback():
     src = "class TestA:\n    def test_a(self):\n        pass\n\n\nBase = make()\n\n\n"
     src += "class TestB(Base):\n    def test_b(self):\n        pass\n"
     assert {"TestB::test_a", "TestB::test_b"} <= _ids(src)
+
+
+PRE = (
+    "import unittest\nfrom helpers import Base\n\n\nclass P(unittest.TestCase):\n"
+    "    def test_p(self):\n        pass\n\n"
+)
+TAIL = "\nclass I(Base):\n    def test_i(self):\n        pass\n"
+REBINDS = {
+    "assign": "Base = make(P)\n",
+    "if-assign": "if True:\n    Base = P\n",
+    "for-target": "for Base in (P,):\n    pass\n",
+    "walrus": "(Base := P)\n",
+    "annotated": "Base: type = make(P)\n",
+    "with-as": "with ctx() as Base:\n    pass\n",
+    "global-write": "def f():\n    global Base\n    Base = P\nf()\n",
+    "class-in-if": "if True:\n    class Base(P):\n        pass\n",
+    "class-in-try": "try:\n    class Base(P):\n        pass\nexcept Exception:\n    pass\n",
+    "class-in-with": "with ctx():\n    class Base(P):\n        pass\n",
+    "class-in-while": "while True:\n    class Base(P):\n        pass\n    break\n",
+    "class-in-match": "match 0:\n    case _:\n        class Base(P):\n            pass\n",
+    "match-capture": "match P:\n    case Base:\n        pass\n",
+    "match-as": "match P:\n    case object() as Base:\n        pass\n",
+    "import-in-if": "if True:\n    from test_self import P as Base\n",
+    "second-import": "from test_self import P as Base\n",
+}
+
+
+@pytest.mark.parametrize("middle", REBINDS)
+def test_an_imported_name_rebound_anywhere_keeps_the_cautious_fallback(middle):
+    assert "I::test_p" in _ids(PRE + REBINDS[middle] + TAIL)
+
+
+@pytest.mark.parametrize("middle", ["print(Base)\n", "Base.attr = 1\n", "x = Base\n", ""])
+def test_a_name_that_is_only_read_stays_import_bound(middle):
+    ids = _ids(PRE + middle + TAIL)
+    assert "I::test_p" not in ids and "I::test_i" in ids
