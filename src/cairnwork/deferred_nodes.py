@@ -112,7 +112,7 @@ def _root_name(base: ast.expr) -> str:
     return base.id if isinstance(base, ast.Name) else ""
 
 
-def _may_collect(node: ast.ClassDef, reach: "_Reach") -> bool:
+def _may_collect(node: ast.ClassDef, reach: _Reach) -> bool:
     """#1833: could pytest collect ``node`` itself? Not a class the file uses as a base or by name
     elsewhere (a shared or abstract base, a mixin: its tests run through its subclasses), not one
     with an ``__init__``/``__new__`` or a ``__test__`` of its own. Only ever withholds the extra

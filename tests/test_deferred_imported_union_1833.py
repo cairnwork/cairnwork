@@ -197,8 +197,9 @@ def test_an_earlier_class_s_tests_stay_listed_under_the_imported_base_class(imp)
 
 
 # A class that pytest would not collect must not get ids of its own (a shared base, a mixin, an
-# abstract base: its tests are run through the subclasses). A false id is a false DEFERRED_TESTS_NOT_RUN
-# for an honest commit that changes the shared test. Each shape must read as main reads it.
+# abstract base: its tests are run through the subclasses). A false id is a false
+# DEFERRED_TESTS_NOT_RUN for an honest commit that changes the shared test. Each shape must
+# read as main reads it.
 SHARED = {
     "abc-base": (
         "from abc import ABC\n\n\nclass Checks(ABC):\n    def test_x(self):\n        pass\n\n\n"
@@ -209,11 +210,13 @@ SHARED = {
         "        pass\n\n\nclass TestA(CommonChecks):\n    pass\n"
     ),
     "base-name-not-test": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n    def test_x(self):\n        pass\n\n\n"
+        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
+        "    def test_x(self):\n        pass\n\n\n"
         "class TestA(Shared):\n    pass\n\n\nclass TestB(Shared):\n    pass\n"
     ),
     "base-through-alias": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n    def test_x(self):\n        pass\n\n\n"
+        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
+        "    def test_x(self):\n        pass\n\n\n"
         "Alias = Shared\n\n\nclass TestA(Alias):\n    pass\n"
     ),
     "dunder-test-false": (
@@ -221,11 +224,13 @@ SHARED = {
         "    def test_x(self):\n        pass\n"
     ),
     "own-init": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n    def __init__(self):\n        pass\n\n"
+        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
+        "    def __init__(self):\n        pass\n\n"
         "    def test_x(self):\n        pass\n"
     ),
     "base-in-subscript-base": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n    def test_x(self):\n        pass\n\n\n"
+        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
+        "    def test_x(self):\n        pass\n\n\n"
         "class TestA(Shared, object):\n    pass\n"
     ),
 }
