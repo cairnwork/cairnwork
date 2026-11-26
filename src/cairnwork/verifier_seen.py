@@ -34,12 +34,24 @@ def _exempt(rows: list, real_paths: Callable) -> set[str]:
     return {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
 
 
+def _without_main(rows: list, drop: int) -> list:
+    """Leave out ``drop`` rows that look like the caller's main run: first those whose parent is
+    not a listed row and not launchd (the harness's own collector), then rows from the end."""
+    if drop <= 0 or len(rows) <= drop:
+        return rows
+    pids = {row[0] for row in rows}
+    out = [i for i, row in enumerate(rows) if row[1] not in pids and row[1] != "1"][:drop]
+    out += [i for i in reversed(range(len(rows))) if i not in out][: drop - len(out)]
+    return [row for i, row in enumerate(rows) if i not in out]
+
+
 def snapshot(
-    user: str, timeout: float, real_paths: Callable | None = None
+    user: str, timeout: float, real_paths: Callable | None = None, drop: int = 0
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(argv entries, reasons) for ``user``'s processes; ((), ()) when ps cannot be read.
     ``timeout`` is the time left to the caller; at most a quarter (and PS_TIMEOUT_SECONDS) is
-    used, so this can never take the time the kill needs."""
+    used, so this can never take the time the kill needs. ``drop`` rows that look like the caller's
+    main run are left out, so the listing is never longer than the count (see _without_main)."""
     try:
         timeout = min(timeout / 4, confined.PS_TIMEOUT_SECONDS)
         flag = ["-x"] if sys.platform == "darwin" else []
@@ -58,7 +70,7 @@ def snapshot(
         skip = _exempt(rows, real_paths) if real_paths else set()  # only what the count includes
         rows = [row for row in rows if row[0] not in skip]
         rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
-        rows = rows[: survivor_argv.MAX_LISTED]
+        rows = _without_main(rows, drop)[: survivor_argv.MAX_LISTED]
         entries = [_entry(row[2], row[3], row[4], row[1], names.get(row[1])) for row in rows]
         return tuple(entries), ((REASON,) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
@@ -73,14 +85,14 @@ def _entry(stat: str, age: str, name: str, ppid: str, parent: str | None) -> str
 
 
 def before_kill(
-    user: str, before: int, deadline: float, real_paths: Callable | None = None
+    user: str, before: int, deadline: float, real_paths: Callable | None = None, main: int = 0
 ) -> tuple[tuple, float]:
     """The snapshot (only if ``before`` > 0) and the caller's deadline moved later by the time it
     took: the diagnostic never uses up the budget the kill needs (#1824 review)."""
     if before <= 0:
         return ((), ()), deadline
     start = time.monotonic()
-    seen = snapshot(user, max(deadline - start, 0.0), real_paths)
+    seen = snapshot(user, max(deadline - start, 0.0), real_paths, main)
     return seen, deadline + (time.monotonic() - start)
 
 

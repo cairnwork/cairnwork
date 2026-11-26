@@ -261,7 +261,7 @@ class VerifierAccount:
         try:
             before = self._escaped_count(deadline, attempts=1)
             seen, deadline = verifier_seen.before_kill(
-                self.user, before, deadline, self._real_paths
+                self.user, before, deadline, self._real_paths, main if before > main else 0
             )
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
