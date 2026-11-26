@@ -243,7 +243,11 @@ def too_broad(top) -> bool:
     for path in dict.fromkeys((spelled, os.path.realpath(spelled))):
         if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
             return True
-        temps = dict.fromkeys((tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())))
+        temps = [
+            t
+            for t in dict.fromkeys((tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())))
+            if _private_temp(t)
+        ]
         if any(_within(path, root) for root in _SHARED_ROOTS) and not any(
             path != t and _within(path, t) for t in temps
         ):  # inside a shared root, only strictly inside this user's temp dir is narrow
@@ -252,6 +256,15 @@ def too_broad(top) -> bool:
             for real in dict.fromkeys((mine, os.path.realpath(mine))):
                 if _within(real, path):
                     return True
+    return False
+
+
+def _private_temp(temp: str) -> bool:
+    """Whether a temp dir (TMPDIR is configurable) has macOS's per-user shape
+    ``/[private/]var/folders/<bucket>/<id>/T``: only then is its inside narrow."""
+    for root in ("/private/var/folders", "/var/folders"):
+        if temp != root and _within(temp, root):
+            return len(os.path.relpath(temp, root).split(os.sep)) >= 3
     return False
 
 

@@ -104,3 +104,8 @@ def test_a_generator_scope_is_read_once_and_still_kills_inside(monkeypatch, kill
     _fake_reads(monkeypatch, deep)
     killed, _, _ = proc_cwd.kill_withheld_in([(7, 7, os.getuid(), {})], iter([deep]), os.getuid())
     assert killed == [7]
+
+
+def test_a_tmpdir_pointing_at_a_shared_root_does_not_open_it(monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", "/private/var/tmp")
+    assert proc_cwd.too_broad("/private/var/tmp/cw")
