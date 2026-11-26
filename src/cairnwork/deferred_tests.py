@@ -25,7 +25,7 @@ from pathlib import Path
 
 from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
-from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
+from cairnwork.deferred_nodes import hidden_tests, local_names, target_ids, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -194,9 +194,7 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     for path in paths:
         if not path.endswith(".py"):
             continue
-        before = _test_functions(repo, f"{base}:{path}", imported=False)  # #1833: main's reading
         tree = _tree(repo, f"{test_commit}:{path}") or _EMPTY
-        after, uncollected = test_functions(tree)
         old = _tree(repo, f"{base}:{path}") or _EMPTY
         if hidden_tests(tree, local) != hidden_tests(old, local):  # #925
             raise TestCommitRejected(
@@ -207,15 +205,15 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
                 " it adds. Define it with a top-level def test_* or in a top-level Test* class",
             )
         deferred_attached.refuse_attached(path, tree, old)  # #994
-        for node_id, body in after.items():
-            if before.get(node_id) != body:
-                if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
-                    raise TestCommitRejected(
-                        "DEFERRED_TESTS_NOT_COLLECTED",
-                        "1 new test: pytest does not collect a test class with __init__"
-                        " or __new__, so no verifier runs it",  # #1186: no name
-                    )
-                found.add(f"{path}::{node_id}")
+        ids, uncollected = target_ids(old, tree)
+        for node_id in ids:
+            if "::" in node_id and node_id.split("::", 1)[0] in uncollected:
+                raise TestCommitRejected(
+                    "DEFERRED_TESTS_NOT_COLLECTED",
+                    "1 new test: pytest does not collect a test class with __init__"
+                    " or __new__, so no verifier runs it",  # #1186: no name
+                )
+            found.add(f"{path}::{node_id}")
     return frozenset(found)
 
 

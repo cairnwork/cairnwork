@@ -108,6 +108,15 @@ def test_functions(
 _Class = tuple[dict[str, str], bool, bool, str]
 
 
+def target_ids(old: ast.Module, new: ast.Module) -> tuple[set[str], frozenset[str]]:
+    """(the node ids the test commit adds or changes in one file, the ``Test*`` classes of the new
+    file pytest does not collect), from the base file's tree and the test commit's. #1833: today
+    the base side reads as main does and the new side with the imported-base addition."""
+    before = test_functions(old, imported=False)[0]
+    after, uncollected = test_functions(new)
+    return {i for i, body in after.items() if before.get(i) != body}, uncollected
+
+
 def _root_name(base: ast.expr) -> str:
     """The leftmost name of ``a.b.c`` (``a``); empty for any other expression. A loop, not
     ``ast.unparse``, which recurses once per level and fails on a deeply nested base."""

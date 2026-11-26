@@ -10,12 +10,9 @@ shape that three earlier review rounds used to defeat a narrower reading is pinn
 import ast
 
 import pytest
-from conftest import commit_change, git
-from test_deferred_tests import make_test_commit
 
 from cairnwork import deferred_nodes
 from cairnwork.deferred_nodes import test_functions as functions_of
-from cairnwork.deferred_tests import ensure_test_commit, new_tests
 
 HEAD = "import sys\nimport unittest\nfrom unittest import mock\n"
 P = "class P(unittest.TestCase):\n    def test_p(self):\n        pass\n\n"
@@ -255,52 +252,87 @@ def test_a_deeply_nested_base_expression_does_not_raise_recursion_error():
     assert "TestI::test_i" in _ids(src)
 
 
-# new_tests compares the base commit's ids with the test commit's. The base side must be read as
-# main reads it (no imported base counts as a possible test case): an id only the union gives on
-# the base side, with the same digest, would cancel main's new id on the test side.
-FILE = "tests/test_cross.py"
-IMPORTED_FOO = (
+# new_tests compares the ids of the base commit with the ids of the test commit, and only the ids
+# the test commit adds or changes are teeth. Pure functions only: no git, no verifier account.
+def _targets(old: str, new: str) -> set[str]:
+    """What new_tests lists for one file, from the two sources (the code under test)."""
+    return set(deferred_nodes.target_ids(ast.parse(old), ast.parse(new))[0])
+
+
+def _main_targets(old: str, new: str) -> set[str]:
+    """What main lists: both commits read without the imported-base addition."""
+    before = functions_of(ast.parse(old), imported=False)[0]
+    after = functions_of(ast.parse(new), imported=False)[0]
+    return {i for i, b in after.items() if before.get(i) != b}
+
+
+def _src(imp: str, body: str, tail: str = "def test_z():\n    assert True\n") -> str:
+    return (
+        "import unittest\nimport pytest\n" + imp + "\n\n"
+        "class Checks(Base):\n    def test_i(self):\n        assert flag()\n\n\n" + body + tail
+    )
+
+
+FROM = "from helpers import Base\n"
+CROSS_NEW = (
+    "import unittest\nfrom helpers import B\n\n\n"
+    "class X(unittest.TestCase):\n    globals()['B'] = unittest.TestCase\n\n\n"
+    "class Foo(B):\n    def test_x(self):\n        assert False\n\n\n"
+    "def test_z():\n    assert False\n"
+)
+CROSS_OLD = (
+    "import unittest\nfrom helpers import B\n\n\nclass Foo(B):\n"
+    "    def test_x(self):\n        assert False\n"
+)
+SINGLE = (
     "import unittest\nfrom helpers import B\n\n\nclass Foo(B):\n"
     "    def test_x(self):\n        assert {n}\n"
 )
-CROSS = {
-    "globals-write-before-foo": (
-        "import unittest\nfrom helpers import B\n\n\n"
-        "class X(unittest.TestCase):\n    globals()['B'] = unittest.TestCase\n\n\n"
-        "class Foo(B):\n    def test_x(self):\n        assert False\n\n\n"
-        "def test_z():\n    assert False\n",
-        "import unittest\nfrom helpers import B\n\n\nclass Foo(B):\n    def test_x(self):\n"
-        "        assert False\n",
+# name -> (old source, new source, exactly these ids, or None when only >= main is required)
+PAIRS = {
+    "comment-only": (_src(FROM, ""), "# note\n" + _src(FROM, ""), set()),
+    "other-test-changed": (
+        _src(FROM, ""),
+        _src(FROM, "", "def test_z():\n    assert 1\n"),
+        {"test_z"},
+    ),
+    "only-a-blank-line": (_src(FROM, ""), _src(FROM, "") + "\n", set()),
+    "import-alias-changed": (
+        _src(FROM, ""),
+        _src("from helpers import Mixin as Base\n", ""),
+        None,
+    ),
+    "single-class-test-changed": (
+        SINGLE.format(n="True"),
+        SINGLE.format(n="1 == 1"),
+        {"Foo::test_x"},
+    ),
+    "cross-globals-write": (CROSS_OLD, CROSS_NEW, {"Foo::test_x", "test_z"}),
+    "new-imported-class-added": (
+        "def test_z():\n    assert True\n",
+        "from helpers import Base\n\n\nclass Checks(Base):\n    def test_i(self):\n"
+        "        assert flag()\n\n\ndef test_z():\n    assert True\n",
+        {"Checks::test_i"},
     ),
 }
 
 
-def _cross_commits(project, old, new):
-    commit_change(project, {FILE: old})
-    base = git(project, "rev-parse", "HEAD")
-    _, tc = make_test_commit(project, {FILE: new})
-    ensure_test_commit(project, tc, origin_url=git(project, "remote", "get-url", "origin"))
-    return base, tc
+@pytest.mark.parametrize("pair", PAIRS)
+def test_new_ids_across_two_commits_are_never_fewer_than_main(pair):
+    old, new, _ = PAIRS[pair]
+    assert _main_targets(old, new) <= _targets(old, new)
 
 
-def _cross_new_tests(project, old, new):
-    base, tc = _cross_commits(project, old, new)
-    return new_tests(project, base, tc, (FILE,))
+@pytest.mark.parametrize("pair", [p for p, v in PAIRS.items() if v[2] is not None])
+def test_new_ids_across_two_commits_are_exactly_the_changed_ones(pair):
+    old, new, want = PAIRS[pair]
+    assert _targets(old, new) == want
 
 
-@pytest.mark.parametrize("shape", CROSS)
-def test_new_tests_across_two_commits_is_never_fewer_than_main(shape, project, monkeypatch):
-    new, old = CROSS[shape]
-    base, tc = _cross_commits(project, old, new)
-    got = new_tests(project, base, tc, (FILE,))
-    with monkeypatch.context() as m:
-        m.setattr(deferred_nodes, "imported_names", lambda tree: frozenset(), raising=False)
-        main = new_tests(project, base, tc, (FILE,))
-    assert main <= got
-    assert f"{FILE}::Foo::test_x" in got and f"{FILE}::test_z" in got
-
-
-def test_a_changed_single_imported_base_class_is_still_a_target(project):
-    old = IMPORTED_FOO.format(n="True")
-    new = IMPORTED_FOO.format(n="1 == 1")
-    assert f"{FILE}::Foo::test_x" in _cross_new_tests(project, old, new)
+@pytest.mark.parametrize("pair", PAIRS)
+def test_an_id_main_does_not_list_must_differ_from_the_base_side_wide_reading(pair):
+    old, new, _ = PAIRS[pair]
+    wide_before = functions_of(ast.parse(old))[0]
+    wide_after = functions_of(ast.parse(new))[0]
+    extra = _targets(old, new) - _main_targets(old, new)
+    assert all(wide_before.get(i) != wide_after[i] for i in extra)
