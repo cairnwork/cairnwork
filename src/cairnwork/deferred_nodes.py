@@ -124,7 +124,9 @@ def _members(
         case = case or last.endswith("TestCase")
         target = base.id if isinstance(base, ast.Name) else ""
         target = (aliases or {}).get(target, target)
-        if target in classes:
+        if target not in classes and ast.unparse(base).split(".")[0] in reach.imported:
+            case = True  # #1833: imported, so no earlier class of this file; pytest may collect it
+        elif target in classes:
             inherited, base_blocked, base_case, _ = classes[target]  # its marks: reach follows it
             blocked, case = blocked or base_blocked, case or base_case
             for name, body in inherited.items():  # every base's: the MRO may pick a later one's
@@ -183,13 +185,21 @@ class _Reach:
         self._dumps: dict[int, str] = {}
         self._found: dict[frozenset[str], str] = {}
         self._read: dict[int, list[str]] = {}
-        rest = []
+        rest, rebound = [], set()
+        self.imported: set[str] = set()  # #1833: bound by an import and by nothing else
         for stmt in tree.body:
             names = _binds(stmt)
+            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+                self.imported |= names
+            else:
+                rebound |= names | {
+                    n.id for n in ast.walk(stmt) if isinstance(n, ast.Name) and n.ctx is ast.Store
+                }
             for name in names:
                 self._by_name.setdefault(name, []).append(stmt)
             if not names or _for_every_test(stmt):
                 rest.append(stmt)
+        self.imported -= rebound
         self.module = self(rest)
 
     def __call__(self, nodes: list) -> str:

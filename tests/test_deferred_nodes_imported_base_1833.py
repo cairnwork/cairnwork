@@ -10,7 +10,9 @@ import pytest
 
 from cairnwork.deferred_nodes import test_functions as functions_of
 
-EARLIER = "import unittest\n\n\nclass P(unittest.TestCase):\n    def test_p(self):\n        pass\n\n"
+EARLIER = (
+    "import unittest\n\n\nclass P(unittest.TestCase):\n    def test_p(self):\n        pass\n\n"
+)
 IMPORTS = {
     "from-import": ("from helpers import Base\n", "Base"),
     "from-import-alias": ("from helpers import Base as B\n", "B"),
