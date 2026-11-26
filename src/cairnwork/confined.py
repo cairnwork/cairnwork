@@ -97,9 +97,8 @@ def _running(pid: int) -> bool:
 
 
 def _wait_unreaped(pid: int, timeout: float | None, stop=None) -> bool:
-    """True if the leader exited within timeout, or ``stop()`` said to end the run first. It is
-    left unreaped (a zombie), so its process group id stays reserved until the group has been
-    signalled (#1163)."""
+    """True if the leader exited within timeout, or ``stop()`` ended the run first. It is left
+    unreaped (a zombie): its group id stays reserved until signalled (#1163)."""
     if stop is None:
         return proc_wait.wait_exited_unreaped(pid, timeout)  # os.waitid, or kqueue (#1549)
     deadline = None if timeout is None else time.monotonic() + timeout
@@ -215,17 +214,17 @@ def sweep_marked(
 ) -> Sweep:
     """SIGKILL the owner's processes whose environment holds var=value, and say what was seen.
 
-    For processes that escaped a run's process group (setsid) and a dead run's workers.
-    Members of skip_group were just sent SIGKILL and are not counted. A process that clears its environment is not found; only a separate
-    uid stops that. ``account``: a worker account the attempt ran as; its processes cannot
-    be inspected, so each one is counted (``Sweep.account``). A table (or an account) that
-    cannot be read is UNLISTED: "may still be running", never "none". A process whose owner
-    cannot be read (Linux: pgid None) may be the owner's or the account's: it is judged as one
-    of the owner's, so a hidden environment keeps it unreadable (#244). ``dispatched``: the
-    attempt's DISPATCHED boot mark; a hidden process started before it is not counted (proc_start).
-    ``cwd_dirs`` (macOS): run directories, realpaths taken before the run could swap one for a
-    symlink (#578); an owner process whose environment macOS withholds is killed ("cwd") when its
-    working directory is inside one (proc_cwd; ``cwd_roots``, ``cwd_since``: #1849). Empty: none.
+    For processes that escaped a run's process group (setsid) and a dead run's workers. Members
+    of skip_group were just sent SIGKILL: not counted. One that clears its environment is not
+    found; only a separate uid stops that. ``account``: the worker account the attempt ran
+    as; its processes cannot be inspected, so each is counted (``Sweep.account``). A table (or
+    an account) that cannot be read is UNLISTED: "may still be running", never "none". A
+    process whose owner cannot be read (Linux: pgid None) is judged one of the owner's, so a
+    hidden environment keeps it unreadable (#244). ``dispatched``: the attempt's DISPATCHED
+    boot mark; a hidden process started before it is not counted (proc_start).
+    ``cwd_dirs`` (macOS): run directories, realpaths taken before the run could swap one for
+    a symlink (#578); an owner process whose environment macOS withholds is killed ("cwd")
+    when its working directory is inside one (``cwd_roots``, ``cwd_since``: #1849).
     """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
@@ -254,8 +253,7 @@ def sweep_marked(
                      + [(p, "cwd") for p in by_cwd[0] + by_cwd[1]]
                      + [(p, "worker-account") for p in held])  # fmt: skip
     killed, denied = killed + by_cwd[0], denied + by_cwd[1]
-    # Linux /proc mounted with hidepid may hide any process, a same-uid one that is not
-    # dumpable included: after killing what it shows, such a look is never "gone".
+    # Linux /proc with hidepid may hide any process: such a look is never "gone".
     hidden_by = _restricted()
     return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held),
                  tuple(held_by), hidden_by, vanished, argv=tuple(seen.items()))  # fmt: skip
