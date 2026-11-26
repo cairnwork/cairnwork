@@ -4,11 +4,15 @@ a harmless change, while anything still there when the grace ends is refused as 
 Seams: ``_escaped_count`` (counts in order), ``_kill_until_clean``, a fake clock on ``va.time``.
 """
 
+import subprocess
 import sys
 import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 import cairnwork.confined as confined
 import cairnwork.verifier_account as va
@@ -189,3 +193,50 @@ def test_an_alive_probe_that_raises_is_a_survivor_not_a_crash(monkeypatch):
     account = _Slow(clock, cost=0.0, answers=[1])
     before, taken, _ = vg.settle(account, 1, vg.Main(1, boom), clock["now"] + 120.0)
     assert (before, taken) == (1, 0)  # main is not taken off: the one process is refused
+
+
+def _helper_account(monkeypatch, run):
+    """A darwin account with one launchd child, so the real-path helper is asked; ``run`` stands
+    in for the helper subprocess."""
+    monkeypatch.setattr(va.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        va.VerifierAccount, "_list", lambda self, deadline=None, attempts=1: [(7, 1)]
+    )
+    monkeypatch.setattr(va.VerifierAccount, "wrap", lambda self, argv, profile, env=None: ["x"])
+    monkeypatch.setattr(va.subprocess, "run", run)
+    return va.VerifierAccount(user="x", root=Path("/tmp/none"))
+
+
+@pytest.mark.parametrize("budget", [0.5, 2.0])
+def test_a_slow_path_helper_is_cut_at_the_recount_cap(monkeypatch, budget):
+    timeouts = []
+
+    def run(argv, **kw):
+        timeouts.append(kw["timeout"])
+        return SimpleNamespace(returncode=0, stdout="")
+
+    acct = _helper_account(monkeypatch, run)
+    acct._escaped_count(time.monotonic() + budget, attempts=1)
+    assert timeouts and all(t <= budget + 0.2 for t in timeouts)
+
+
+@pytest.mark.parametrize("budget", [None, 100.0])
+def test_the_path_helper_keeps_its_old_timeout_when_there_is_room(monkeypatch, budget):
+    timeouts = []
+
+    def run(argv, **kw):
+        timeouts.append(kw["timeout"])
+        return SimpleNamespace(returncode=0, stdout="")
+
+    acct = _helper_account(monkeypatch, run)
+    deadline = None if budget is None else time.monotonic() + budget
+    acct._escaped_count(deadline, attempts=1)
+    assert timeouts and set(timeouts) == {30}
+
+
+def test_a_path_helper_that_hits_the_cap_is_unknown_so_refused(monkeypatch):
+    def run(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, kw["timeout"])
+
+    acct = _helper_account(monkeypatch, run)
+    assert acct._escaped_count(time.monotonic() + 0.5, attempts=1) == -1
