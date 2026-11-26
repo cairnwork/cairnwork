@@ -271,6 +271,7 @@ def _tests_signal_only_their_own_processes(monkeypatch):
     import kill_guard
 
     guard = kill_guard.Guard(os.kill, os.killpg)
+    monkeypatch.setattr(kill_guard, "ACTIVE", [guard])
     monkeypatch.setattr(os, "kill", guard.kill)
     monkeypatch.setattr(os, "killpg", guard.killpg)
     monkeypatch.setattr(subprocess.Popen, "__init__", guard.record(subprocess.Popen.__init__))

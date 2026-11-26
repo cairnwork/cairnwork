@@ -27,7 +27,7 @@ from __future__ import annotations
 import fcntl
 import math
 import os
-import pwd
+import pwd  # noqa: F401 - tests patch verifier_account.pwd (the shared module)
 import subprocess
 import sys
 import tempfile
@@ -131,12 +131,8 @@ class VerifierAccount:
         """
         from cairnwork import pytest_config  # local import keeps the module import-cycle free
 
-        try:
-            uid = pwd.getpwnam(self.user).pw_uid
-        except KeyError:
-            return False
-        if uid in (0, os.getuid()):
-            return False  # kill -9 -1 as root or as the owner would be destructive
+        if not verifier_escape.kill_target_ok(self.user):
+            return False  # kill -9 -1 as root, the owner or an unknown uid is destructive
         py = python or self.python
         policy_file: Path | None = None
         try:

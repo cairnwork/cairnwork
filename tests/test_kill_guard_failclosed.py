@@ -6,7 +6,6 @@ Every real kill is a recorder: nothing is ever signalled.
 import os
 import subprocess
 import sys
-from types import SimpleNamespace
 
 import kill_guard
 import pytest
@@ -24,9 +23,7 @@ def _guard():
 
 def _fake_ps(monkeypatch, rows):
     text = "".join(f"{p} {pp} {pg}\n" for p, (pp, pg) in rows.items())
-    monkeypatch.setattr(
-        subprocess, "run", lambda *a, **k: SimpleNamespace(stdout=text, returncode=0)
-    )
+    monkeypatch.setattr(kill_guard, "_ps", lambda: (0, text))
 
 
 @pytest.mark.parametrize("table", [{}, {FOREIGN: (1, FOREIGN)}])
@@ -40,20 +37,36 @@ def test_a_table_without_this_process_blocks_everything(monkeypatch, table):
     assert sent == []
 
 
-@pytest.mark.parametrize(
-    "ps", [SimpleNamespace(stdout="", returncode=1), SimpleNamespace(stdout="", returncode=0)]
-)
+@pytest.mark.parametrize("ps", [(1, ""), (0, "")])
 def test_a_failed_or_empty_ps_raises(monkeypatch, ps):
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: ps)
+    monkeypatch.setattr(kill_guard, "_ps", lambda: ps)
     with pytest.raises(KillGuardError):
         kill_guard._table()
 
 
-def test_a_hung_ps_raises(monkeypatch):
-    def hang(*a, **k):
-        raise subprocess.TimeoutExpired("ps", 1)
+class _HungPs:
+    returncode = None
 
-    monkeypatch.setattr(subprocess, "run", hang)
+    def __init__(self, *a, **k):
+        self.killed = False
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def communicate(self, timeout=None):
+        if self.killed:
+            return "", ""
+        raise subprocess.TimeoutExpired("ps", timeout)
+
+    def kill(self):
+        self.killed = True
+
+
+def test_a_hung_ps_raises(monkeypatch):
+    monkeypatch.setattr(kill_guard, "_REAL_POPEN", _HungPs)
     with pytest.raises(KillGuardError):
         kill_guard._table()
 

@@ -163,7 +163,12 @@ def escaped_count(
 def kill_target_ok(user: str) -> bool:
     """True only when ``user`` is a known account that is neither root nor the caller (#1849).
     ``sudo -u <user> kill -9 -1`` ends every process of that uid: for root or for the caller
-    that is the whole desktop, and an unknown uid cannot be told apart from either."""
+    that is the whole desktop, and an unknown uid cannot be told apart from either.
+
+    This is a refusal list, not a positive allow-list: a system account's uid passes it. The
+    real limit on who can be signalled is the sudoers rule for the verifier accounts. A positive
+    condition (name is a configured verifier account) is not possible here: ``verifier_select``
+    imports this module (cycle) and callers and tests use other account names."""
     try:
         uid = pwd.getpwnam(user).pw_uid
     except KeyError:

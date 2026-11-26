@@ -7,6 +7,8 @@ import sys
 import time
 from pathlib import Path
 
+import kill_guard
+
 import cairnwork.post_verified as post_verified
 
 
@@ -83,7 +85,7 @@ def _assert_gone(pid: int) -> None:
 
 
 def _cleanup(proc: subprocess.Popen, *pids: int) -> None:
-    for pid in pids:
+    for pid in map(kill_guard.adopt, pids):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -201,7 +203,7 @@ def test_runner_timeout_kills_setpgid_grandchild(tmp_path):
     finally:
         if pid:
             try:
-                os.kill(pid, signal.SIGKILL)
+                os.kill(kill_guard.adopt(pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
 

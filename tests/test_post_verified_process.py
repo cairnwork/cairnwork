@@ -7,6 +7,7 @@ import subprocess
 import sys
 import time
 
+import kill_guard
 import pytest
 from test_post_verified import _hook
 
@@ -62,6 +63,7 @@ def test_an_existing_private_log_is_appended_to(tmp_path):
 
 
 def _gone(pid, within=10):
+    kill_guard.adopt(pid)  # a detached descendant of this test's own run
     deadline = time.monotonic() + within
     while time.monotonic() < deadline:
         try:
@@ -96,7 +98,7 @@ def test_a_detached_descendant_cannot_hold_settlement(tmp_path, monkeypatch):
         child = tmp_path / "child"
         if child.exists():
             with contextlib.suppress(ProcessLookupError, ValueError):
-                os.kill(int(child.read_text()), 9)
+                os.kill(kill_guard.adopt(int(child.read_text())), 9)
 
 
 def test_output_that_is_not_utf8_is_still_recorded(tmp_path):

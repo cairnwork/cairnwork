@@ -15,6 +15,7 @@ import signal
 import subprocess
 import time
 
+import kill_guard
 import pytest
 from agy_receipt_lines import WORKER, good_run, status
 from test_agy_worker import TASK, attempt, expire_once_ready, fake_agy
@@ -95,19 +96,29 @@ def test_a_marked_survivor_the_kill_cannot_reach_fences_the_run(tmp_path, monkey
         monkeypatch.undo()
         if pid_file.exists():
             try:
-                os.kill(int(pid_file.read_text()), signal.SIGKILL)
+                os.kill(kill_guard.adopt(int(pid_file.read_text())), signal.SIGKILL)
             except ProcessLookupError:
                 pass
 
 
-def test_a_clean_sweep_after_a_kill_still_succeeds(tmp_path):
+def test_a_clean_sweep_after_a_kill_still_succeeds(tmp_path, monkeypatch):
     """The fix must not fence an escaped process the sweep did kill (shown gone twice)."""
+    pid_file = tmp_path / "escaped.pid"
     agy = fake_agy(
         tmp_path,
         "import subprocess\n"
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
-        " start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)",
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        " start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))",
     )
+    guarded_kill = os.kill
+
+    def kill(pid, sig):  # the escaped process is this test's own: its pid file names it
+        if pid_file.exists() and pid == int(pid_file.read_text()):
+            kill_guard.adopt(pid)
+        return guarded_kill(pid, sig)
+
+    monkeypatch.setattr(confined.os, "kill", kill)
     started = time.monotonic()
     AgyWorker(agy=agy).run(_workdir(tmp_path, 4), TASK)
     assert time.monotonic() - started < 30
