@@ -230,9 +230,33 @@ def _respelled(path: str, want: str) -> str | None:
 
 
 def _named(name: str, paths: Iterable[str], exact: frozenset[str] | None = None) -> str | None:
-    """A changed or added file that the dotted ``name`` can import: ``a/b.py``, ``a/b/__init__.py``
-    or (when ``a/b`` is a package) any ``.py`` below it, under any leading directory, matched on
-    whole path parts. A bytecode file counts as its source."""
+    """A changed or added file that the dotted ``name`` can import. Main's verdict (``_named_main``)
+    is kept as it was and ``_named_more`` can only add a refusal: never wider than main."""
+    paths = tuple(paths)
+    return _named_main(name, frozenset(paths), exact) or _named_more(name, paths, exact)
+
+
+def _named_main(name: str, changed: frozenset[str], exact: frozenset[str] | None = None):
+    """A changed file that the dotted ``name`` can import: ``a/b.py`` or ``a/b/__init__.py``
+    under any leading directory, matched on whole path parts (main's rule, unchanged)."""
+    if not name or any(not part.isidentifier() for part in name.split(".")):
+        return None
+    tail = "/".join(name.split("."))
+    for want in (f"{tail}.py", f"{tail}/__init__.py"):
+        for path in sorted(changed):
+            if path == want or path.endswith("/" + want):
+                return None if PurePosixPath(path).name == "conftest.py" else path
+            folded = _key(path)
+            if folded == _key(want) or folded.endswith("/" + _key(want)):
+                spelled = path[: len(path) - len(want)] + want  # the exact spelling, in that place
+                if exact is None or spelled not in exact:
+                    return None if PurePosixPath(path).name == "conftest.py" else path
+    return None
+
+
+def _named_more(name: str, paths: Iterable[str], exact: frozenset[str] | None = None):
+    """What main's rule does not see: a bytecode file as its source, a ``.py`` below ``a/b`` when
+    that is a package, a spelling variant compared per path part. Only adds refusals."""
     if not name or any(not part.isidentifier() for part in name.split(".")):
         return None
     tail = "/".join(name.split("."))

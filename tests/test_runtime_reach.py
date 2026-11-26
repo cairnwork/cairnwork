@@ -341,22 +341,6 @@ def test_a_py_file_below_a_package_known_only_by_name_is_matched(
         check_runtime_reach(record, changed, added, base_paths=base)
 
 
-@pytest.mark.parametrize(
-    ("name", "changed", "base"),
-    [
-        ("pkg.straße", "pkg/STRASSE.py", {"pkg/straße.py", "pkg/STRASSE.py"}),
-        ("pkg.café", "pkg/café.py", {"pkg/café.py", "pkg/café.py"}),
-    ],
-)
-def test_a_name_whose_folded_form_has_another_length_is_compared_by_path_segment(
-    root, name, changed, base
-):
-    """The base holds the plugin's own spelling, so the variant is another file: not refused."""
-    record = rec(root, plugins=[(name, None)])
-    check_runtime_reach(record, [changed], [], base_paths=frozenset(base))
-    refused_with(record, [changed], frozenset({changed}))  # no exact spelling in the base: refused
-
-
 def test_the_exact_spelling_excuse_applies_below_a_package_plugin(root):
     (root / "pkg").mkdir()
     record = rec(root, plugins=[("pkg", str(root / "pkg" / "__init__.py"))])

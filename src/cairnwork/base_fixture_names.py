@@ -109,11 +109,21 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
             targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest, the ini
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}", tuple(sorted(dropped)))
             if record is not None:
-                more = _collect_all(ctx, task, tuple(p for p in every if p not in targets), run_id)
-                return (record, *more), not dropped or _quiet(task, edited)
+                complete = not dropped or _quiet(task, edited)
+                return _with_extras(ctx, task, record, complete, every, targets, run_id)
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
         return (), False
     return (), False
+
+
+def _with_extras(ctx, task, record, complete: bool, every, targets, run_id: str):
+    """The main record always survives: a fault in the extra runs leaves it alone and only marks
+    the result incomplete (fail closed)."""
+    try:
+        more = _collect_all(ctx, task, tuple(p for p in every if p not in targets), run_id)
+    except Exception:  # noqa: BLE001 - the primary record is already in hand
+        return (record,), False
+    return (record, *more), complete
 
 
 MAX_EXTRA_RUNS = 12  # runs for the changed files the first run did not name
