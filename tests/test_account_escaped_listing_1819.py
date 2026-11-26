@@ -77,7 +77,7 @@ def _acct(monkeypatch, before, left, snap=(("sleep S 00.01",), ("account-escaped
         va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: before
     )
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, n, d: left)
-    monkeypatch.setattr(vs, "snapshot", lambda user, timeout: snap)
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, **kw: snap)
     return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
 
 
@@ -104,7 +104,7 @@ def test_reap_with_nothing_counted_carries_no_listing(monkeypatch):
 def test_the_snapshot_is_not_taken_when_nothing_is_running(monkeypatch):
     calls = []
     acct = _acct(monkeypatch, 0, 0)
-    monkeypatch.setattr(vs, "snapshot", lambda u, t: calls.append(u) or ((), ()))
+    monkeypatch.setattr(vs, "snapshot", lambda u, t, **kw: calls.append(u) or ((), ()))
     acct.reap()
     assert calls == []
 
@@ -143,7 +143,9 @@ def test_snapshot_is_taken_before_the_kill(monkeypatch):
     monkeypatch.setattr(
         va.VerifierAccount, "_kill_until_clean", lambda self, n, d: order.append("kill") or 0
     )
-    monkeypatch.setattr(vs, "snapshot", lambda user, timeout: order.append("snap") or ((), ()))
+    monkeypatch.setattr(
+        vs, "snapshot", lambda user, timeout, **kw: order.append("snap") or ((), ())
+    )
     acct.reap()
     assert order == ["snap", "kill"]
 
@@ -215,3 +217,56 @@ def test_ps_argv_has_x_on_darwin_only(monkeypatch):
     """The platform branch of verifier_seen (macOS needs -x to list other sessions' processes)."""
     assert "-x" in _argv_of(monkeypatch, "darwin")
     assert "-x" not in _argv_of(monkeypatch, "linux")
+
+
+def test_a_non_ascii_or_overlong_ppid_is_not_listed(monkeypatch):
+    rows = "5 \u0663 S 00:01 sleep\n6 12345678901 S 00:01 sleep\n7 1 S 00:01 sleep\n"
+    argv, _ = _snap(monkeypatch, rows)
+    assert len(argv) == 1 and "ppid=1/" in argv[0]
+    assert all("\u0663" not in line and "12345678901" not in line for line in argv)
+
+
+def test_entries_are_built_only_for_the_listed_rows(monkeypatch):
+    built = []
+    real = vs._entry
+    monkeypatch.setattr(vs, "_entry", lambda *a: built.append(a) or real(*a))
+    rows = "".join(f"{n} 1 S 00:01 sleep\n" for n in range(100, 120))
+    argv, _ = _snap(monkeypatch, rows)
+    assert len(built) == sa.MAX_LISTED == len(argv)
+
+
+EXEMPT = "/usr/libexec/exempt"
+
+
+def _acct_rows(monkeypatch, before, main, rows):
+    """reap() with a real snapshot over ``rows``; pid 10 is a launchd child that is exempt."""
+    monkeypatch.setattr(vs.subprocess, "run", _fake_run(rows))
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda s, d=None, attempts=1: before)
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda s, n, d: 0)
+    monkeypatch.setattr(
+        va.VerifierAccount, "_real_paths", lambda s, pids: {p: (1.0, EXEMPT) for p in pids}
+    )
+    monkeypatch.setattr(vs.sys, "platform", "darwin")
+    monkeypatch.setattr(vs.verifier_escape, "is_exempt", lambda path, ppid: path == EXEMPT)
+    return va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
+
+
+def test_a_non_exempt_leftover_is_still_listed(monkeypatch):
+    got = _acct_rows(monkeypatch, 1, 0, "20 15 S 00:01 python\n")
+    assert got == 1 and got.argv and "python" in got.argv[0] and "account-escaped" in got.reasons
+
+
+def test_an_exempt_daemon_is_not_listed_with_a_counted_process(monkeypatch):
+    got = _acct_rows(monkeypatch, 1, 0, "10 1 S 00:09 launchd_thing\n20 15 S 00:01 python\n")
+    assert got == 1 and len(got.argv) == 1 and "python" in got.argv[0]
+    assert all("launchd_thing" not in line for line in got.argv)
+
+
+def test_only_an_exempt_daemon_left_gives_no_listing(monkeypatch):
+    got = _acct_rows(monkeypatch, 0, 0, "10 1 S 00:09 launchd_thing\n")
+    assert got == 0 and got.argv == () and got.reasons == ()
+
+
+def test_only_the_callers_main_left_is_not_listed_as_escaped(monkeypatch):
+    got = _acct_rows(monkeypatch, 1, 1, "20 15 S 00:01 python\n")
+    assert got == 0 and got.argv == () and "account-escaped" not in got.reasons
