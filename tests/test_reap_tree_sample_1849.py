@@ -8,11 +8,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
 from cairnwork import confined
-from cairnwork.verifier_account import VerifierAccount
+from cairnwork.verifier_account import DEFAULT_ROOT, VerifierAccount
 
 pytestmark = [pytest.mark.verifier_account]
 
@@ -45,18 +46,33 @@ def test_sample_the_accounts_tree_right_after_main_exits(tmp_path, record_proper
 
     # Never "/": execute's cwd is the leftover sweep's scope, and "/" made it SIGKILL every
     # env-withheld process of the owner (Chrome, Terminal, Apple agents) on macOS (M5 P0 11/26).
-    # A fresh world-readable dir the verifier account can enter keeps the sweep to this run.
-    work = os.path.realpath(tempfile.mkdtemp(prefix="cw1849-", dir="/private/tmp"))
-    os.chmod(work, 0o755)  # noqa: S103 - the verifier account must be able to enter it
+    # A fresh dir under the verifier account's own runs base (the account can enter it; macOS
+    # confined.execute wants a narrow root there, cwd strictly below it) keeps the sweep to
+    # this run.
+    runs = DEFAULT_ROOT / "runs"
+    if not os.access(runs, os.W_OK | os.X_OK):
+        pytest.skip(f"{runs} is not writable here: no narrow root the verifier account can enter")
+    root = os.path.realpath(tempfile.mkdtemp(prefix="cw1849-", dir=runs))
+    work = os.path.join(root, "work")
+    os.mkdir(work)
+    for d in (root, work):
+        os.chmod(d, 0o750)  # group (cairnwork, setgid) can enter; never "/"
     try:
         with account.exclusive():
             account.require_idle()
             argv = account.wrap([account.python, "-c", COLLECT_LIKE], None, env)
             code, timed_out, left = confined.execute(
-                argv, work, env, 60, tmp_path / "log", reap=reap, pgrp=True
+                argv,
+                work,
+                env,
+                60,
+                tmp_path / "log",
+                reap=reap,
+                pgrp=True,
+                scope_roots=(Path(root),),
             )
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(root, ignore_errors=True)
     text = "\n".join(taken["tree"]) or "(empty)"
     print(
         f"\n#1849 group={taken['group']} main={taken['main']} exit={code} left={int(left)}\n{text}"
