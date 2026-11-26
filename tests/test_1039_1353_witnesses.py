@@ -35,7 +35,7 @@ PINS = {
     "tests/pra1353_runner.py": "e009c2b30f7cadd05ec5b990aaabded8c5bb9e8733f524e39011c4d2d02bc385",
     "tests/pra1353_gate.py": "88282f8e1f4312edfb9e30eb6925eeb899e76204f95ad0be94709feea8bd1dc4",
     "tests/pra1353_seal.py": "7a9a5378172308ad8b1f5cc3247d0fa4a2b83ab7d99b0f1868433c19715a0ec8",
-    "tests/xdist_groups.py": "f25d2963ffb9125fd00da9d32823b841fdfa6b79fb1deac5c3907ed4347f02e9",
+    "tests/xdist_groups.py": "700e7bf49560f9006faed9fbcbf3d6226a3ca466eee4bbe83b1ec2a4c61f9044",
     "tests/test_1039_1353_recipes.py": "a11e647deef2d050dc75506595d9a889a08b70e84287153da420f56aa9f4a4d5",
     "tests/test_1039_1353_static.py": "0fc8b3428e5d312a396c4c74c4365933ea15577a0f762bee759d2342b82cf76d",
 }
