@@ -96,7 +96,7 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
     ]
     if not named:
         return
-    tree: set[str] = set()
+    tree: dict[str, str] = {}
     try:
         tree = _tree_paths(repo, candidate)
         roots = _pythonpath_dirs(repo, candidate, tree)  # None: may name any directory
