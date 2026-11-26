@@ -5,7 +5,10 @@ Before the kill there is exactly ONE raw read: a bounded ps whose text is kept u
 deadline moves by that read's elapsed time (itself bounded by the ps timeout) and by nothing else.
 After the kill finishes, result() parses it, filters launchd daemons the count exempts (path
 lookup, signature checks), sorts, drops the caller's main run and builds the entries, inline and
-within BUDGET seconds of its own; past it the reasons say ``listing=incomplete`` and
+within BUDGET seconds of its own (the path lookup has its own, separate ps-style timeout, so the
+phase can exceed BUDGET by that); the raw text is first cut to MAX_RAW_LINES lines and
+MAX_RAW_CHARS characters, which bounds every later step; a cut, or a malformed row, says
+``listing=incomplete``. Past the budget the reasons say ``listing=incomplete`` and
 ``exempt=unknown``. Every word shown comes from survivor_argv.prefix() (allow-list, delimiters
 replaced, cut) or from a strict pattern, so nothing a candidate chose is shown. A failure here
 yields no listing and never changes the count, the verdict or the kill's deadline.
@@ -17,7 +20,8 @@ is never changed. The caller's main run is found by identity (a row whose parent
 account's ps output and not launchd). If main's own parent is a process of the account, or is
 launchd, it is not recognised: nothing is dropped and ``main=unresolved`` is said. The path lookup
 runs after the kill, so a daemon that is already gone has no path record: ``exempt=unknown`` and
-the listing is not cut to the count.
+the listing is not cut to the count. A pid reused between the two reads only changes the listing
+text (a name or parent shown), never the count or the verdict.
 """
 
 from __future__ import annotations
@@ -37,6 +41,8 @@ BUDGET = 10.0  # seconds: the pre-kill ps read, and apart from it the whole post
 _MAX = survivor_argv.MAX_LISTED
 _STAT = re.compile(r"[A-Za-z+<>]{1,5}")
 _PPID_DIGITS = 10
+MAX_RAW_LINES = 5000  # the raw ps text is cut to this many lines before any parsing
+MAX_RAW_CHARS = 1_000_000
 _AGE = re.compile(r"[0-9]{1,3}(-[0-9]{2})?(:[0-9]{2}){1,2}")
 
 
@@ -44,16 +50,29 @@ def _plain_ppid(text: str) -> bool:
     return text.isascii() and text.isdigit() and len(text) <= _PPID_DIGITS
 
 
-def _parse(raw: str, stop: float) -> list | None:
-    """The rows of one ps text, or None when ``stop`` (a time.monotonic value) passed meanwhile."""
-    rows = []
+def _cap(raw: str) -> tuple[str, bool]:
+    """(the text cut to the fixed limits, whether something was cut). Splitting with a maximum
+    leaves the rest unsplit, so the work done is bounded by the limits, not by the table."""
+    cut = len(raw) > MAX_RAW_CHARS
+    lines = raw[:MAX_RAW_CHARS].split("\n", MAX_RAW_LINES + 1)
+    if len(lines) > MAX_RAW_LINES + 1:
+        return "\n".join(lines[:MAX_RAW_LINES]), True
+    return "\n".join(lines), cut
+
+
+def _parse(raw: str, stop: float) -> tuple[list, bool] | None:
+    """(rows, whether a non-blank line was malformed) of one ps text, or None when ``stop`` (a
+    time.monotonic value) passed meanwhile."""
+    rows, bad = [], False
     for line in raw.split("\n"):
         if time.monotonic() >= stop:
             return None
         parts = line.split(None, 4)
-        if len(parts) == 5 and parts[0].isdigit() and _plain_ppid(parts[1]):
+        if len(parts) == 5 and _plain_ppid(parts[0]) and _plain_ppid(parts[1]):
             rows.append(parts)
-    return rows
+        elif parts:
+            bad = True
+    return rows, bad
 
 
 def _exempt(rows: list, real_paths: Callable, stop: float) -> tuple[set[str], bool]:
@@ -140,9 +159,11 @@ def _listing(
 ) -> survivor_argv.Survivors:
     stop = time.monotonic() + BUDGET
     late = (REASON, UNKNOWN, INCOMPLETE, f"main={main}")  # out of time: said, nothing guessed
-    rows = _parse(raw, stop)
-    if rows is None:
+    raw, cut = _cap(raw)
+    parsed = _parse(raw, stop)
+    if parsed is None:
         return survivor_argv.Survivors(count, (), late)
+    rows, bad = parsed
     names = {row[0]: row[4] for row in rows}
     skip, unknown = _exempt(rows, real_paths, stop) if real_paths else (set(), False)
     if time.monotonic() >= stop:
@@ -159,7 +180,7 @@ def _listing(
     notes = (
         *(() if certain else (UNRESOLVED,)),
         *((UNKNOWN,) if unknown else ()),
-        *((INCOMPLETE,) if len(rows) > _MAX or len(entries) != count else ()),
+        *((INCOMPLETE,) if cut or bad or len(rows) > _MAX or len(entries) != count else ()),
     )
     return survivor_argv.Survivors(
         count, tuple(entries[:count] if sure else entries), (REASON, *notes, f"main={main}")
