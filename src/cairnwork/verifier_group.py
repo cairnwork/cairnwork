@@ -41,21 +41,36 @@ def _members(user: str, group: int, timeout: float) -> int | None:
     return count
 
 
-def wait_clear(user: str, group: int, main: int, deadline: float) -> None:
-    """Return when the group has at most ``main`` members (the collector, if still running), the
-    cap or ``deadline`` (a time.monotonic value shared with reap) passed, or a lookup failed."""
+def wait_clear(user: str, group: int, main: int, budget: float) -> int | None:
+    """Wait until the group has at most ``main`` members (the collector, if still running), the
+    cap or ``budget`` seconds (what is left of reap's probe deadline) passed, or a lookup failed.
+    Returns how many processes the group held at the first look (None: no look was made), so the
+    caller can keep what was outside it: a process outside the group that vanishes during the
+    wait must still be counted, or the wait would let a run pass that main refuses."""
     if group <= 0:  # no group given: no wait, behaviour as before
-        return
-    budget = min(CAP_SECONDS, deadline - time.monotonic())
+        return None
+    limit = min(CAP_SECONDS, budget)
     start = _now()
+    first = None
     while True:
-        left = budget - (_now() - start)
+        left = limit - (_now() - start)
         if left <= 0:
-            return
+            return first
         found = _members(user, group, min(left, PS_TIMEOUT_SECONDS))
+        if first is None:
+            first = found
         if found is None or found <= main:
-            return
-        left = budget - (_now() - start)
+            return first
+        left = limit - (_now() - start)
         if left <= 0:
-            return
+            return first
         _sleep(min(POLL_SECONDS, left))
+
+
+def settle(account, group: int, main: int, deadline: float) -> int:
+    """#1849: the wait for the group, and what stood outside it when the wait began. The count
+    (``_escaped_count``); that count is never lower than the processes outside the group
+    at the first look, even if they vanished during the wait (they were not the collector's)."""
+    first = account._escaped_count(deadline, attempts=1) if group > 0 else -1
+    held = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0))
+    return 0 if held is None or first < 0 else max(first - max(held, main), 0)
