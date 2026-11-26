@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 GRACE_SECONDS = 2.0
 GRACE_INTERVAL = 0.25
+MIN_LEFT = 0.05  # below this much of the cap a recount has no budget and would read as unknown
 
 
 class Main(int):
@@ -54,9 +55,10 @@ def settle(account, before: int, main: int, deadline: float):
     while True:
         if taken and not _is_alive(alive):
             taken = 0  # nothing of ours is left to take off: anything counted is a survivor
-        if before - taken <= 0 or time.monotonic() - start >= GRACE_SECONDS:
-            break  # nothing beyond main (or unknown: -1), or the cap is spent
-        time.sleep(GRACE_INTERVAL)
+        left = GRACE_SECONDS - (time.monotonic() - start)
+        if before - taken <= 0 or left < MIN_LEFT:
+            break  # nothing beyond main (or unknown: -1), or the cap is spent: keep the last count
+        time.sleep(min(GRACE_INTERVAL, left / 2))  # always leave the recount some budget
         cap = min(deadline, start + GRACE_SECONDS)
         before = account._escaped_count(cap, attempts=1)  # noqa: SLF001 - same package
     return before, taken, deadline + min(time.monotonic() - start, GRACE_SECONDS)
