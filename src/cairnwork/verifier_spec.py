@@ -22,6 +22,7 @@ from cairnwork.module_inventory import importable_names as _importable_names
 from cairnwork.namespace_shadow import import_name as _import_name
 from cairnwork.namespace_shadow import is_init_file as _is_init_file
 from cairnwork.namespace_shadow import namespace_shadows
+from cairnwork.refusal_types import _shown_detail
 from cairnwork.sealed_packages import sealed_packages
 
 _OPTIONS = {("-q",), ("-p", "no:cacheprovider")}
@@ -46,7 +47,7 @@ class VerifierRejected(Exception):
     code = "VERIFIER_NOT_ALLOWED"
 
     def __init__(self, detail: str) -> None:
-        super().__init__(f"{self.code}: {detail}")
+        super().__init__(f"{self.code}: {_shown_detail(detail)}")
 
 
 @dataclass(frozen=True)

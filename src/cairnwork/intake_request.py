@@ -18,6 +18,7 @@ from typing import Any
 from cairnwork.issue_task import RequestUnreadable
 from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
+from cairnwork.refusal_types import _shown_detail
 from cairnwork_protocol.ids import ID_RULE, core_ids
 
 _DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW  # requests/ itself, never a symlink
@@ -39,7 +40,7 @@ FIELDS = frozenset(
 
 class IntakeRefused(Exception):
     def __init__(self, code: str, detail: str = "") -> None:
-        super().__init__(f"{code}: {detail}")
+        super().__init__(f"{code}: {_shown_detail(detail)}")
         self.code = code
         self.detail = detail
 
