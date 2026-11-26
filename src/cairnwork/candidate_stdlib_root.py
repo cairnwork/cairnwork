@@ -77,7 +77,8 @@ _STDLIB = frozenset(
         "zipapp zipfile zipimport zlib zoneinfo "
     ).split()
 )
-_NAMES = frozenset(n.casefold() for n in _STDLIB | _ALWAYS_SHADOW)
+# conftest is not a real module: adding one replaces nothing, so it is judged by the old rules
+_NAMES = frozenset(n.casefold() for n in _STDLIB | (_ALWAYS_SHADOW - {"conftest"}))
 _MODULE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
 _CONFIGS = frozenset({"pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"})
 _PATH_KEYS = frozenset({"pythonpath", "python_paths"})
