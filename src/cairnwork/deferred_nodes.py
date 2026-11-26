@@ -18,8 +18,10 @@ tests, so the base run refuses it, DEFERRED_TESTS_NOT_RUN).
 inherited the same way. pytest does not collect such a class (it warns and runs none of its
 tests), so a target naming the file still runs none of them. A ``unittest.TestCase`` subclass with
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
-commit with one is refused, never wrongly accepted. Bases imported from another module are not
-read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
+commit with one is refused, never wrongly accepted. A base imported from another module is
+not read, but a class with one is a possible test case (#1833: its own ids are added to the
+cautious reading's, none dropped); custom ``python_functions``/``python_classes`` settings are not
+read either. A class's decorators are
 part of each of its tests, and so are (#968, #979) its whole class less its ``test*`` methods
 (bases, keywords and metaclass, ``pytestmark``, attributes, flags, helper and setup methods)
 and the same of each base class defined earlier in the file; every module-level statement that
@@ -53,6 +55,7 @@ from collections.abc import Container
 from pathlib import Path
 
 from cairnwork.deferred_aliases import class_aliases
+from cairnwork.deferred_imports import imported_names
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
@@ -111,7 +114,11 @@ def _members(
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
     subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: the
     class less its ``test*`` methods, with what it reads in turn, so each base class defined
-    earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979)."""
+    earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979).
+    #1833: a base bound by a top-level import (``reach.imported``) also makes the class a possible
+    test case, and nothing else changes: the unresolved-base reading below still applies, so the
+    ids are main's plus the class's own, never fewer, whatever the file does to the base at run
+    time (a narrower reading would have to prove no run-time write reaches the base)."""
     methods = {
         item.name: ast.dump(item) + reach(item.decorator_list)
         for item in node.body
@@ -124,6 +131,8 @@ def _members(
         case = case or last.endswith("TestCase")
         target = base.id if isinstance(base, ast.Name) else ""
         target = (aliases or {}).get(target, target)
+        if target not in classes and ast.unparse(base).split(".")[0] in reach.imported:
+            case = True  # #1833: imported, so pytest may collect it: its own ids are targets too
         if target in classes:
             inherited, base_blocked, base_case, _ = classes[target]  # its marks: reach follows it
             blocked, case = blocked or base_blocked, case or base_case
@@ -183,6 +192,7 @@ class _Reach:
         self._dumps: dict[int, str] = {}
         self._found: dict[frozenset[str], str] = {}
         self._read: dict[int, list[str]] = {}
+        self.imported = imported_names(tree)  # #1833
         rest = []
         for stmt in tree.body:
             names = _binds(stmt)
