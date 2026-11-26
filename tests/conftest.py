@@ -262,3 +262,15 @@ def _configure_task_origin_from_test_fixture(monkeypatch):
         original(task, *args, **kwargs)
 
     monkeypatch.setattr(TaskSpec, "__init__", init)
+
+
+@pytest.fixture(autouse=True)
+def _tests_signal_only_their_own_processes(monkeypatch):
+    """#1849: os.kill / os.killpg with a non-zero signal reach only this test's own processes
+    (see kill_guard). A test that fakes them itself replaces the guard for its own duration."""
+    import kill_guard
+
+    guard = kill_guard.Guard(os.kill, os.killpg)
+    monkeypatch.setattr(os, "kill", guard.kill)
+    monkeypatch.setattr(os, "killpg", guard.killpg)
+    monkeypatch.setattr(subprocess.Popen, "__init__", guard.record(subprocess.Popen.__init__))

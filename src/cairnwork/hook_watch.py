@@ -64,6 +64,9 @@ def _kill_session(*, kill_group: bool = True, budget: float = 3.0) -> None:
             break
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     if kill_group:
+        # killpg(0) is THIS process's group. Safe only because hook_watch is never imported: it
+        # is started as a script by post_verified._run with start_new_session=True, so its group
+        # is its own session (#1849). Do not call _kill_session from any other entry point.
         os.killpg(0, signal.SIGKILL)
 
 

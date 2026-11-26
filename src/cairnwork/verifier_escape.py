@@ -19,6 +19,8 @@ confirming list is outside what one snapshot can show.
 
 from __future__ import annotations
 
+import os
+import pwd
 import subprocess
 from collections.abc import Callable
 
@@ -156,3 +158,14 @@ def escaped_count(
                 return 0
         procs = again
     return -1
+
+
+def kill_target_ok(user: str) -> bool:
+    """True only when ``user`` is a known account that is neither root nor the caller (#1849).
+    ``sudo -u <user> kill -9 -1`` ends every process of that uid: for root or for the caller
+    that is the whole desktop, and an unknown uid cannot be told apart from either."""
+    try:
+        uid = pwd.getpwnam(user).pw_uid
+    except KeyError:
+        return False
+    return uid not in (0, os.getuid())

@@ -279,6 +279,8 @@ class VerifierAccount:
         Repeated a few times: a process that forks while the signal is delivered can leave a
         child behind. Everything shares ``deadline``; when it passes the answer is unknown.
         """
+        if not verifier_escape.kill_target_ok(self.user):
+            return -1  # fail closed: ``kill -9 -1`` as the owner or root ends the desktop (#1849)
         left = -1
         for _ in range(attempts):
             budget = _remaining(deadline)
