@@ -8,12 +8,13 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
-from local_worker_fakes import make_runs
-from local_worker_fakes import run_wrapper as run
+from local_worker_fakes import WRAPPER, make_runs
 
 from cairnwork import confined, deny_channel, post_verified, safe_kill
 from cairnwork.workers import agy, agy_dispatch
@@ -51,7 +52,9 @@ def _confined(pgid):
 
 
 def _post_verified(pgid):
-    post_verified._kill_group(SimpleNamespace(pid=pgid, kill=lambda: None))
+    post_verified._kill_group(
+        cast("subprocess.Popen[bytes]", SimpleNamespace(pid=pgid, kill=lambda: None))
+    )
 
 
 def _deny_channel(pgid):
@@ -95,6 +98,7 @@ def _hook_watch(monkeypatch, *, pid, pgrp, sent):
     spec = importlib.util.spec_from_file_location(
         "hook_watch", Path(post_verified.__file__).with_name("hook_watch.py")
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     fake = SimpleNamespace(
@@ -166,6 +170,14 @@ def test_rollback_fails_closed_when_no_owner_can_be_named():
 
 
 def test_local_worker_wrapper_already_refuses_slash_as_run_root(tmp_path):
-    """Audit item 1 did not hold: "/" is not a run root (no tag name, not directly in RUNS)."""
-    proc = run(make_runs(tmp_path), "sweep", "/")
+    """Audit item 1 did not hold: "/" is not a run root (no tag name, not directly in RUNS).
+    Pinned with `status`, which never signals anything: require_run_root runs before every action
+    (sweep included), so a regressed guard cannot make this test kill a process. cwd is tmp_path."""
+    env = dict(
+        os.environ,
+        CAIRNWORK_LOCAL_WORKER_RUNS=str(make_runs(tmp_path)),
+        CAIRNWORK_LOCAL_WORKER_PYROOT=sys.base_prefix,
+    )
+    args: list[Any] = ["/bin/sh", str(WRAPPER), "status", "/"]
+    proc = subprocess.run(args, capture_output=True, env=env, cwd=tmp_path, check=False)
     assert proc.returncode == 64 and b"refusing" in proc.stderr, proc.stderr
