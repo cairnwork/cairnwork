@@ -100,7 +100,9 @@ def run_observer(
         profile_path.write_bytes(profile.text.encode())
         argv = backend.wrap(argv, profile_path)
     with mask_recheck.guard(backend, profile) if profile is not None else nullcontext():
-        code, timed_out, survivors = confined.execute(argv, checkout, env, timeout, log)
+        code, timed_out, survivors = confined.execute(
+            argv, checkout, env, timeout, log, scope_roots=(checkout.parent.parent,)
+        )
     return _observation(_read_result(result), code, timed_out, survivors)
 
 

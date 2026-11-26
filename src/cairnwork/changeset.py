@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork.gitcmd import OID, GitCommandError, run_git
+from cairnwork.refusal_types import _shown_detail
 
 _ZERO_OID = "0" * 40
 _ZERO_MODE = "000000"
@@ -24,7 +25,7 @@ class ChangeSetError(Exception):
     code = "CHANGE_SET_ERROR"
 
     def __init__(self, detail: str) -> None:
-        super().__init__(f"{self.code}: {detail}")
+        super().__init__(f"{self.code}: {_shown_detail(detail)}")
 
 
 @dataclass(frozen=True)

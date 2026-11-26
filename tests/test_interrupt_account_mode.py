@@ -33,7 +33,7 @@ class StubProcess:  # Popen that never exits by itself (the timed wait is stubbe
         raise subprocess.TimeoutExpired("sudo", timeout)
 
 
-def _execute(monkeypatch, tmp_path, stop, reap):
+def _execute(monkeypatch, tmp_path, stop, reap, roots):
     waits, killed = [], []
     monkeypatch.setattr(confined.subprocess, "Popen", lambda *a, **k: StubProcess(stop, waits))
     monkeypatch.setattr(confined, "_kill_group", killed.append)
@@ -47,14 +47,16 @@ def _execute(monkeypatch, tmp_path, stop, reap):
     monkeypatch.setattr(confined, "_wait_unreaped", interrupted_wait)
     env = {confined.RUN_TOKEN_VAR: "t"}
     with pytest.raises(type(stop)):
-        confined.execute(["x"], tmp_path, env, 5, tmp_path / "log", reap=reap)
+        confined.execute(["x"], tmp_path, env, 5, tmp_path / "log", reap=reap, scope_roots=roots)
     return waits, killed
 
 
 @pytest.mark.parametrize("stop", STOPS, ids=type)
 def test_an_interrupt_reaps_the_account_and_waits_a_bounded_time(monkeypatch, tmp_path, stop):
     reaped = []
-    waits, killed = _execute(monkeypatch, tmp_path, stop, lambda: reaped.append(1) or 0)
+    waits, killed = _execute(
+        monkeypatch, tmp_path, stop, lambda: reaped.append(1) or 0, (tmp_path.parent,)
+    )
     assert killed == [StubProcess.pid]
     assert reaped == [1]
     assert waits[0] == 5 and waits[1] is not None
@@ -64,7 +66,7 @@ def test_a_failing_reap_does_not_replace_the_interrupt(monkeypatch, tmp_path):
     def reap():
         raise RuntimeError("probe failed")
 
-    waits, killed = _execute(monkeypatch, tmp_path, KeyboardInterrupt(), reap)
+    waits, killed = _execute(monkeypatch, tmp_path, KeyboardInterrupt(), reap, (tmp_path.parent,))
     assert killed == [StubProcess.pid] and waits[1] is not None
 
 

@@ -84,7 +84,7 @@ def _sweep(world, runs):
     dirs = proc_cwd.attempt_dirs([runs], ATTEMPT)
     assert dirs == ((runs / ATTEMPT).resolve(),)
     rows = [(FAKE, FAKE, os.getuid(), {"x"})]
-    return proc_cwd.kill_withheld_in(rows, dirs, os.getuid())
+    return proc_cwd.kill_withheld_in(rows, dirs, os.getuid(), None, [runs], 0.0)
 
 
 def test_the_recorder_refuses_a_real_pid(world):

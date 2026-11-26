@@ -30,6 +30,8 @@ import subprocess
 import threading
 from dataclasses import dataclass
 
+from cairnwork.safe_kill import safe_killpg
+
 STATUS_PREFIX = "NEXUS_AGY_DISPATCH "
 TUNING_ENV_PREFIX = "NEXUS_AGY_"  # the pool's own tuning; passed through, nothing else is
 EXHAUSTED_EXIT = 75
@@ -249,10 +251,13 @@ def sweep_worker_run(dispatch: Dispatch, run_root: str) -> bool:
     return not os.path.lexists(run_root)
 
 
-def ask_to_stop(process) -> None:
-    """SIGTERM the dispatcher's group and wait a short while for it to release its lease."""
+def ask_to_stop(process) -> bool:
+    """SIGTERM the dispatcher's group and wait a short while for it to release its lease.
+    False when nothing was sent (refused) or it did not exit in time; the caller kills next."""
     try:
-        os.killpg(process.pid, signal.SIGTERM)
+        if not safe_killpg(process.pid, signal.SIGTERM):
+            return False  # refused: no grace to wait for; the caller's kill is refused too
         process.wait(timeout=TERM_GRACE_SECONDS)
     except (ProcessLookupError, PermissionError, subprocess.TimeoutExpired):
-        pass  # the caller kills the group next
+        return False  # the caller kills the group next
+    return True

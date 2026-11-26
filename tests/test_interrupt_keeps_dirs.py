@@ -61,7 +61,7 @@ def test_an_interrupt_in_the_wait_still_kills_the_process_group(
     monkeypatch.setattr(confined, "_kill_group", killed.append)
     env = {confined.RUN_TOKEN_VAR: "t"}
     with pytest.raises(type(stop)):
-        confined.execute(["x"], tmp_path, env, 5, tmp_path / "log")
+        confined.execute(["x"], tmp_path, env, 5, tmp_path / "log", scope_roots=(tmp_path.parent,))
     assert killed == [Stub.pid]
 
 
@@ -94,7 +94,14 @@ def test_an_end_while_starting_the_output_copier_still_kills_the_process_group(
     monkeypatch.setattr(confined.threading, "Thread", Unstartable)
     monkeypatch.setattr(confined, "_kill_group", killed.append)
     with pytest.raises(type(stop)):
-        confined.execute(["x"], tmp_path, {confined.RUN_TOKEN_VAR: "t"}, 5, tmp_path / "log")
+        confined.execute(
+            ["x"],
+            tmp_path,
+            {confined.RUN_TOKEN_VAR: "t"},
+            5,
+            tmp_path / "log",
+            scope_roots=(tmp_path.parent,),
+        )
     assert killed == [Stub.pid]
 
 

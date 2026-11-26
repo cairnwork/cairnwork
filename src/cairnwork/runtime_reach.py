@@ -14,8 +14,9 @@ only data (#967). This reads the record instead:
   data, is not.
 
 Only refusals come from here. No record, no checkout root or nothing changed leaves the verdict to
-the static rules; a malformed entry is skipped. ``changed_on_base`` must hold paths the base
-already has, so a file the test commit adds is never matched. The record is advisory (see
+the static rules; a malformed entry is skipped. ``changed_on_base`` holds paths the base already
+has and ``added`` the files the commit adds (a plugin file or package the base loaded refuses
+both); ``base_paths`` tells a case variant from another file. The record is advisory (see
 fixture_probe.py): a run that forges it can hide an entry, which is the limit already pinned there.
 """
 
@@ -29,9 +30,13 @@ from pathlib import PurePosixPath
 
 from cairnwork.collected_names import CollectedRecord
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.textclean import log_safe
 
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
 _BYTECODE = (".pyc", ".pyo")
+
+
+UNRESOLVED = "\0unresolved"  # resolve_record could not tell where an entry leads
 
 
 def check_runtime_reach(
@@ -40,9 +45,11 @@ def check_runtime_reach(
     added: Iterable[str] = (),
     base_paths: Iterable[str] | None = None,
 ) -> None:
-    """Refuse when the record names a changed base file. ``added`` are the paths the test commit
-    adds: only a ``sys.path`` entry may match one (an entry the base named but did not have, which
-    the commit now supplies), or a ``.py`` file below a loaded plugin package. ``base_paths`` is
+    """Refuse when the record names a changed or added base file. ``changed_on_base`` and ``added``
+    are the paths the test commit changes in the base and adds. A ``sys.path`` entry matches either
+    (an added one is an entry the base named but did not have); so does a plugin file, a plugin
+    known only by its dotted name (``a/b.py``, ``a/b/__init__.py``, a bytecode file as its source,
+    any ``.py`` below that package) and any ``.py`` below a loaded plugin package. ``base_paths`` is
     every file the base has: a name that differs from a changed file only by case is the same file
     unless the base holds the exact spelling (None: unknown, so the folded match stands)."""
     changed, added = frozenset(changed_on_base), frozenset(added)
@@ -64,19 +71,35 @@ def check_runtime_reach(
 def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
     """The record with its checkout root and the realpath of every entry and plugin file, read
     while the checkout still exists (a symlink cannot be followed once it is removed)."""
-    root = os.path.realpath(checkout)
+    root = _real(os.fspath(checkout)) or os.path.abspath(checkout)
     paths = (*record.sys_path, *record.sys_path_finish, *(f for _, f in record.plugins if f))
     real = {}
     for path in paths:
         try:
-            real[path] = os.path.realpath(_full(root, path))
-        except (ValueError, OSError):
+            full = _full(root, path)
+            real[path] = _real(full) or UNRESOLVED
+            if real[path] == UNRESOLVED:  # where it leads as far as it can be followed
+                real[UNRESOLVED + path] = os.path.realpath(full)
+        except ValueError:
             continue
     return replace(record, root=root, real=tuple(sorted(real.items())))
 
 
 def _refuse(why: str) -> None:
-    raise TestCommitRejected(CODE, why)
+    raise TestCommitRejected(CODE, log_safe(why))  # why carries changed paths: candidate text
+
+
+def _real(full: str) -> str | None:
+    """realpath where only "not found" means absent (then the lexical result, as before); None
+    for any other OSError (unsearchable parent, loop, name too long): 3.14 swallows them (#1823).
+    A caller must not read None as absent: check_runtime_reach refuses it (_rels), because
+    resolve_record runs inside a probe that drops its whole record on an exception."""
+    try:
+        return os.path.realpath(full, strict=True)
+    except (FileNotFoundError, NotADirectoryError):
+        return os.path.realpath(full)
+    except OSError:
+        return None
 
 
 def _key(path: str) -> str:
@@ -127,7 +150,7 @@ def _plugin_hit(
     added: frozenset[str] = frozenset(),
 ) -> str | None:
     if file is None:
-        return _named(name, changed | added, exact)
+        return _named(name, (*changed, *added), exact)
     keys = _by_key(changed)
     for rel in map(_source_of, _rels(root, file, real)):
         hit = _same(rel, keys, exact)
@@ -180,10 +203,15 @@ def _rels(root: str, path: str, real: dict[str, str]) -> tuple[str, ...]:
     checkout. A relative entry is read against the checkout."""
     try:
         full = _full(root, path)
-        found = {os.path.normpath(full), real.get(path) or os.path.realpath(full)}
+        resolved = real.get(path) or _real(full) or UNRESOLVED
+        found = {os.path.normpath(full), resolved}
+        if resolved == UNRESOLVED:  # inside by either spelling (an ancestor link leads in) refuses
+            found = {os.path.normpath(full), real.get(UNRESOLVED + path) or os.path.realpath(full)}
+            if any(_within(root, p) for p in found):
+                _refuse("a sys.path or plugin entry of the base run cannot be resolved")
         rels = (os.path.relpath(p, root) for p in found if _within(root, p))
         return tuple(sorted(r.replace(os.sep, "/") for r in rels if r != "."))
-    except (ValueError, OSError):
+    except ValueError:
         return ()
 
 
@@ -191,9 +219,27 @@ def _within(root: str, path: str) -> bool:
     return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
 
-def _named(name: str, changed: frozenset[str], exact: frozenset[str] | None = None) -> str | None:
+def _respelled(path: str, want: str) -> str | None:
+    """``path`` when it ends in ``want`` on whole path parts; the same path with that tail written
+    as ``want`` when it differs only by case or Unicode form; else None. Compared per path part,
+    never by string length (a fold can change a name's length)."""
+    parts, wants = path.split("/"), want.split("/")
+    tail = "/".join(parts[-len(wants) :])
+    if len(parts) < len(wants) or _key(tail) != _key(want):
+        return None
+    return path if tail == want else "/".join([*parts[: -len(wants)], *wants])
+
+
+def _named(name: str, paths: Iterable[str], exact: frozenset[str] | None = None) -> str | None:
+    """A changed or added file that the dotted ``name`` can import. Main's verdict (``_named_main``)
+    is kept as it was and ``_named_more`` can only add a refusal: never wider than main."""
+    paths = tuple(paths)
+    return _named_main(name, frozenset(paths), exact) or _named_more(name, paths, exact)
+
+
+def _named_main(name: str, changed: frozenset[str], exact: frozenset[str] | None = None):
     """A changed file that the dotted ``name`` can import: ``a/b.py`` or ``a/b/__init__.py``
-    under any leading directory, matched on whole path parts."""
+    under any leading directory, matched on whole path parts (main's rule, unchanged)."""
     if not name or any(not part.isidentifier() for part in name.split(".")):
         return None
     tail = "/".join(name.split("."))
@@ -206,4 +252,39 @@ def _named(name: str, changed: frozenset[str], exact: frozenset[str] | None = No
                 spelled = path[: len(path) - len(want)] + want  # the exact spelling, in that place
                 if exact is None or spelled not in exact:
                     return None if PurePosixPath(path).name == "conftest.py" else path
+    return None
+
+
+def _named_more(name: str, paths: Iterable[str], exact: frozenset[str] | None = None):
+    """What main's rule does not see: a bytecode file as its source, a ``.py`` below ``a/b`` when
+    that is a package, a spelling variant compared per path part. Only adds refusals."""
+    if not name or any(not part.isidentifier() for part in name.split(".")):
+        return None
+    tail = "/".join(name.split("."))
+    sources: dict[str, str] = {}
+    for path in sorted(paths, key=lambda p: (_source_of(p) != p, p)):  # a source file first
+        sources.setdefault(_source_of(path), path)
+    for want in (f"{tail}.py", f"{tail}/__init__.py"):
+        for path, original in sources.items():
+            spelled = _respelled(path, want)
+            if spelled is not None and (spelled == path or exact is None or spelled not in exact):
+                return None if PurePosixPath(path).name == "conftest.py" else original
+    return _below_named(tail, sources, exact)
+
+
+def _below_named(tail: str, sources: dict[str, str], exact: frozenset[str] | None) -> str | None:
+    """A ``.py`` below the directory ``tail`` when that directory is a package: its
+    ``__init__.py`` is in the base, in the commit, or the base is unknown."""
+    depth = len(tail.split("/"))
+    for path, original in sources.items():
+        parts = path.split("/")
+        if not path.endswith(".py") or parts[-1] == "conftest.py":
+            continue
+        for end in range(depth, len(parts)):
+            package = "/".join(parts[:end])
+            if _key("/".join(parts[end - depth : end])) != _key(tail):
+                continue
+            init = package + "/__init__.py"
+            if exact is None or init in exact:
+                return original
     return None

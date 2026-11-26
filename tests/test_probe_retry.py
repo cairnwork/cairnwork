@@ -91,7 +91,8 @@ def test_an_escaped_process_that_exits_during_the_retry_window_still_counts(monk
     """ps saw a process before the kill; after the kill it is gone. It still counts (kills a
     'reap ignores what was seen before' mutant). ppid 500 is a normal escape (not launchd), so no
     proc_pidpath exemption probe fires."""
-    fake, _ = _fake_account("777 500\n", [""])  # ps -o pid=,ppid=
+    # answers: the count, the #1819 name snapshot (before the kill), then the post-kill list
+    fake, _ = _fake_account("777 500\n", ["777 500 S 00:01 sleep\n", ""])
     monkeypatch.setattr(va.subprocess, "run", fake)
     assert va.VerifierAccount(user="nobody").reap() == 1
 

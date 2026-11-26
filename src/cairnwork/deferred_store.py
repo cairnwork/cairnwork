@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import NoReturn
 
+from cairnwork import present
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import OID, GitCommandError, commit_present, run_git
 from cairnwork.gitprobe import storage_exhausted
@@ -88,8 +89,7 @@ class DeferredStore:
         return self.path / f"{sha}.bundle"
 
     def has(self, sha: str) -> bool:
-        path = self.bundle(sha)
-        return path.is_file() and not path.is_symlink()
+        return present.is_file(self.bundle(sha), follow=False)
 
     def require_imported(self, sha: str) -> None:
         """Strict mode (#332, #337): an unsafe store, or a commit that is not in it, is refused
@@ -198,7 +198,7 @@ class DeferredStore:
 
     @staticmethod
     def _reject_known(repo: Path, sha: str, used: Path) -> None:
-        if (used / sha).exists():
+        if present.exists(used / sha):
             raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "burned by an earlier run")
         if commit_present(repo, sha):
             raise TestCommitRejected("TEST_COMMIT_ALREADY_EXPOSED", "already in the mirror")

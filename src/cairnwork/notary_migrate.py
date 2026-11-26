@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cairnwork import present
 from cairnwork.intake_request import IntakeRefused
 from cairnwork.notary import NotaryError, NotarySchemaMismatch, NotarySchemaOlder, schema_refusal
 from cairnwork.notary_schema import MIGRATIONS, SCHEMA_VERSION
@@ -46,7 +47,12 @@ def _probe(path: Path) -> tuple[int, bool, bool] | None:
             header = file.read(20)
     except OSError as exc:  # e.g. mode 0000
         raise IntakeRefused("BAD_STATE", f"cannot read {path}: {exc.strerror}") from exc
-    if b"\x02" in header[18:] or path.with_name(path.name + "-wal").exists():
+    wal = path.with_name(path.name + "-wal")
+    try:
+        wal_there = present.exists(wal)  # #1823: only "not found" means no -wal
+    except OSError as exc:
+        raise IntakeRefused("BAD_STATE", f"cannot look for {wal}: {exc.strerror}") from exc
+    if b"\x02" in header[18:] or wal_there:
         # A notary is never in WAL mode, and even a read-only open would write its -shm
         raise NotarySchemaMismatch(f"{path} is in WAL mode, which no notary is")
     try:

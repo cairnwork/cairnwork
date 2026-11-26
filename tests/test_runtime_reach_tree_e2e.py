@@ -36,9 +36,10 @@ PLUGIN = {
 BROKEN = "import no_such_module_for_the_reach_run\n\n\n" + OK
 
 
-def go(project, tmp_path, base_files, test_files, extra=()):
-    commit_change(project, base_files)
-    base, tests = _test_commit(project, {"tests/test_regression.py": REGRESSION, **test_files}, [])
+def go(project, tmp_path, base_files, test_files, extra=(), delete=(), base_delete=()):
+    commit_change(project, base_files, delete=base_delete)
+    files = {"tests/test_regression.py": REGRESSION, **test_files}
+    base, tests = _test_commit(project, files, [], delete=delete)
     verifiers = (("pytest", (*CHECK, *extra)),)
     return run(project, tmp_path, base, tests, SeeingWorker(FIX), verifiers=verifiers)
 
@@ -246,3 +247,42 @@ def test_the_same_root_conftest_layout_with_an_archive_off_sys_path_is_accepted(
     project, tmp_path, over_cap
 ):
     accepted(go(project, tmp_path, ROOT, {"tests/data/other.zip": "o2"}))
+
+
+# #1809 (b): the only tree file is broken and dropped, and no conftest directory is under the roots
+LONE = {
+    "conftest.py": ROOT["conftest.py"],
+    "tests/data/lib.zip": "z",
+    "tests/data/other.zip": "o",
+    "tests/test_only.py": BROKEN,
+}
+
+
+@pytest.mark.parametrize("cap", ["whole", "over"])
+def test_the_only_broken_tree_file_dropped_still_loads_the_root_conftest(
+    project, tmp_path, monkeypatch, cap
+):
+    if cap == "over":
+        from cairnwork import base_fixture_names
+
+        monkeypatch.setattr(base_fixture_names, "MAX_TREE_TARGETS", 0)
+    fixed = {"tests/data/lib.zip": "z2", "tests/test_only.py": OK}
+    refused(go(project, tmp_path, LONE, fixed, extra=("tests/test_only.py",)))
+
+
+def test_the_same_lone_broken_file_with_an_archive_off_sys_path_is_accepted(project, tmp_path):
+    fixed = {"tests/data/other.zip": "o2", "tests/test_only.py": OK}
+    accepted(go(project, tmp_path, LONE, fixed, extra=("tests/test_only.py",)))
+
+
+# #1809: a deleted base archive on sys.path is a change the reach check sees
+def test_a_deleted_archive_a_conftest_puts_on_sys_path_is_refused(project, tmp_path):
+    base = {**SIBLING, **ZIPS, Z: OK}
+    gone = ("tests/a/data/lib.zip",)
+    refused(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=gone))
+
+
+def test_a_deleted_archive_off_sys_path_is_accepted(project, tmp_path):
+    base = {**SIBLING, **ZIPS, Z: OK}
+    gone = ("tests/a/data/other.zip",)
+    accepted(go(project, tmp_path, base, {Z: OK + "# e\n"}, extra=(Z,), delete=gone))

@@ -41,6 +41,7 @@ def test_blocked_copier_is_counted_and_cleanup_returns(monkeypatch: Any, tmp_pat
         env,
         5,
         tmp_path / "blocked.log",
+        scope_roots=(tmp_path.parent,),
     )
     elapsed = time.monotonic() - started
     child_pid = None
@@ -70,7 +71,12 @@ def test_completed_copier_closes_pipe_and_reports_no_survivor(monkeypatch: Any, 
     monkeypatch.setattr(confined, "_sweep_survivors", lambda *_args: 0)
     env = {**os.environ, confined.RUN_TOKEN_VAR: TOKEN}
     returncode, timed_out, survivors = confined.execute(
-        [sys.executable, "-c", "print('done')"], tmp_path, env, 5, tmp_path / "normal.log"
+        [sys.executable, "-c", "print('done')"],
+        tmp_path,
+        env,
+        5,
+        tmp_path / "normal.log",
+        scope_roots=(tmp_path.parent,),
     )
     assert (returncode, timed_out, survivors) == (0, False, 0)
     assert streams and streams[0].closed
@@ -87,6 +93,13 @@ def test_group_kill_and_sweep_group_kept_after_normal_exit(monkeypatch: Any, tmp
 
     monkeypatch.setattr(confined, "_sweep_survivors", sweep)
     env = {**os.environ, confined.RUN_TOKEN_VAR: TOKEN}
-    confined.execute([sys.executable, "-c", "pass"], tmp_path, env, 5, tmp_path / "group.log")
+    confined.execute(
+        [sys.executable, "-c", "pass"],
+        tmp_path,
+        env,
+        5,
+        tmp_path / "group.log",
+        scope_roots=(tmp_path.parent,),
+    )
     assert len(signalled) == 1
     assert swept_groups == signalled

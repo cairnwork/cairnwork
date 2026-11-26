@@ -22,7 +22,9 @@ _MODULES = (
     "taskpaths conftest_check conftest_names deferred_tests deferred_nodes intake "
     "verify_candidate_checks verify_cli p2p pipeline config_read"
 ).split()
-_EXPECTED_SITES = 53  # +2 BAD_CONFIG (#1381); +5 config_read (#1576); -2 author_reason (#1688)
+_EXPECTED_SITES = 55
+# +2 BAD_CONFIG (#1381); +5 config_read (#1576); -2 author_reason (#1688);
+# +2 intake.in_flight ledger lookup (#1823)
 # Each exception is already code-prefixed, and the named source has shown() the detail.
 _ALLOWED_SITES: set[tuple[str, str, str]] = {
     # _attempt relays deferred_tests.py:108/137/258 and snapshot.py:65, whose details use shown().
