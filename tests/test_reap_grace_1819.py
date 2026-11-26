@@ -217,7 +217,7 @@ def test_a_slow_path_helper_is_cut_at_the_recount_cap(monkeypatch, budget):
 
     acct = _helper_account(monkeypatch, run)
     acct._escaped_count(time.monotonic() + budget, attempts=1)
-    assert timeouts and all(t <= budget + 0.2 for t in timeouts)
+    assert timeouts and all(t <= budget + 0.1 + 1e-9 for t in timeouts)
 
 
 @pytest.mark.parametrize("budget", [None, 100.0])
@@ -364,3 +364,53 @@ def test_a_child_that_leaves_with_no_main_is_not_refused(monkeypatch, cost, leav
     monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a, **k: ((), ()))
     got = va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
     assert got == 0 and not getattr(got, "argv", ())
+
+
+def test_a_change_made_inside_the_grace_is_refused_by_the_integrity_read(
+    repo, tmp_path, monkeypatch
+):
+    """An account process that changes the checkout during the grace and then leaves is not a
+    survivor (the count settles to 0), but the integrity read after the last kill still sees its
+    change: the run is refused as CHECKOUT_CHANGED, not as SURVIVORS (end to end, real
+    run_blackbox, real checkout_differences, real reap grace)."""
+    import json
+
+    from test_blackbox import doc
+
+    from cairnwork import blackbox, blackbox_exec, blackbox_judge
+    from cairnwork.verify_context import VerifyContext
+
+    clock = _fake_clock(monkeypatch)
+    calls = []
+
+    def fake_execute(argv, profile_path, checkout, env, timeout, log_path, account, backend):
+        log_path.write_bytes(b"")
+
+        def recount(self, deadline=None, attempts=1):
+            calls.append(deadline)
+            if len(calls) == 1:  # the first count: main's child is still there
+                return 1
+            (checkout / "src" / "a.py").write_text("x = 2  # changed in the grace\n")
+            return 0  # then it leaves: nothing is counted any more
+
+        monkeypatch.setattr(va.VerifierAccount, "_escaped_count", recount)
+        monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, a, d: 0)
+        got = va.VerifierAccount(user="x", root=Path("/tmp/none")).reap()
+        return 0, False, got
+
+    monkeypatch.setattr(blackbox_exec, "_execute", fake_execute)
+    declared = blackbox.parse(json.dumps(doc()).encode())
+    from conftest import git
+
+    head = git(repo, "rev-parse", "HEAD")
+    run = blackbox_exec.run_blackbox(declared, VerifyContext(repo, tmp_path / "runs"), head, "a1-v")
+    assert len(calls) >= 2 and run.survivors == 0  # the grace ran and counted nothing left
+    assert any("a.py" in name for name in run.mutated)  # the integrity read saw the change
+    (verdict,) = blackbox_judge.judge_run(declared, head, as_account_run(run))
+    assert "CHECKOUT_CHANGED" in verdict.reason and "SURVIVORS" not in verdict.reason
+
+
+def as_account_run(run):
+    from dataclasses import replace
+
+    return replace(run, account=True, profile_sha256=run.profile_sha256 or "p", report=None)

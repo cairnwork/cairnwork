@@ -30,7 +30,8 @@ class Main(int):
 
 
 def bounded(deadline: float | None, cap: float) -> float:
-    """``cap`` seconds, or what is left until ``deadline`` if that is less (never below 0.1)."""
+    """``cap`` seconds, or what is left until ``deadline`` if that is less. Never below 0.1 (a
+    zero timeout would fail at once), so one call can run at most 0.1 s past ``deadline``."""
     return cap if deadline is None else max(min(cap, deadline - time.monotonic()), 0.1)
 
 
