@@ -17,6 +17,7 @@ import time
 
 import kill_guard
 import pytest
+from adopt_helpers import adopt_on_kill
 from agy_receipt_lines import WORKER, good_run, status
 from test_agy_worker import TASK, attempt, expire_once_ready, fake_agy
 from test_agy_worker_account import ROOT, _replaying
@@ -111,14 +112,7 @@ def test_a_clean_sweep_after_a_kill_still_succeeds(tmp_path, monkeypatch):
         " start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
         f"open({str(pid_file)!r}, 'w').write(str(p.pid))",
     )
-    guarded_kill = os.kill
-
-    def kill(pid, sig):  # the escaped process is this test's own: its pid file names it
-        if pid_file.exists() and pid == int(pid_file.read_text()):
-            kill_guard.adopt(pid)
-        return guarded_kill(pid, sig)
-
-    monkeypatch.setattr(confined.os, "kill", kill)
+    adopt_on_kill(monkeypatch, pid_file)  # the escaped process is this test's own: its pid file
     started = time.monotonic()
     AgyWorker(agy=agy).run(_workdir(tmp_path, 4), TASK)
     assert time.monotonic() - started < 30

@@ -10,7 +10,10 @@ from pathlib import Path
 import kill_guard
 
 
-def _family(pid_files) -> set[int]:
+def _family(pid_files, seen: dict[int, int]) -> set[int]:
+    """The pids the files name and what runs below them. ``seen`` (pid -> start time) is kept by
+    the caller: a child whose parent the code under test killed first is reparented to launchd and
+    no longer shows below it, but it stays ours while it keeps the start time first seen."""
     roots: set[int] = set()
     for path in pid_files:
         try:
@@ -21,23 +24,30 @@ def _family(pid_files) -> set[int]:
         table = kill_guard._table()
     except kill_guard.KillGuardError:
         return set()
+    starts = kill_guard._starts()
     roots &= set(table)  # a root that is gone may have its number reused: not ours any more
+    roots = {p for p in roots if p not in seen or starts.get(p) == seen[p]}
+    family = set(roots)
     grew = True
     while grew:
         grew = False
         for pid, (ppid, _pgid) in table.items():
-            if ppid in roots and pid not in roots:
-                roots.add(pid)
+            if ppid in family and pid not in family:
+                family.add(pid)
                 grew = True
-    return roots
+    for pid in family:
+        if pid in starts:
+            seen[pid] = starts[pid]
+    return family | {p for p, start in seen.items() if p in table and starts.get(p) == start}
 
 
 def adopt_on_kill(monkeypatch, *pid_files) -> None:
     """Let os.kill reach the pids named in ``pid_files`` (and their descendants)."""
     guarded = os.kill
+    seen: dict[int, int] = {}
 
     def kill(pid, sig):
-        if sig != 0 and isinstance(pid, int) and pid in _family(pid_files):
+        if sig != 0 and isinstance(pid, int) and pid in _family(pid_files, seen):
             return kill_guard.REAL_KILL(pid, sig)
         return guarded(pid, sig)
 

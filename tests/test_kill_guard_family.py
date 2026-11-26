@@ -45,6 +45,28 @@ def test_a_pid_file_names_a_detached_process_and_what_runs_below_it(monkeypatch,
     assert len(sent) == 2
 
 
+def test_a_child_left_without_its_parent_is_still_the_tests_own(monkeypatch, tmp_path):
+    """The code under test kills the daemon first; its child is then reparented to launchd (a
+    shell and the sleep it runs): it keeps the start time first seen, so it stays ours."""
+    starts = {ROOT: NEW, KID: NEW + 1}
+    sent = _setup(monkeypatch, {ROOT: (1, ROOT), KID: (ROOT, KID)}, starts)
+    adopt_helpers.adopt_on_kill(monkeypatch, _pid_file(tmp_path, str(ROOT)))
+    os.kill(ROOT, 9)
+    _fake_ps(monkeypatch, {ME: (1, ME), KID: (1, KID)}, {ME: OLD, KID: NEW + 1})
+    os.kill(KID, 9)
+    assert sent == [("real", ROOT, 9), ("real", KID, 9)]
+
+
+def test_a_stranger_that_reuses_the_number_of_an_orphan_is_refused(monkeypatch, tmp_path):
+    sent = _setup(monkeypatch, {ROOT: (1, ROOT), KID: (ROOT, KID)}, {ROOT: NEW, KID: NEW})
+    adopt_helpers.adopt_on_kill(monkeypatch, _pid_file(tmp_path, str(ROOT)))
+    os.kill(ROOT, 9)
+    _fake_ps(monkeypatch, {ME: (1, ME), KID: (1, KID)}, {ME: OLD, KID: NEW + 99})
+    with pytest.raises(KillGuardError):
+        os.kill(KID, 9)
+    assert sent == [("real", ROOT, 9)]
+
+
 @pytest.mark.parametrize("text", ["", "not a pid", None])  # empty, garbage, no file
 def test_an_unreadable_pid_file_names_nobody(monkeypatch, tmp_path, text):
     sent = _setup(monkeypatch, {ROOT: (1, ROOT)})
