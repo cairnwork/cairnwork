@@ -239,14 +239,13 @@ def test_entries_are_built_only_for_the_listed_rows(monkeypatch):
 EXEMPT = "/usr/libexec/exempt"
 
 
-def _acct_rows(monkeypatch, before, main, rows, exempt=EXEMPT):
+def _acct_rows(monkeypatch, before, main, rows, exempt=EXEMPT, paths=None):
     """reap() with a real snapshot over ``rows``; pid 10 is a launchd child that is exempt."""
     monkeypatch.setattr(vs.subprocess, "run", _fake_run(rows))
     monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda s, d=None, attempts=1: before)
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda s, n, d: 0)
-    monkeypatch.setattr(
-        va.VerifierAccount, "_real_paths", lambda s, pids: {p: (1.0, EXEMPT) for p in pids}
-    )
+    found = paths or (lambda s, pids, deadline=None: {p: (1.0, EXEMPT) for p in pids})
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", found)
     monkeypatch.setattr(vs.sys, "platform", "darwin")
     monkeypatch.setattr(ve, "is_exempt", lambda path, ppid: path == exempt)
     return va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
@@ -274,7 +273,7 @@ def test_only_the_callers_main_left_is_not_listed_as_escaped(monkeypatch):
 
 
 MAIN = "30 99 S 00:01 bash\n"  # the caller's own run: its parent is outside the account
-LEFT = "20 1 S 00:02 python\n21 1 S 00:02 sleep\n"  # launchd noderen, not exempt
+LEFT = "20 1 S 00:02 python\n21 1 S 00:02 sleep\n"  # launchd children, not exempt
 
 
 @pytest.mark.parametrize(
@@ -283,7 +282,6 @@ LEFT = "20 1 S 00:02 python\n21 1 S 00:02 sleep\n"  # launchd noderen, not exemp
         (2, 1, MAIN + "20 1 S 00:02 python\n", ["python"]),
         (3, 1, MAIN + LEFT, ["python", "sleep"]),
         (2, 0, LEFT, ["python", "sleep"]),
-        (2, 1, "20 21 S 00:02 node\n21 1 S 00:02 cat\n", ["node"]),
     ],
 )
 def test_listing_never_has_more_entries_than_the_count(monkeypatch, before, main, rows, names):
@@ -305,18 +303,47 @@ def test_the_listing_is_cut_to_the_count_when_ps_shows_more_rows(monkeypatch):
     assert got == 1 and len(got.argv) == 1
 
 
-@pytest.mark.parametrize(
-    ("before", "main", "rows", "shown"),
-    [
-        (8, 1, MAIN + "".join(f"{40 + i} 1 S 00:02 p{i}\n" for i in range(7)), 5),  # cut at 5
-        (2, 1, "20 1 S 00:02 python\n21 20 S 00:02 sleep\n", 1),  # launchd-parented candidate
-        (2, 1, MAIN, 1),  # len(rows) == drop: nothing is dropped, still at most count
-    ],
-)
-def test_main_with_truncation_launchd_parent_and_drop_boundary(
-    monkeypatch, before, main, rows, shown
-):
-    got = _acct_rows(monkeypatch, before, main, rows, exempt="none")
-    assert got == before - main and len(got.argv) == shown
-    assert len(got.argv) <= min(got, sa.MAX_LISTED)
-    assert shown < 5 or all(not line.startswith("bash") for line in got.argv)
+def _names(got):
+    return [line.split()[0] for line in got.argv]
+
+
+S1, S2 = (
+    "20 98 S 00:02 python\n",
+    "40 1 S 00:02 sleep\n",
+)  # real leftovers; 20 has an outside parent
+
+
+def test_two_rows_that_look_like_main_drop_nothing_and_say_so(monkeypatch):
+    got = _acct_rows(monkeypatch, 2, 1, S1 + MAIN, exempt="none")  # count 1; M is pid 30
+    assert got == 1 and sorted(_names(got)) == ["bash", "python"]
+    assert "main=unresolved" in got.reasons
+
+
+def test_a_survivor_with_an_outside_parent_is_never_hidden_behind_main(monkeypatch):
+    got = _acct_rows(monkeypatch, 3, 1, S1 + MAIN + S2, exempt="none")  # count 2
+    assert got == 2 and {"python", "sleep"} <= set(_names(got))
+    assert "main=unresolved" in got.reasons
+
+
+def test_a_paths_helper_failing_in_the_snapshot_does_not_hide_the_survivor(monkeypatch):
+    rows = "10 1 S 00:09 launchd_thing\n11 1 S 00:01 python\n"
+    got = _acct_rows(monkeypatch, 1, 0, rows, paths=lambda s, pids, deadline=None: {})
+    assert got == 1 and "python" in _names(got) and "exempt=unknown" in got.reasons
+
+
+def test_a_launchd_parent_candidate_is_not_guessed(monkeypatch):
+    got = _acct_rows(monkeypatch, 2, 1, "20 1 S 00:02 python\n21 20 S 00:02 sleep\n", exempt="none")
+    assert got == 1 and sorted(_names(got)) == ["python", "sleep"]
+    assert "main=unresolved" in got.reasons
+
+
+def test_exactly_one_main_candidate_is_dropped_and_names_are_pinned(monkeypatch):
+    rows = MAIN + "".join(f"{40 + i} 1 S 00:02 p{i}\n" for i in range(7))  # 8 rows, main=1
+    got = _acct_rows(monkeypatch, 8, 1, rows, exempt="none")
+    assert got == 7 and len(got.argv) == 5 and "bash" not in _names(got)
+    assert "main=unresolved" not in got.reasons
+
+
+def test_main_alone_in_the_table_is_dropped_and_nothing_is_listed(monkeypatch):
+    got = _acct_rows(monkeypatch, 2, 1, MAIN, exempt="none")
+    assert got == 1 and got.argv == () and got.reasons == ()
