@@ -14,9 +14,10 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 
 from cairnwork import confined
-from cairnwork.confined import Sweep
+from cairnwork.confined import ATTEMPT_ENV, Sweep
 from cairnwork.proc_cwd import attempt_dirs
 
 
@@ -63,3 +64,16 @@ def look_at(sweep: Callable[..., Sweep], head: tuple[str, str], accounts, **kw) 
     for name in names[1:]:
         out = merged(out, sweep(*head, account=name, **kw))
     return out
+
+
+def look_for(sweep: Callable[..., Sweep], intake, attempt_id: str, mark: str):
+    """The look of a dead run's cleanup: ``sweep`` (sweep_marked) naming the verifier account and
+    the run's directories, taken before cleanup removes them. An account that cannot be loaded
+    names nothing here; ``clear_account`` then keeps the attempt (its root is unreadable)."""
+    try:
+        account = intake.verifier_account()
+    except Exception:  # noqa: BLE001 - refused account: the leftover step reports it
+        account = None
+    dirs = run_dirs(attempt_id, intake.run_root, account)
+    return partial(sweep, ATTEMPT_ENV, attempt_id, dispatched=mark, cwd_dirs=dirs,
+                   account=user_of(account))  # fmt: skip

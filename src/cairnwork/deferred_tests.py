@@ -42,6 +42,7 @@ from cairnwork.node_ids import file_part
 from cairnwork.p2p_function import _without_case as _nodeid_without_case
 from cairnwork.provenance import trailers
 from cairnwork.reasons import COLLECT_HINT, _names, no_tests_hint, skip_hint
+from cairnwork.refusal_types import _shown_detail
 from cairnwork.test_commit_paths import case_variant_clash, out_of_scope  # noqa: F401
 from cairnwork.workspace import ATTEMPT_REF_PREFIX
 from cairnwork_protocol.ids import MAX_ID_BYTES
@@ -290,9 +291,9 @@ class Comparison:
         """Base runs come after WORKER_STARTED, and a worker with the owner's uid could have broken
         the base on purpose: only an isolated worker's attempt may say UNCOMPARABLE. ``why`` the
         worker is not isolated (AgyWorker.not_isolated_because) is kept in the reason (#234)."""
-        if isolated is True:
-            return f"UNCOMPARABLE: {self.code}: {self.detail}"
-        return f"{self.code}: {self.detail}" + (f" (worker not isolated: {why})" if why else "")
+        head = "UNCOMPARABLE: " if isolated is True else ""
+        tail = "" if isolated is True or not why else f" (worker not isolated: {why})"
+        return f"{head}{self.code}: {_shown_detail(self.detail)}{tail}"
 
 
 class BaseUncomparable(Exception):
@@ -300,7 +301,7 @@ class BaseUncomparable(Exception):
     REFUSED; each boundary maps it explicitly."""
 
     def __init__(self, comparison: Comparison) -> None:
-        super().__init__(f"{comparison.code}: {comparison.detail}")
+        super().__init__(f"{comparison.code}: {_shown_detail(comparison.detail)}")
         self.comparison = comparison
 
 

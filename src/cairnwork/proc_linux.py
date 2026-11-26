@@ -80,9 +80,10 @@ def _linux_environment(base: str) -> set[str] | None:
 
 def _linux_owner(base: str) -> tuple[int, int]:
     """(effective uid, process group) from status and stat, which every user can read: a
-    process that is not dumpable shows root as the owner of its /proc directory."""
-    with open(f"{base}/status") as handle:
-        uid = next(int(line.split()[2]) for line in handle if line.startswith("Uid:"))
-    with open(f"{base}/stat") as handle:
-        pgid = int(handle.read().rsplit(")", 1)[1].split()[2])  # after "(comm)": state ppid pgrp
+    process that is not dumpable shows root as the owner of its /proc directory. Read as bytes:
+    the process name may hold any."""
+    with open(f"{base}/status", "rb") as handle:
+        uid = next(int(line.split()[2]) for line in handle if line.startswith(b"Uid:"))
+    with open(f"{base}/stat", "rb") as handle:
+        pgid = int(handle.read().rsplit(b")", 1)[1].split()[2])  # after "(comm)": state ppid pgrp
     return uid, pgid

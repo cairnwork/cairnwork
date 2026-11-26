@@ -61,8 +61,8 @@ def boot_start(pid: int, proc: str = "/proc") -> float | None:
 
     The fields are counted after the LAST ")", since the command name (field 2) may hold any."""
     try:
-        with open(f"{proc}/{pid}/stat") as handle:
-            after = handle.read().rsplit(")", 1)[1].split()  # field 3 onwards
+        with open(f"{proc}/{pid}/stat", "rb") as handle:  # bytes: the name may hold any
+            after = handle.read().rsplit(b")", 1)[1].split()  # field 3 onwards
         return int(after[19]) / os.sysconf("SC_CLK_TCK")
     except (OSError, ValueError, IndexError):
         return None

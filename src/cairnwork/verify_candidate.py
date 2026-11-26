@@ -29,14 +29,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
+from cairnwork import candidate_env, cleanup_sweep, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
-from cairnwork.cleanup_left import attempt_done
-from cairnwork.confined import sweep_marked
+from cairnwork.confined import confirm_gone, sweep_marked
 from cairnwork.deferred_store import USED_DIR, consume
 from cairnwork.deferred_tests import (
-    OVERLAY_RULE,
     BaseUncomparable,
     TestCommitRejected,
     author_reason,
@@ -45,12 +43,12 @@ from cairnwork.deferred_tests import (
 )
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git
 from cairnwork.intake import Intake, IntakeRefused
-from cairnwork.notary_verify import binding_extras, binding_hash
+from cairnwork.notary_verify import binding_hash
 from cairnwork.ownership import request_digest
 from cairnwork.p2p import base_env_check, p2p_for
 from cairnwork.pipeline import TaskRejected, TaskResult, TaskSpec, tests_with_teeth
 from cairnwork.pipeline_judge import judge_candidate
-from cairnwork.recovery import read_start_mark, write_start_mark
+from cairnwork.recovery import _remove_leftovers
 from cairnwork.textclean import shown
 from cairnwork.verify_candidate_checks import (
     check_before_clone,
@@ -58,9 +56,18 @@ from cairnwork.verify_candidate_checks import (
     require_core_ids,
     validate_import_paths,
 )
+from cairnwork.verify_cleanup import (
+    clear_account,
+    leftovers,
+    list_markers,
+    path_absent,
+    read_start_mark,
+    write_start_mark,
+)
 from cairnwork.verify_context import VerifyContext, verifier_interpreter
+
+from cairnwork.verify_parts import binding_of as _binding, remove_clone  # isort: skip
 from cairnwork.workspace import (
-    ATTEMPT_ID,
     Attempt,
     CandidateRejected,
     WorkspaceError,
@@ -112,7 +119,7 @@ def verify_candidate(
     _require_accepting(intake)
     source = _source(intake, repo)
     intake.prepare()
-    cleanup(intake)
+    cleanup_kept = cleanup(intake).get("kept", [])
     result = TaskResult(task.idempotency_key, f"a{secrets.token_hex(8)}", "FAILED")
     notary = intake.notary
     ctx = VerifyContext.of(task, intake.run_root, "", account, python).started(result.attempt_id)
@@ -151,6 +158,7 @@ def verify_candidate(
         "protection": result.protection,  # protection.py; "" when Core was never asked
         "tests_consumed": tests_consumed(intake, test_commit),
         "verifier_mode": "account" if account is not None else "sandbox_only",
+        "cleanup_kept": cleanup_kept,  # dead attempts that could not be cleaned (#1802)
     } | replay_set.record_only(result, status, task, candidate)  # never judged (#1105)
 
 
@@ -283,7 +291,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
     run_root = ctx.run_root
     check_before_clone(task, candidate, verifier_interpreter(ctx))  # base roots, then #488
     clone = create_attempt_clone(task.repo, candidate, run_root, result.attempt_id)
-    with unless_interrupted(partial(_remove_clone, run_root, result)):
+    with unless_interrupted(partial(remove_clone, remove_attempt_clone, run_root, result)):
         attempt = Attempt(clone.attempt_id, task.base_commit, clone.path, clone.refs_before)
         check_candidate_commit(
             task.repo, attempt, candidate, task.allowed_files, python=verifier_interpreter(ctx)
@@ -311,25 +319,6 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
         _judge_for_verify(task, specs, digest, notary, result, test_files, ctx, lambda _: None,
                           plan, binding, env)  # fmt: skip
         return binding
-
-
-def _remove_clone(run_root, result) -> None:
-    try:
-        remove_attempt_clone(run_root, result.attempt_id)
-    except WorkspaceError as exc:  # keep the run's own outcome; note the leftover
-        result.logs.append(f"cleanup failed: {exc}")
-
-
-def _binding(task, head: str, test_files: tuple[str, ...], judged: str, plan) -> dict[str, Any]:
-    """#229: what the receipt is bound to. The scratch commit that carried the tests dies with
-    the scratch clone and its id cannot be rebuilt (commit time), so the receipt names the PR head,
-    the tests and the tree that ran, which a receiver rebuilds with deferred_tests.overlay_tree."""
-    tree = run_git(task.repo, "rev-parse", f"{judged}^{{tree}}").strip()
-    return binding_extras(task, plan, test_files) | {
-        "rule": OVERLAY_RULE, "base": task.base_commit, "head": head,
-        "test_commit": task.test_commit, "test_paths": sorted(test_files), "executed_tree": tree,
-        "verifiers": [[verifier_id, list(argv)] for verifier_id, argv in task.verifiers],
-    }  # fmt: skip
 
 
 def _gap() -> None:
@@ -366,25 +355,35 @@ def _marked(intake: Intake, attempt_id: str) -> Iterator[None]:
 
 
 def cleanup(intake: Intake) -> dict[str, Any]:
-    """Remove what dead runs left behind. A marker goes, and the attempt counts as cleaned, only
-    once its processes are shown gone, its scratch is gone and the marker is removed."""
+    """Remove what dead runs left behind. An attempt is cleaned only once its processes are shown
+    gone and its scratch, clones and marker are gone; a step that cannot be done keeps it."""
     markers = intake.state / "verify-runs"
-    out: dict[str, list[str]] = {"cleaned": []}
-    for marker in sorted(markers.iterdir()) if markers.is_dir() else []:
-        if marker.is_symlink() or not ATTEMPT_ID.fullmatch(marker.name):
-            continue
+    out: dict[str, Any] = {"cleaned": []}
+    try:
+        found = list_markers(markers)
+    except OSError:
+        return out | {"kept": [markers.name]}  # cannot be read: reported, not trusted as empty
+    for marker in found:
         try:
             fd = os.open(marker, os.O_RDWR | os.O_NOFOLLOW)
         except FileNotFoundError:
+            continue
+        except OSError:  # unreadable, or not a file: kept, retried later
+            out.setdefault("kept", []).append(marker.name)
             continue
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             _gap()
             if not _same_file(fd, marker):
                 continue  # replaced by a run that started meanwhile
-            scratch = intake.state / "verify-scratch" / marker.name  # not confirmed: kept, retried
-            done = attempt_done(sweep_marked, scratch, intake.run_root, intake.verifier_account(),
-                                marker.name, read_start_mark(fd))  # fmt: skip
+            look = cleanup_sweep.look_for(sweep_marked, intake, marker.name, read_start_mark(fd))
+            swept = confirm_gone(look(), look)
+            _remove_leftovers(intake.run_root, marker.name)
+            shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)
+            left = leftovers(intake.run_root, marker.name) + clear_account(intake, marker.name)
+            if left:  # a clone or index that would not go is named, not dropped
+                out.setdefault("leftovers", {})[marker.name] = left
+            done = swept.gone and path_absent(work) and not left
             if done:
                 try:
                     marker.unlink(missing_ok=True)

@@ -114,20 +114,29 @@ def test_files_beside_the_checkout_are_not_committed(run):
     )
 
 
-def test_other_files_closed_files_and_fifos_pass(run):
+def test_other_files_and_fifos_pass(run):
     checkout, run_dir = run
     home = run_dir / "home"
     (home / "text.dat").write_text("x = 1\n")
     (home / "empty").write_bytes(b"")
     (home / "short").write_bytes(MAGIC[:2])
     (home / "other.dat").write_bytes(bytes([MAGIC[0] ^ 1, MAGIC[1]]) + b"\r\n" + bytes(12))
-    (home / "closed").write_text("x = 1\n")
-    (home / "closed").chmod(0)
     os.mkfifo(home / "fifo")  # never opened: reading it would block
+    assert scan(checkout, run_dir) == ()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="chmod 0 does not close a file to root")
+def test_an_honest_suite_leaving_a_closed_file_still_passes(run):
+    """#1823: a regular file closed to its owner is opened (u+r) before it is read, as a closed
+    directory is; an honest suite that leaves one is not a finding."""
+    checkout, run_dir = run
+    closed = run_dir / "home" / "closed"
+    closed.write_text("x = 1\n")
+    closed.chmod(0)
     try:
         assert scan(checkout, run_dir) == ()
     finally:
-        (home / "closed").chmod(0o600)
+        closed.chmod(0o600)
 
 
 def nested(top: Path, chars: int) -> Path:
