@@ -15,6 +15,7 @@ sent by child processes are not covered.
 
 from __future__ import annotations
 
+import calendar
 import os
 import subprocess
 import time
@@ -72,7 +73,7 @@ def _starts() -> dict[int, int]:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
-            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin", "TZ": "UTC0"},  # lstart in UTC: see timegm
         ) as proc:
             try:
                 out, _ = proc.communicate(timeout=10)
@@ -88,7 +89,7 @@ def _starts() -> dict[int, int]:
     for line in out.splitlines():
         pid, _, when = line.strip().partition(" ")
         try:
-            found[int(pid)] = int(time.mktime(time.strptime(when.strip(), "%a %b %d %H:%M:%S %Y")))
+            found[int(pid)] = calendar.timegm(time.strptime(when.strip(), "%a %b %d %H:%M:%S %Y"))
         except ValueError:
             continue
     return found

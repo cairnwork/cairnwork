@@ -23,7 +23,7 @@ from test_1039_1353_static import _literal_observations
 PINS = {
     "tests/attest/binding_helpers.py": "0b3eeb204048e1c5d41ef700338e6f71fb0eee74207f24978f953408c539d98e",
     "tests/attest/test_verify.py": "156795f6ee20d46c692b4a27e15ab36525b7ab7fce945722b39a3067c68a9b83",
-    "tests/conftest.py": "5b6a4e6da03dc4da33c1488cfa6f3bc40815c14444bc47c7842d9253eee367b5",
+    "tests/conftest.py": "a6f527a6ae989b47ef7cd10b270206d7e8c0e391064eac8eef03f9f3693219fd",
     "tests/pra1353_c10.py": "80975b94fec7d2dae6cd70d403bbe331805a182cd7c510b1fa4df3ff1a105ef0",
     "tests/pra1353_consume.py": "9f9524d859eb75ec7df7127319d45235fe681d2dededd064d4ee2c50d1e81750",
     "tests/pra1353_derive.py": "3e301ec245fba896b12798554ccb8391f2facaf6409567772882aad7592d534e",

@@ -42,3 +42,17 @@ def adopt_on_kill(monkeypatch, *pid_files) -> None:
         return guarded(pid, sig)
 
     monkeypatch.setattr(os, "kill", kill)
+
+
+def adopt_started_in_test(monkeypatch) -> None:
+    """For a detached process whose pid no file can name (a sandboxed run's grandchild): when the
+    code under test signals a pid, adopt() it first, so it passes only if it started after the
+    test began. The code under test picks its targets by its own run token, not this helper."""
+    guarded = os.kill
+
+    def kill(pid, sig):
+        if sig != 0 and isinstance(pid, int):
+            kill_guard.adopt(pid)
+        return guarded(pid, sig)
+
+    monkeypatch.setattr(os, "kill", kill)
