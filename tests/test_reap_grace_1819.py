@@ -8,6 +8,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 import cairnwork.confined as confined
 import cairnwork.verifier_account as va
@@ -129,7 +130,7 @@ def test_confined_hands_reap_a_main_whose_alive_follows_the_run(tmp_path):
     ``Main`` of 1 whose ``alive`` is true, and it turns false once the run has really ended."""
     seen = []
 
-    def reap(main=0):
+    def reap(main: Any = 0):
         seen.append((isinstance(main, vg.Main), int(main), main.alive()))
         time.sleep(1.0)  # the child ends by itself
         seen.append(main.alive())
