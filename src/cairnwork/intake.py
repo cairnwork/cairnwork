@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from cairnwork import runlock, takeover
+from cairnwork import present, runlock, takeover
 from cairnwork.config_read import ConfigReadError, read_json_config
 from cairnwork.deferred_store import DeferredStore
 from cairnwork.intake_config import DEFAULT_CONFIG, has_token, one_line, seconds_ok, stored_config
@@ -384,7 +384,10 @@ class Intake:
         """A missing state directory is an error, not "nothing in flight" (fail closed)."""
         if not self.state.is_dir():
             raise IntakeRefused("BAD_STATE", f"{self.state} does not exist")
-        has_ledger = (self.state / "ownership.sqlite").exists()
+        try:
+            has_ledger = present.exists(self.state / "ownership.sqlite")  # #1823
+        except OSError as exc:
+            raise IntakeRefused("BAD_STATE", f"cannot look for the ledger: {exc.strerror}") from exc
         records = self.ledger.in_flight() if has_ledger else []
         foreign = self.ledger.foreign_in_flight() if has_ledger else []
         return {
