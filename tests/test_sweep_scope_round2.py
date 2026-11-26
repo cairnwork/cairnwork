@@ -184,3 +184,15 @@ def test_an_undeclared_temp_subtree_is_refused(monkeypatch, tmp_path):
     with pytest.raises(proc_cwd.OutOfScope):
         proc_cwd.scope([f"{base}/a1"])
     assert proc_cwd.scope([f"{base}/runs/a1"], [f"{base}/runs"]) == (f"{base}/runs/a1",)
+
+
+def test_a_tmpdir_below_the_private_temp_dir_still_names_that_temp_dir(monkeypatch):
+    """A sealed run sets TMPDIR to a directory inside T (tests/pra1353_consume.py): T is the root."""
+    t = "/private/var/folders/ab/cdef12/T"
+    monkeypatch.setattr(proc_cwd, "_MACOS", True)
+    monkeypatch.setattr(proc_cwd, "_DARWIN", True)
+    monkeypatch.setattr(os.path, "realpath", lambda p: p)
+    for set_to, want in ((f"{t}/cw1353-x", [t]), (t, [t]), (f"{t}x/y", []), ("/private/tmp/a", [])):
+        monkeypatch.setattr(tempfile, "gettempdir", lambda set_to=set_to: set_to)
+        assert proc_cwd._temps() == want
+    monkeypatch.undo()

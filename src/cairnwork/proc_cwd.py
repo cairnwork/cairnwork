@@ -213,7 +213,7 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(found))
 
 
-_TEMP_SHAPE = re.compile(r"^/private/var/folders/[^/]+/[^/]+/T$", re.IGNORECASE)
+_TEMP_SHAPE = re.compile(r"^(/private/var/folders/[^/]+/[^/]+/T)(?:/|$)", re.IGNORECASE)
 _VERIFIER_BASE = "/users/shared/cairnwork"  # verifier_account's macOS base (casefolded)
 _DARWIN = sys.platform == "darwin"  # the real platform: tests flip _MACOS alone to fake macOS
 
@@ -237,10 +237,10 @@ def _epoch(raw: bytes | None) -> float | None:
 
 
 def _temps() -> list[str]:
-    """The user's private temp dir. macOS: only ``/private/var/folders/<b>/<id>/T``, never the
-    shared ``/tmp`` or ``/var/tmp``; elsewhere (nothing is swept there) the temp dir as set."""
+    """Private temp: macOS ``/private/var/folders/<b>/<id>/T`` only (TMPDIR below it too)."""
     real = os.path.realpath(tempfile.gettempdir())
-    return [real] if not (_MACOS and _DARWIN) or _TEMP_SHAPE.match(real) else []
+    found = _TEMP_SHAPE.match(real)
+    return [found.group(1) if found else real] if found or not (_MACOS and _DARWIN) else []
 
 
 def _home() -> str:
