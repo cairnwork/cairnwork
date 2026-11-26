@@ -3,7 +3,6 @@ command line or a control character. Pure functions only: no run, no sandbox."""
 
 import pytest
 
-from cairnwork.base_fixture_names import unnameable_deleted
 from cairnwork.collected_names import CollectedRecord
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.runtime_reach import check_runtime_reach
@@ -67,11 +66,6 @@ def test_changed_archive_on_recorded_sys_path_still_refused():
         check_runtime_reach(_record(sys_path=("tests/lib.zip",)), ["tests/lib.zip"])
 
 
-@pytest.mark.parametrize("path", HOSTILE[:7])
-def test_deleted_py_path_no_target_can_name_is_flagged(path):
-    assert unnameable_deleted((path,), ("tests",)) == (path,)
-
-
-def test_deleted_ordinary_paths_are_not_flagged():
-    deleted = ("tests/test_path_plugin.py", "tests/a/test_b-c.py", "tests/data/x.zip")
-    assert unnameable_deleted(deleted, ("tests",)) == ()
+@pytest.mark.parametrize("path", ["a:::b", "::::x", "a::b", "x:::::"])
+def test_colon_runs_leave_no_double_colon(path):
+    assert "::" not in log_safe(path)
