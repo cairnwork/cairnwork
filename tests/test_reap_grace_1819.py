@@ -4,8 +4,12 @@ a harmless change, while anything still there when the grace ends is refused as 
 Seams: ``_escaped_count`` (counts in order), ``_kill_until_clean``, a fake clock on ``va.time``.
 """
 
+import sys
+import time
+import uuid
 from pathlib import Path
 
+import cairnwork.confined as confined
 import cairnwork.verifier_account as va
 import cairnwork.verifier_grace as vg
 import cairnwork.verifier_seen as vs
@@ -118,3 +122,22 @@ def test_a_main_that_dies_during_the_grace_stops_being_taken_off(monkeypatch):
 
     monkeypatch.setattr(va.time, "sleep", sleep)
     assert acct.reap(vg.Main(1, lambda: state["alive"])) == 1  # ...but main is gone: a resident
+
+
+def test_confined_hands_reap_a_main_whose_alive_follows_the_run(tmp_path):
+    """The wiring in confined.execute: a stopped run that is still going is handed over as a
+    ``Main`` of 1 whose ``alive`` is true, and it turns false once the run has really ended."""
+    seen = []
+
+    def reap(main=0):
+        seen.append((isinstance(main, vg.Main), int(main), main.alive()))
+        time.sleep(1.0)  # the child ends by itself
+        seen.append(main.alive())
+        return 0
+
+    env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
+    confined.execute(
+        [sys.executable, "-c", "import time; time.sleep(0.3)"],
+        tmp_path, env, 60, tmp_path / "log", reap=reap, stop=lambda: True,
+    )  # fmt: skip
+    assert seen == [(True, 1, True), False]
