@@ -18,9 +18,13 @@ tests, so the base run refuses it, DEFERRED_TESTS_NOT_RUN).
 inherited the same way. pytest does not collect such a class (it warns and runs none of its
 tests), so a target naming the file still runs none of them. A ``unittest.TestCase`` subclass with
 its own ``__init__`` is collected by pytest's unittest support but is counted here as well: a test
-commit with one is refused, never wrongly accepted. Bases imported from another module are not
-read; neither are custom ``python_functions``/``python_classes`` settings. A class's decorators are
-part of each of its tests, and so are (#968, #979) its whole class less its ``test*`` methods
+commit with one is refused, never wrongly accepted. A base bound only by one top-level import
+(``deferred_imports``, #1833) is read as a possible test-case base that inherits nothing from the
+file's earlier classes; a file that may rebind such a name through a run-time write keeps the
+cautious reading (every earlier class may be the base), so its ids are never fewer than that
+reading's (#1840). Other imported bases are not resolved; nor are custom
+``python_functions``/``python_classes`` settings. A class's decorators are part of each of its
+tests, and so are (#968, #979) its whole class less its ``test*`` methods
 (bases, keywords and metaclass, ``pytestmark``, attributes, flags, helper and setup methods)
 and the same of each base class defined earlier in the file; every module-level statement that
 is not an import, a test or a plain function, whole: so every non-test class (its body runs at

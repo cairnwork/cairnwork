@@ -12,9 +12,7 @@ import pytest
 from cairnwork import deferred_imports, deferred_nodes
 from cairnwork.deferred_nodes import test_functions as functions_of
 
-HEAD = (
-    "import sys\nimport unittest\nimport pytest\nfrom unittest import mock\n"
-)
+HEAD = "import sys\nimport unittest\nimport pytest\nfrom unittest import mock\n"
 P = "class P(unittest.TestCase):\n    def test_p(self):\n        pass\n\n"
 IMP = "from helpers import Base\n"
 TAIL = "\n\nclass I(Base):\n    def test_i(self):\n        pass\n"
@@ -44,7 +42,9 @@ AFTER_IMPORT = {
     "currentframe": "import inspect\ninspect.currentframe().f_globals['Base'] = P\n",
     "frame-update": "sys._getframe().f_globals.update(Base=P)\n",
     "mock-patch-object": "import helpers\nmock.patch.object(helpers, 'Base', P).start()\n",
-    "monkeypatch-fixture": "def test_mp(monkeypatch):\n    monkeypatch.setattr('helpers.Base', P)\n",
+    "monkeypatch-fixture": (
+        "def test_mp(monkeypatch):\n    monkeypatch.setattr('helpers.Base', P)\n"
+    ),
     "string-name-only": "NAMES = ['Base']\n",
     "dotted-string": "TARGET = 'test_self.Base'\n",
     "module-attr-after": "import helpers\nhelpers.Base = P\n",
@@ -56,8 +56,10 @@ AFTER_IMPORT = {
     "types-module": "import types\ntypes.SimpleNamespace(Base=P)\n",
     "delattr": "delattr(sys, 'Base')\n",
 }
-ALL = {**{k: ("before", v) for k, v in BEFORE_IMPORT.items()},
-       **{k: ("after", v) for k, v in AFTER_IMPORT.items()}}
+ALL = {
+    **{k: ("before", v) for k, v in BEFORE_IMPORT.items()},
+    **{k: ("after", v) for k, v in AFTER_IMPORT.items()},
+}
 
 
 def _file(kind: str, body: str) -> str:
@@ -93,8 +95,11 @@ def test_a_name_that_is_only_read_or_aliased_stays_import_bound(name):
 def test_the_property_ids_on_head_contain_main_s_ids_for_every_shape(name, monkeypatch):
     kind, body = ALL[name]
     for base in ("Base", "Base2", "hs.Base"):
-        imp = {"Base": IMP, "Base2": "from helpers import Base as Base2\n",
-               "hs.Base": "import helpers as hs\n"}[base]
+        imp = {
+            "Base": IMP,
+            "Base2": "from helpers import Base as Base2\n",
+            "hs.Base": "import helpers as hs\n",
+        }[base]
         tail = TAIL.replace("(Base)", f"({base})")
         src = HEAD + P + (body + imp if kind == "before" else imp + body) + tail
         assert _ids(src) >= _cautious(src, monkeypatch)
