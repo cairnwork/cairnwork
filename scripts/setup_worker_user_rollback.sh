@@ -69,7 +69,13 @@ owner_uid_guard() {   # $1 = worker uid
   local cand ouid seen=0
   for cand in "$OWNER" "${SUDO_USER:-}" "$(stat -f %Su "$RUNS" 2>/dev/null || true)"; do
     [[ -n "$cand" && "$cand" != root ]] || continue
-    ouid=$(id -u "$cand" 2>/dev/null) || continue
+    if ! ouid=$(id -u "$cand" 2>/dev/null); then
+      # A name the caller gave us (OWNER argument, SUDO_USER) that does not resolve means we cannot
+      # compare its uid: fail closed. Only the stat-derived candidate (the last, taken from $RUNS,
+      # which may be missing or unreadable) is skipped when its owner cannot be resolved.
+      [[ "$cand" == "$OWNER" || "$cand" == "${SUDO_USER:-}" ]] && die "cannot resolve the owner '$cand' to a uid; not killing by uid"
+      continue
+    fi
     seen=1
     [[ "$ouid" != "$1" ]] || die "worker uid $1 is the owner's ($cand); not killing that uid's processes"
   done

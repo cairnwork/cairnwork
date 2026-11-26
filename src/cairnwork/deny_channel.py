@@ -287,7 +287,8 @@ def _end_group(proc) -> None:
     except KeyError:
         return
     try:
-        safe_killpg(proc.pid, signal.SIGKILL)
+        if not safe_killpg(proc.pid, signal.SIGKILL):
+            raise OSError("group kill refused: the stream may still run")  # _guarded reports it
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
 

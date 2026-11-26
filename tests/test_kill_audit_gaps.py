@@ -2,6 +2,7 @@
 and the rollback script's uid guard. Every signal here goes to a recorder: nothing is ever sent,
 no process is touched, no sudo or root is needed."""
 
+import contextlib
 import importlib.util
 import os
 import re
@@ -67,7 +68,7 @@ def _agy_dispatch(pgid):
 
 
 def _agy_stop(pgid, monkeypatch):
-    monkeypatch.setattr(agy, "sweep_marked", lambda *a, **k: SimpleNamespace(held_by=[]))
+    monkeypatch.setattr(agy, "sweep_marked", lambda *a, **k: confined.Sweep(listed=True))
     monkeypatch.setattr(agy, "confirm_gone", lambda first, look: first)
     agy._stop(SimpleNamespace(pid=pgid, wait=lambda timeout=None: 0), None, "a")
 
@@ -84,7 +85,8 @@ SITES = {
 @pytest.mark.parametrize("site", SITES)
 @pytest.mark.parametrize("name", BAD)
 def test_every_group_kill_refuses_a_bad_group(sent, monkeypatch, site, name):
-    SITES[site](_bad(BAD[name]), monkeypatch)
+    with contextlib.suppress(OSError):  # a refusal is a failure now (test_kill_refused_results)
+        SITES[site](_bad(BAD[name]), monkeypatch)
     assert sent == []
 
 
@@ -181,3 +183,22 @@ def test_local_worker_wrapper_already_refuses_slash_as_run_root(tmp_path):
     args: list[Any] = ["/bin/sh", str(WRAPPER), "status", "/"]
     proc = subprocess.run(args, capture_output=True, env=env, cwd=tmp_path, check=False)
     assert proc.returncode == 64 and b"refusing" in proc.stderr, proc.stderr
+
+
+@needs_zsh
+@pytest.mark.parametrize("kwargs", [{"owner": "ghost"}, {"sudo_user": "ghost"}])
+def test_rollback_dies_when_a_named_owner_does_not_resolve(kwargs):
+    out = _guard(399, **kwargs)  # id fails for "ghost": a named owner we cannot compare
+    assert out.returncode == 1 and "cannot resolve the owner 'ghost'" in out.stdout, out
+
+
+@needs_zsh
+def test_rollback_dies_even_when_another_named_owner_resolves():
+    out = _guard(399, owner="james", sudo_user="ghost")
+    assert out.returncode == 1 and "cannot resolve the owner 'ghost'" in out.stdout, out
+
+
+@needs_zsh
+def test_rollback_skips_an_unresolvable_stat_candidate():
+    out = _guard(399, owner="james", runs_owner="ghost")
+    assert out.returncode == 0 and out.stdout.strip().endswith("OK"), out

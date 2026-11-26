@@ -177,11 +177,15 @@ def _kill_group(proc: subprocess.Popen[bytes]) -> None:
     # After a normal exit the leader is reaped; the pgid stays in use while any member lives,
     # so only a fully gone group whose id was reused at once could be hit (accepted, #731).
     try:
-        safe_killpg(proc.pid, signal.SIGKILL)
+        sent = safe_killpg(proc.pid, signal.SIGKILL)
     except ProcessLookupError:
-        pass  # the group is already gone
+        return  # the group is already gone
     except OSError:
         proc.kill()
+        return
+    if not sent:  # refused: the group is not known gone, so the run is a failure (logged, alerted)
+        proc.kill()
+        raise OSError("group kill refused: the hook's group may still run")
 
 
 def _append(path: Path, record: dict[str, Any]) -> None:

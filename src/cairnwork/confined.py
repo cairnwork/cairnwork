@@ -58,7 +58,7 @@ def execute(
             pass_fds=pass_fds,  # descriptors the child inherits on purpose (report_channel)
             preexec_fn=_limit_file_size,  # noqa: PLW1509 - only setrlimit, no locks
         )
-        timed_out = finished = False
+        timed_out = finished = refused = False
         try:  # the group is killed on any way out after the start, an interrupt included (#537)
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
@@ -70,13 +70,15 @@ def execute(
             escaped = (reap(1) if running else reap()) if reap is not None else 0
             finished = True
         finally:
-            _kill_group(process.pid)
+            refused = not _kill_group(process.pid)  # a refused kill leaves the group alive
             if not finished and reap is not None:  # interrupted: the account's processes too
                 with suppress(Exception):  # best effort (own deadline); the interrupt propagates
                     reap()
             with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
                 process.wait(timeout=None if finished else 10)
         survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
+        if refused:  # never clean: the group may still run
+            survivors += survivor_argv.Survivors(1, (), ("group kill refused",))
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if copier.is_alive():
             survivors = survivor_argv.Survivors(
@@ -386,8 +388,9 @@ def _parse_ps(stdout: str):
     return rows
 
 
-def _kill_group(pgid: int) -> None:
+def _kill_group(pgid: int) -> bool:
+    """False only when safe_killpg refused to signal: the group then is not known gone."""
     try:
-        safe_killpg(pgid, signal.SIGKILL)
+        return safe_killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
-        pass  # the group is already gone
+        return True  # the group is already gone

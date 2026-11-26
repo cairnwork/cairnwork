@@ -29,7 +29,7 @@ import signal
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from cairnwork import proc_start, provenance
@@ -370,8 +370,9 @@ def _stop(
     realpath taken before agy started; on macOS a process whose environment is withheld is tied
     to the attempt when its working directory is inside it, as in confined.execute (#537); those
     count once each, at any look (the run is then fenced, even once they are gone)."""
+    refused = False
     try:
-        safe_killpg(process.pid, signal.SIGKILL)
+        refused = not safe_killpg(process.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass  # the group is already gone
     process.wait()
@@ -386,6 +387,8 @@ def _stop(
         return one
 
     swept = confirm_gone(look(), look)
+    if refused:  # as a kill the sweep was denied: running, so never gone, and the run is fenced
+        swept = replace(swept, denied=swept.denied + 1)
     for thread in (copier, reader):  # copier is None when the start itself failed
         if thread is not None:
             thread.join(timeout=10)
