@@ -277,3 +277,73 @@ def test_a_child_that_leaves_before_the_cap_is_not_refused(monkeypatch, leave_at
     account = _Honest(clock, 1, leave_at=leave_at)
     before, taken, _ = vg.settle(account, 2, vg.Main(1, lambda: True), clock["now"] + 120.0)
     assert before - taken == 0
+
+
+class _Costly:
+    """A recount takes ``cost`` fake seconds and is unknown (-1) when its budget is below that."""
+
+    def __init__(self, clock, cost, residents, main=1, leave_at=None):
+        self.clock, self.cost, self.residents, self.main = clock, cost, residents, main
+        self.start, self.leave_at, self.calls = clock["now"], leave_at, 0
+
+    def _escaped_count(self, deadline=None, attempts=1):
+        self.calls += 1
+        budget = float("inf") if deadline is None else deadline - self.clock["now"]
+        self.clock["now"] += self.cost
+        if budget < self.cost:
+            return -1
+        gone = self.leave_at is not None and self.clock["now"] - self.start >= self.leave_at
+        return self.main if gone else self.main + self.residents
+
+
+COSTS = [0.05, 0.08, 0.12]
+
+
+@pytest.mark.parametrize("cost", COSTS)
+@pytest.mark.parametrize(("main_alive", "residents"), [(True, 1), (True, 2), (False, 1)])
+def test_a_known_count_is_never_replaced_by_a_later_unknown(
+    monkeypatch, cost, main_alive, residents
+):
+    clock = _fake_clock(monkeypatch)
+    account = _Costly(clock, cost, residents, main=1 if main_alive else 0)
+    main = vg.Main(1, lambda: main_alive)
+    before, taken, _ = vg.settle(account, 1 + residents, main, clock["now"] + 120.0)
+    assert before >= 0 and before - taken == residents  # a slow recount cannot hide the residents
+    assert clock["now"] - account.start <= vg.GRACE_SECONDS + 0.1
+
+
+@pytest.mark.parametrize("cost", COSTS)
+def test_a_slow_recount_through_reap_still_lists_and_refuses(monkeypatch, cost):
+    clock = _fake_clock(monkeypatch)
+    account = _Costly(clock, cost, 1, main=0)
+    shots = []
+
+    def snap(user, timeout):
+        shots.append(timeout)
+        return LISTING
+
+    monkeypatch.setattr(
+        va.VerifierAccount,
+        "_escaped_count",
+        lambda self, d=None, attempts=1: account._escaped_count(d, attempts),
+    )
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, a, d: 0)
+    monkeypatch.setattr(vs, "snapshot", snap)
+    got = va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(vg.Main(0, lambda: False))
+    assert got == 1 and shots and got.argv == LISTING[0]
+
+
+@pytest.mark.parametrize("cost", [0.005, 0.01, 0.03])
+@pytest.mark.parametrize("leave_at", [0.1, 1.0, 1.9, 1.97])
+def test_a_child_that_leaves_is_not_refused_whatever_the_recount_costs(monkeypatch, cost, leave_at):
+    clock = _fake_clock(monkeypatch)
+    account = _Costly(clock, cost, 1, leave_at=leave_at)
+    before, taken, _ = vg.settle(account, 2, vg.Main(1, lambda: True), clock["now"] + 120.0)
+    assert before - taken == 0
+
+
+def test_an_unknown_first_count_is_refused_at_once_without_a_recount(monkeypatch):
+    clock = _fake_clock(monkeypatch)
+    account = _Costly(clock, 0.01, 1)
+    before, _, _ = vg.settle(account, -1, vg.Main(1, lambda: True), clock["now"] + 120.0)
+    assert before == -1 and account.calls == 0 and clock["now"] == account.start
