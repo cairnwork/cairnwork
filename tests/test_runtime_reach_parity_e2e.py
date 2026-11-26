@@ -55,7 +55,6 @@ def test_budget_used_up_ignores_a_healthy_tree_file_past_the_cap(project, tmp_pa
     files["tests/m/data/lib.zip" if bad else "tests/m/data/other.zip"] = "changed"
     extra = tuple(sorted(p for p in files if p.endswith(".py")))
     out = go(project, tmp_path, base, files, extra=extra)
-    print("VERDICT", bad, out.status, out.reason)
     (refused if bad else accepted)(out)
 
 
