@@ -20,7 +20,8 @@ import copy
 from dataclasses import replace
 from pathlib import Path
 
-from cairnwork.deferred_tests import _test_functions, _tree
+from cairnwork.deferred_nodes import changed_ids
+from cairnwork.deferred_tests import _EMPTY, _tree
 from cairnwork.node_file import file_part
 from cairnwork.node_ids import mask_paths, unmatched_note, without_case
 from cairnwork.verifiers import VerifierRun
@@ -36,9 +37,9 @@ def changed_tests(
     found = set()
     for path in paths:
         if path.endswith(".py"):
-            before = _test_functions(repo, f"{base}:{path}", present=True)  # on both commits
-            after = _test_functions(repo, f"{test_commit}:{path}", present=True)
-            found |= {f"{path}::{n}" for n in before.keys() & after.keys() if before[n] != after[n]}
+            old = _tree(repo, f"{base}:{path}", present=True) or _EMPTY  # on both commits
+            new = _tree(repo, f"{test_commit}:{path}", present=True) or _EMPTY
+            found |= {f"{path}::{n}" for n in changed_ids(old, new)}
     return frozenset(found)
 
 

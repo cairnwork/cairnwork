@@ -336,3 +336,41 @@ def test_an_id_main_does_not_list_must_differ_from_the_base_side_wide_reading(pa
     wide_after = functions_of(ast.parse(new))[0]
     extra = _targets(old, new) - _main_targets(old, new)
     assert all(wide_before.get(i) != wide_after[i] for i in extra)
+
+
+# A class defined twice under one name: the wider reading lets the later class replace the earlier
+# one's id, so the two readings can disagree about one id. Each reading is compared on its own.
+DUP = (
+    "import unittest\nimport helpers\n\n\nclass Checks(unittest.TestCase):\n"
+    "    def test_a(self):\n        assert {n}\n\n\nclass Checks(helpers.Base):\n"
+    "    def test_a(self):\n        assert 2\n"
+)
+DUP_PAIRS = {
+    "same": (DUP.format(n=1), DUP.format(n=1), set()),
+    "comment-before": (DUP.format(n=1), "# note\n" + DUP.format(n=1), set()),
+    "first-class-changed": (DUP.format(n=1), DUP.format(n=3), {"Checks::test_a"}),
+}
+
+
+def _main_changed(old: str, new: str) -> set[str]:
+    before = functions_of(ast.parse(old), imported=False)[0]
+    after = functions_of(ast.parse(new), imported=False)[0]
+    return {i for i in before.keys() & after.keys() if before[i] != after[i]}
+
+
+def _changed(old: str, new: str) -> set[str]:
+    return set(deferred_nodes.changed_ids(ast.parse(old), ast.parse(new)))
+
+
+@pytest.mark.parametrize("pair", DUP_PAIRS)
+def test_a_class_defined_twice_lists_exactly_the_changed_ids(pair):
+    old, new, want = DUP_PAIRS[pair]
+    assert _targets(old, new) == want
+    assert _changed(old, new) == want
+
+
+@pytest.mark.parametrize("pair", [*PAIRS, *DUP_PAIRS])
+def test_changed_and_new_ids_are_never_fewer_than_main(pair):
+    old, new = (PAIRS | DUP_PAIRS)[pair][:2]
+    assert _main_changed(old, new) <= _changed(old, new)
+    assert _main_targets(old, new) <= _targets(old, new)

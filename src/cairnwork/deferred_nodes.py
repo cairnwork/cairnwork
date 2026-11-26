@@ -127,6 +127,13 @@ def target_ids(old: ast.Module, new: ast.Module) -> tuple[set[str], frozenset[st
     return found, uncollected
 
 
+def changed_ids(old: ast.Module, new: ast.Module) -> set[str]:
+    """The node ids present in both files whose digest differs (``p2p_nodes.changed_tests``).
+    #1833: today both files read with the imported-base addition."""
+    before, after = test_functions(old)[0], test_functions(new)[0]
+    return {i for i in before.keys() & after.keys() if before[i] != after[i]}
+
+
 def _root_name(base: ast.expr) -> str:
     """The leftmost name of ``a.b.c`` (``a``); empty for any other expression. A loop, not
     ``ast.unparse``, which recurses once per level and fails on a deeply nested base."""
