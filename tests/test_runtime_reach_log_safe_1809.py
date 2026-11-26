@@ -9,14 +9,13 @@ from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.runtime_reach import check_runtime_reach
 from cairnwork.textclean import log_safe
 
-HOSTILE = [
+HOSTILE = [  # no NUL: git cannot store one in a file name
     "tests/x\n::error::.../pkg/mod.py",
     "tests/x\r::warning::/pkg/mod.py",
     "tests/x\n##[error]boom/pkg/mod.py",
     "tests/x\x1b[31m/pkg/mod.py",
     "tests/x ::error::/pkg/mod.py",
     "tests/x\x85::error::/pkg/mod.py",
-    "tests/x\0y/pkg/mod.py",
     "tests/::error::x/pkg/mod.py",
     "tests/##[group]x/pkg/mod.py",
 ]

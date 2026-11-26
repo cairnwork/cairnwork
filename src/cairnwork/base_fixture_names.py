@@ -24,7 +24,9 @@ from cairnwork.base_tree_targets import base_tree_targets, conftest_dirs, pick_d
 from cairnwork.conftest_check import check_conftests, conftest_of, governed
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import run_git_bytes
+from cairnwork.issue_task import test_target
 from cairnwork.runtime_reach import CODE, check_runtime_reach
+from cairnwork.textclean import log_safe
 from cairnwork.verifier_spec import VerifierSpec
 from cairnwork.verifiers import run_verifiers
 
@@ -44,9 +46,21 @@ def _on_base(repo: Path, base: str, path: str) -> bool:
     return done.returncode == 0
 
 
+def unnameable_deleted(deleted, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """The deleted ``.py`` paths no verifier target can name (the rule an added or changed ``.py``
+    meets in ``test_paths``; a deleted one skipped it). Such a path goes into the reach check and
+    its refusal text, so it is refused here, never dropped (dropping would only relax)."""
+    target = test_target(roots)
+    return tuple(p for p in deleted if p.endswith(".py") and not target.fullmatch(p))
+
+
 def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, deleted=()) -> None:
     """``check_conftests`` with the base's collected fixture names (None when not obtained), then
     the runtime plugin and sys.path reach (#1769; refusals only)."""
+    if bad := unnameable_deleted(deleted, tuple(task.test_roots)):
+        raise TestCommitRejected(
+            CODE, f"no verifier target can name the deleted {log_safe(bad[0])}"
+        )
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
     on_base = (*(p for p in paths if _on_base(task.repo, task.base_commit, p)), *deleted)

@@ -30,6 +30,7 @@ from pathlib import PurePosixPath
 
 from cairnwork.collected_names import CollectedRecord
 from cairnwork.deferred_overlay import TestCommitRejected
+from cairnwork.textclean import log_safe
 
 CODE = "TEST_COMMIT_CONFTEST_STATIC"
 _BYTECODE = (".pyc", ".pyo")
@@ -85,7 +86,7 @@ def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
 
 
 def _refuse(why: str) -> None:
-    raise TestCommitRejected(CODE, why)
+    raise TestCommitRejected(CODE, log_safe(why))  # why carries changed paths: candidate text
 
 
 def _real(full: str) -> str | None:
