@@ -2,14 +2,14 @@
 
 The first file of the directory cannot be collected; the commit mends it, edits the file that reads
 the state, and changes one archive. Four kinds of state (environment value, path entry, module
-attribute, a hook that runs at configure time), each with a twin that changes another archive and
-must pass. Sandbox rows (CAIRNWORK_REQUIRE_SANDBOX=1).
+attribute, a hook that runs at configure time), each with a twin that changes another archive;
+main refuses both, so this head must too (never wider). Sandbox rows (CAIRNWORK_REQUIRE_SANDBOX=1).
 """
 
 # ruff: noqa: F811  (a pytest fixture is used by its argument name)
 import pytest
 from conftest_scenarios import project  # noqa: F401  (the fixture)
-from test_runtime_reach_tree_e2e import BROKEN, JOINED, OK, accepted, go, refused
+from test_runtime_reach_tree_e2e import BROKEN, JOINED, OK, go, refused
 
 pytestmark = pytest.mark.sandbox
 
@@ -51,4 +51,4 @@ def test_a_changed_reader_reaches_the_archive_through_state_a_sibling_sets(
     files = {"tests/m/test_00.py": OK, "tests/m/test_01.py": reader + "# e\n"}
     files["tests/m/data/lib.zip" if bad else "tests/m/data/other.zip"] = "changed"
     out = go(project, tmp_path, base, files, extra=("tests/m/test_00.py", "tests/m/test_01.py"))
-    (refused if bad else accepted)(out)
+    refused(out)  # the twin is refused on main too (a base file that cannot be collected): pinned
