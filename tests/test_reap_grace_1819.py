@@ -347,3 +347,20 @@ def test_an_unknown_first_count_is_refused_at_once_without_a_recount(monkeypatch
     account = _Costly(clock, 0.01, 1)
     before, _, _ = vg.settle(account, -1, vg.Main(1, lambda: True), clock["now"] + 120.0)
     assert before == -1 and account.calls == 0 and clock["now"] == account.start
+
+
+@pytest.mark.parametrize("cost", [0.005, 0.01, 0.03])
+@pytest.mark.parametrize("leave_at", [0.1, 1.0, 1.8, 1.9])
+@pytest.mark.parametrize("main", [0, vg.Main(0, lambda: False)], ids=["default", "alive-false"])
+def test_a_child_that_leaves_with_no_main_is_not_refused(monkeypatch, cost, leave_at, main):
+    clock = _fake_clock(monkeypatch)
+    account = _Costly(clock, cost, 1, main=0, leave_at=leave_at)
+    monkeypatch.setattr(
+        va.VerifierAccount,
+        "_escaped_count",
+        lambda self, d=None, attempts=1: account._escaped_count(d, attempts),
+    )
+    monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, a, d: 0)
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a, **k: ((), ()))
+    got = va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
+    assert got == 0 and not getattr(got, "argv", ())
