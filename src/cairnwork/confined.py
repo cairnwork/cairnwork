@@ -23,6 +23,7 @@ from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (v
 from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
 from cairnwork.pipe_copy import _limit_file_size, copy_capped
 from cairnwork.proc_linux import _linux_environment, _linux_processes  # moved (#814): size cap
+from cairnwork.safe_kill import safe_killpg
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
@@ -33,18 +34,19 @@ PS_TIMEOUT_SECONDS = 60
 
 
 def execute(
-    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None, reap_group=False
+    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None, scope_roots=(), pgrp=False
 ) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
-    never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671, a
-    callable polled with the wait, collect_stop.py) ends the wait early: the run is then killed
-    like any other and the early end is not a timeout."""
+    never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671,
+    polled with the wait) ends it early, not as a timeout. On macOS ``cwd`` must be inside the
+    private temp dir or a ``scope_roots`` entry (the run root), else ValueError (#1849)."""
     token = env.get(RUN_TOKEN_VAR)
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
+    dirs = proc_cwd.entry_dirs(cwd, scope_roots) if cwd is not None else ()  # now (#578)
+    since = proc_cwd.run_mark()  # a process older than this is not the run's (#1849)
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-    dirs = (os.path.realpath(cwd),) if cwd is not None else ()  # now: the run may swap it (#578)
     with os.fdopen(fd, "wb") as log:
         process = subprocess.Popen(  # noqa: S603 - argv built from an allow-listed spec, no shell
             argv,
@@ -57,26 +59,27 @@ def execute(
             pass_fds=pass_fds,  # descriptors the child inherits on purpose (report_channel)
             preexec_fn=_limit_file_size,  # noqa: PLW1509 - only setrlimit, no locks
         )
-        timed_out = finished = False
+        timed_out = finished = refused = False
         try:  # the group is killed on any way out after the start, an interrupt included (#537)
             copier = threading.Thread(target=copy_capped, args=(process.stdout, log), daemon=True)
             copier.start()
             timed_out = not _wait_unreaped(process.pid, timeout, stop)
             # a run ended early by ``stop`` still has its main process, which reap() would count
             running = stop is not None and not timed_out and _running(process.pid)
-            # Another account's processes: the owner cannot signal them; reap() kills them
-            # all and says how many were running (the main one, if it timed out, included).
-            more = {"group": process.pid} if reap_group else {}  # #1849: pgid == pid (new session)
+            # Another account's processes: reap() kills them all and says how many were running.
+            more = {"group": process.pid} if pgrp else {}  # #1849: pgid == pid (new session)
             escaped = (reap(1, **more) if running else reap(**more)) if reap is not None else 0
             finished = True
         finally:
-            _kill_group(process.pid)
+            refused = not _kill_group(process.pid)  # a refused kill leaves the group alive
             if not finished and reap is not None:  # interrupted: the account's processes too
                 with suppress(Exception):  # best effort (own deadline); the interrupt propagates
                     reap()
             with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
                 process.wait(timeout=None if finished else 10)
-        survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
+        survivors = _sweep_survivors(token, process.pid, dirs, mark, scope_roots, since) + escaped
+        if refused:  # never clean: the group may still run
+            survivors += survivor_argv.Survivors(1, (), ("group kill refused",))
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if copier.is_alive():
             survivors = survivor_argv.Survivors(
@@ -94,9 +97,8 @@ def _running(pid: int) -> bool:
 
 
 def _wait_unreaped(pid: int, timeout: float | None, stop=None) -> bool:
-    """True if the leader exited within timeout, or ``stop()`` said to end the run first. It is
-    left unreaped (a zombie), so its process group id stays reserved until the group has been
-    signalled (#1163)."""
+    """True if the leader exited within timeout, or ``stop()`` ended the run first. It is left
+    unreaped (a zombie): its group id stays reserved until signalled (#1163)."""
     if stop is None:
         return proc_wait.wait_exited_unreaped(pid, timeout)  # os.waitid, or kqueue (#1549)
     deadline = None if timeout is None else time.monotonic() + timeout
@@ -109,14 +111,15 @@ def _wait_unreaped(pid: int, timeout: float | None, stop=None) -> bool:
 
 
 def _sweep_survivors(
-    token: str, group: int, dirs: tuple[str, ...] = (), mark: str = ""
+    token: str, group: int, dirs: tuple[str, ...] = (), mark: str = "", roots=(), since=None
 ) -> survivor_argv.Survivors:
     """Each process found at any look counts once; none only after two clean looks (#578, #599)."""
     found: set[int] = set()
     argv: dict[int, str] = {}  # #814: what each found process ran, read before its kill
 
     def look() -> Sweep:  # confirm_gone, as recovery: one exited, a child it left is seen next
-        one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
+        one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark,
+                           cwd_dirs=dirs, cwd_roots=roots, cwd_since=since)  # fmt: skip
         found.update(pid for pid, why in one.held_by if why in ("marked", "cwd"))
         argv.update(one.argv)
         return one
@@ -153,6 +156,10 @@ class Sweep:
     @property
     def found(self) -> int:
         return self.killed + self.denied
+
+    def with_refused_kill(self) -> Sweep:
+        """The same look plus one process whose kill safe_killpg refused: running, never gone."""
+        return replace(self, denied=self.denied + 1)
 
     @property
     def gone(self) -> bool:
@@ -202,22 +209,22 @@ def sweep_marked(
     account: str | None = None,
     dispatched: str = "",
     cwd_dirs: tuple[str, ...] = (),
+    cwd_roots=(),
+    cwd_since: float | None = None,
 ) -> Sweep:
     """SIGKILL the owner's processes whose environment holds var=value, and say what was seen.
 
-    Used for processes that escaped a run's process group (e.g. via setsid) and for a
-    dead run's workers. Members of skip_group were just sent SIGKILL and are not
-    counted. A process that clears its environment is not found; only a separate
-    uid stops that. ``account``: a worker account the attempt ran as; its processes cannot
-    be inspected, so each one is counted (``Sweep.account``). A table (or an account) that
-    cannot be read is UNLISTED: "may still be running", never "none". A process whose owner
-    cannot be read (Linux: pgid None) may be the owner's or the account's: it is judged as one
-    of the owner's, so a hidden environment keeps it unreadable (#244). ``dispatched``: the
-    attempt's DISPATCHED boot mark; a hidden process started before it is not counted (proc_start).
-    ``cwd_dirs`` (macOS): an attempt's run directories or a run's checkout, as realpaths taken
-    before the run could swap one for a symlink (#578); an owner process whose environment macOS
-    withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working directory is inside one;
-    one that left them is not found (proc_cwd). Empty: no extra reads.
+    For processes that escaped a run's process group (setsid) and a dead run's workers. Members
+    of skip_group were just sent SIGKILL: not counted. One that clears its environment is not
+    found; only a separate uid stops that. ``account``: the worker account the attempt ran
+    as; its processes cannot be inspected, so each is counted (``Sweep.account``). A table (or
+    an account) that cannot be read is UNLISTED: "may still be running", never "none". A
+    process whose owner cannot be read (Linux: pgid None) is judged one of the owner's, so a
+    hidden environment keeps it unreadable (#244). ``dispatched``: the attempt's DISPATCHED
+    boot mark; a hidden process started before it is not counted (proc_start).
+    ``cwd_dirs`` (macOS): run directories, realpaths taken before the run could swap one for
+    a symlink (#578); an owner process whose environment macOS withholds is killed ("cwd")
+    when its working directory is inside one (``cwd_roots``, ``cwd_since``: #1849).
     """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
@@ -233,7 +240,9 @@ def sweep_marked(
     seen: dict[int, str] = {}
     killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker, seen)
     plain = [r for r in ours if r[3] is not None and marker not in r[3]] if cwd_dirs else []
-    by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen) if cwd_dirs else ([], [], 0)
+    by_cwd = ([], [], 0)
+    if cwd_dirs:
+        by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen, cwd_roots, cwd_since)
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
     late = _kill_marked([r for r in hidden if r[3] is not None], marker, seen)
     killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2] + by_cwd[2]
@@ -244,8 +253,7 @@ def sweep_marked(
                      + [(p, "cwd") for p in by_cwd[0] + by_cwd[1]]
                      + [(p, "worker-account") for p in held])  # fmt: skip
     killed, denied = killed + by_cwd[0], denied + by_cwd[1]
-    # Linux /proc mounted with hidepid may hide any process, a same-uid one that is not
-    # dumpable included: after killing what it shows, such a look is never "gone".
+    # Linux /proc with hidepid may hide any process: such a look is never "gone".
     hidden_by = _restricted()
     return Sweep(not hidden_by, len(killed), len(denied), len(unreadable), len(held),
                  tuple(held_by), hidden_by, vanished, argv=tuple(seen.items()))  # fmt: skip
@@ -271,11 +279,10 @@ def _kill_marked(rows, marker: str, seen=None) -> tuple[list[int], list[int], in
 
 
 def confirm_gone(first: Sweep, again: Callable[[], Sweep]) -> Sweep:
-    """Look again (``again``) after ``first`` until two looks in a row are gone, the table
-    cannot be read, or CONFIRM_TRIES run out; return the last look. The second clean look,
-    taken after every kill, shows that nothing the one before missed is left (e.g. a child of
-    a marked process that exited before its kill). Clean only once at the end: ``unconfirmed``,
-    so not gone."""
+    """Look again after ``first`` until two looks in a row are gone, the table cannot be read,
+    or CONFIRM_TRIES run out; return the last look. The second clean look shows nothing the
+    first missed (a child of a marked process that exited before its kill) is left. Clean only
+    once at the end: ``unconfirmed``, so not gone."""
     found, clean = first, int(first.gone)
     for _ in range(CONFIRM_TRIES):
         if clean >= 2 or not found.listed:
@@ -287,9 +294,9 @@ def confirm_gone(first: Sweep, again: Callable[[], Sweep]) -> Sweep:
 
 
 def _resolve_hidden(rows, mine: int):
-    """Read again the owner's processes whose environment was hidden: one that is starting
-    (fork, exec) hides it for a moment, and a busy host nearly always has one. Those that
-    exited are dropped; those still hidden after HIDDEN_TRIES stay hidden (None)."""
+    """Read again the owner's processes whose environment was hidden (one that is starting hides
+    it for a moment). Those that exited are dropped; those still hidden after HIDDEN_TRIES
+    stay hidden (None)."""
     for _ in range(HIDDEN_TRIES):
         hidden = {row[0] for row in rows if row[2] == mine and row[3] is None}
         if not hidden:
@@ -334,7 +341,7 @@ def _reread(pids: set[int]) -> dict[int, set[str] | None] | None:
 
 
 def _restricted() -> str:
-    """Why /proc may hide processes; "" when it cannot (#244, proc_restrict)."""
+    """Why /proc may hide processes; "" when it cannot (#244)."""
     return proc_restrict.restriction() if sys.platform.startswith("linux") else ""
 
 
@@ -351,9 +358,8 @@ def _processes_with_environment():
     tables leave it out. A process with a live thread stays, whatever its main thread shows."""
     if sys.platform.startswith("linux"):
         return _linux_processes()
-    # One attempt, no retry: this sweep kills by token only after the read, so waiting for a
-    # second answer would give an escaped process time to undo its traces. A slow or failed read
-    # stays unknown, which counts as a survivor (Issue #114).
+    # One attempt, no retry: a second wait would let an escaped process undo its traces; a
+    # slow or failed read stays unknown, which counts as a survivor (Issue #114).
     try:
         done = subprocess.run(  # noqa: S603 - fixed argv
             ["/bin/ps", "-axwwE", "-o", _PS_COLUMNS],
@@ -386,8 +392,9 @@ def _parse_ps(stdout: str):
     return rows
 
 
-def _kill_group(pgid: int) -> None:
+def _kill_group(pgid: int) -> bool:
+    """False only when safe_killpg refused to signal: the group then is not known gone."""
     try:
-        os.killpg(pgid, signal.SIGKILL)
+        return safe_killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
-        pass  # the group is already gone
+        return True  # the group is already gone

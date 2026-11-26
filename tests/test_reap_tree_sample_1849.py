@@ -53,7 +53,7 @@ def test_sample_the_accounts_tree_right_after_main_exits(tmp_path, record_proper
             account.require_idle()
             argv = account.wrap([account.python, "-c", COLLECT_LIKE], None, env)
             code, timed_out, left = confined.execute(
-                argv, work, env, 60, tmp_path / "log", reap=reap, reap_group=True
+                argv, work, env, 60, tmp_path / "log", reap=reap, pgrp=True
             )
     finally:
         shutil.rmtree(work, ignore_errors=True)

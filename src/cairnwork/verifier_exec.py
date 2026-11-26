@@ -52,6 +52,7 @@ def _execute(
     env.update(GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="safe.directory")
     env["GIT_CONFIG_VALUE_0"] = os.path.realpath(checkout)
     ending = {} if stop is None else {"stop": stop}  # #1671: a quiet collect run's watcher
+    ending["scope_roots"] = (Path(checkout).parent.parent,)  # the run root, as verifiers.py:257
     if account is None:
         return confined.execute(
             backend.wrap(argv, profile_path),
@@ -70,7 +71,7 @@ def _execute(
         timeout,
         log_path,
         reap=account.reap,
-        reap_group=True,
+        pgrp=True,
         **ending,
     )
     return returncode, timed_out, survivors

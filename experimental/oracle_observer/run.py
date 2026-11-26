@@ -119,7 +119,12 @@ def run_probe(
     log = run_dir / "probe.log"
     with mask_recheck.guard(backend, profile):  # #353, #1681: a run whose masks moved is void
         code, timed_out, survivors = confined.execute(
-            backend.wrap(argv, profile_path), checkout, env, timeout, log
+            backend.wrap(argv, profile_path),
+            checkout,
+            env,
+            timeout,
+            log,
+            scope_roots=(checkout.parent.parent,),
         )
     nonce_file.unlink(missing_ok=True)
     text = log.read_text(errors="replace") if log.exists() else ""
