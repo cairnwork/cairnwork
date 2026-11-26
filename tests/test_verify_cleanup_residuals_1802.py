@@ -7,7 +7,7 @@ import os
 import pytest
 from verify_helpers import VERIFY, base_of, candidate
 
-from cairnwork import confined, proc_start
+from cairnwork import confined, proc_start, recovery
 from cairnwork import verify_candidate as module
 from cairnwork.intake import Intake
 from cairnwork.intake_request import IntakeRefused
@@ -16,6 +16,15 @@ AID = "a0123456789abcdef"
 LATER = "a1123456789abcdef"
 
 pytestmark = pytest.mark.skipif(os.getuid() == 0, reason="root reads and removes anything")
+
+
+@pytest.fixture(autouse=True)
+def _no_other_processes(monkeypatch):
+    """These tests are about files: another process of the host that hides its environment must
+    not decide the sweep (the host's processes are not the attempt's)."""
+    for owner in (module, recovery):
+        if hasattr(owner, "sweep_marked"):
+            monkeypatch.setattr(owner, "sweep_marked", lambda *a, **k: confined.Sweep(listed=True))
 
 
 def _orphan(state, aid=AID, mark=""):
@@ -139,6 +148,7 @@ def test_a_verify_run_with_nothing_kept_says_so(project, state):
 
 # item 2: one canonical spelling of the start mark
 def _hidden_old_process(monkeypatch):
+    monkeypatch.setattr(module, "sweep_marked", confined.sweep_marked)
     monkeypatch.setattr(proc_start, "LINUX", True)
     monkeypatch.setattr(proc_start, "_boot_id", lambda proc: "boot1")
     monkeypatch.setattr(proc_start, "boot_start", lambda pid, proc="/proc": 10.0)

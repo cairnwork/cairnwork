@@ -8,6 +8,7 @@ import pytest
 from run_root_scope import own_attempt
 from test_recovery import GOOD, crash, project, stores  # noqa: F401 - project is a fixture
 
+from cairnwork import confined, recovery
 from cairnwork import verify_candidate as module
 from cairnwork.intake import Intake
 from cairnwork.recovery import UNSEARCHABLE, _leftover_names, _remove_leftovers, recover
@@ -15,6 +16,15 @@ from cairnwork.recovery import UNSEARCHABLE, _leftover_names, _remove_leftovers,
 AID = "a0123456789abcdef"
 
 pytestmark = pytest.mark.skipif(os.getuid() == 0, reason="root reads and removes anything")
+
+
+@pytest.fixture(autouse=True)
+def _no_other_processes(monkeypatch):
+    """These tests are about files: another process of the host that hides its environment must
+    not decide the sweep (the host's processes are not the attempt's)."""
+    for owner in (module, recovery):
+        if hasattr(owner, "sweep_marked"):
+            monkeypatch.setattr(owner, "sweep_marked", lambda *a, **k: confined.Sweep(listed=True))
 
 
 def _orphan(state):
