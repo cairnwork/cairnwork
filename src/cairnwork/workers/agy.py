@@ -29,7 +29,7 @@ import signal
 import subprocess
 import sys
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import proc_start, provenance
@@ -388,7 +388,7 @@ def _stop(
 
     swept = confirm_gone(look(), look)
     if refused:  # as a kill the sweep was denied: running, so never gone, and the run is fenced
-        swept = replace(swept, denied=swept.denied + 1)
+        swept = swept.with_refused_kill()
     for thread in (copier, reader):  # copier is None when the start itself failed
         if thread is not None:
             thread.join(timeout=10)

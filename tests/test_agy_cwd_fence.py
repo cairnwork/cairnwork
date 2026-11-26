@@ -65,8 +65,10 @@ def _with_agys_sweep(tmp_path, monkeypatch, dispatch, looks):
     worker = AgyWorker(dispatch=dispatch)
     reader = None if dispatch is None else _DoneReader()
     attempt_ = ("attempt-1", "", ("/clone",))
+    ended = _Ended(0, False)
+    ended.pid = 4_000_000  # a group the guard lets through (-1 is refused by safe_killpg)
     return copier, lambda: worker._await(
-        _Ended(0, False), copier, reader, attempt_, io.BytesIO(), tmp_path / "log"
+        ended, copier, reader, attempt_, io.BytesIO(), tmp_path / "log"
     )
 
 

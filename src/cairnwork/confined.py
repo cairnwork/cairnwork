@@ -156,6 +156,10 @@ class Sweep:
     def found(self) -> int:
         return self.killed + self.denied
 
+    def with_refused_kill(self) -> Sweep:
+        """The same look plus one process whose kill safe_killpg refused: running, never gone."""
+        return replace(self, denied=self.denied + 1)
+
     @property
     def gone(self) -> bool:
         busy = self.found or self.unreadable or self.account or self.vanished or self.unconfirmed
