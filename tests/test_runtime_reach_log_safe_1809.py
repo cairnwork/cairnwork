@@ -23,7 +23,12 @@ HOSTILE = [  # no NUL: git cannot store one in a file name
 
 def _record(plugins=(), sys_path=()):
     return CollectedRecord(
-        names=(), plugins=plugins, sys_path=sys_path, sys_path_finish=(), root="/co", real=()
+        names=frozenset(),
+        plugins=plugins,
+        sys_path=sys_path,
+        sys_path_finish=(),
+        root="/co",
+        real=(),
     )
 
 
