@@ -196,7 +196,9 @@ def _sleeper(tmp_path, **kwargs):
     env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     argv = [sys.executable, "-c", "import time; time.sleep(120)"]
     start = time.monotonic()
-    out = confined.execute(argv, tmp_path, env, 100, tmp_path / "log", **kwargs)
+    out = confined.execute(
+        argv, tmp_path, env, 100, tmp_path / "log", scope_roots=(tmp_path.parent,), **kwargs
+    )
     return out, time.monotonic() - start
 
 
@@ -217,15 +219,17 @@ def test_the_main_process_is_handed_to_the_reap_not_subtracted_here(tmp_path, re
 def test_without_a_stop_the_reaped_count_is_unchanged(tmp_path):
     env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     out = confined.execute([sys.executable, "-c", "pass"], tmp_path, env, 60, tmp_path / "log",
-                           reap=lambda main=0: 1, stop=lambda: False)  # fmt: skip
+                           reap=lambda main=0: 1, stop=lambda: False,
+                           scope_roots=(tmp_path.parent,))  # fmt: skip
     assert out[0] == 0 and not out[1] and int(out[2]) == 1
 
 
 def test_a_stop_that_never_fires_leaves_the_timeout_alone(tmp_path):
     env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     argv = [sys.executable, "-c", "import time; time.sleep(60)"]
+    roots = (tmp_path.parent,)
     code, timed_out, _ = confined.execute(argv, tmp_path, env, 1, tmp_path / "log",
-                                          stop=lambda: False)  # fmt: skip
+                                          stop=lambda: False, scope_roots=roots)  # fmt: skip
     assert timed_out and code is None
 
 
@@ -244,7 +248,7 @@ def test_the_account_hand_over_writes_a_collection_file_and_the_parent_stops_on_
     assert watcher is not None
     start = time.monotonic()
     code, timed_out, survivors = confined.execute(
-        _argv(), tmp_path, env, 100, tmp_path / "log", stop=watcher
+        _argv(), tmp_path, env, 100, tmp_path / "log", stop=watcher, scope_roots=(tmp_path.parent,)
     )
     assert not timed_out and int(survivors) == 0 and time.monotonic() - start < 60
     named = run_dir / ("verdict.json" + report_guard.COLLECTED_SUFFIX)

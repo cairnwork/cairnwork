@@ -118,8 +118,7 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
         write_roots=(checkout.parent, run_dir),
         mask_home_credentials=True,
     )
-    profile_path = supervisor / "profile.sb"
-    profile_path.write_bytes(profile.text.encode())
+    (profile_path := supervisor / "profile.sb").write_bytes(profile.text.encode())
     log = run_dir / "pytest.log"
     code = None
     try:
@@ -131,6 +130,7 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
                 timeout,
                 log,
                 pass_fds=(*channel.pass_fds, write_fd),
+                scope_roots=(checkout.parent.parent,),
             )
         if timed_out:
             code = None

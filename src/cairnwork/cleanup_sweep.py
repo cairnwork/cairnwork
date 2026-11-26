@@ -18,7 +18,7 @@ from functools import partial
 
 from cairnwork import confined
 from cairnwork.confined import ATTEMPT_ENV, Sweep
-from cairnwork.proc_cwd import attempt_dirs
+from cairnwork.proc_cwd import attempt_dirs, dirs_since
 
 
 def user_of(account) -> str | None:
@@ -75,5 +75,7 @@ def look_for(sweep: Callable[..., Sweep], intake, attempt_id: str, mark: str):
     except Exception:  # noqa: BLE001 - refused account: the leftover step reports it
         account = None
     dirs = run_dirs(attempt_id, intake.run_root, account)
+    extra = [account.run_root] if account is not None and hasattr(account, "run_root") else []
     return partial(sweep, ATTEMPT_ENV, attempt_id, dispatched=mark, cwd_dirs=dirs,
+                   cwd_roots=[intake.run_root, *extra], cwd_since=dirs_since(dirs),
                    account=user_of(account))  # fmt: skip
