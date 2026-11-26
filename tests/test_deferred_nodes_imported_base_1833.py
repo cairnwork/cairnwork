@@ -90,6 +90,18 @@ REBINDS = {
     "match-as": "match P:\n    case object() as Base:\n        pass\n",
     "import-in-if": "if True:\n    from test_self import P as Base\n",
     "second-import": "from test_self import P as Base\n",
+    "def-rename": "def Base():\n    pass\n",
+    "async-def-rename": "async def Base():\n    pass\n",
+    "except-target": "try:\n    pass\nexcept Exception as Base:\n    pass\n",
+    "match-star": "match [P]:\n    case [*Base]:\n        pass\n",
+    "match-mapping-rest": "match {}:\n    case {**Base}:\n        pass\n",
+    # writes that no binding statement shows: the file falls back to the cautious reading
+    "namespace-dict": "globals()['Base'] = P\n",
+    "setattr-module": "import sys\nsetattr(sys.modules[__name__], 'Base', P)\n",
+    "sys-modules-attribute": "import sys\nsys.modules[__name__].Base = P\n",
+    "exec-string": "exec('Base = P')\n",
+    "later-star-import": "from other import *\n",
+    "module-dict": "__dict__['Base'] = P\n",
 }
 
 
@@ -102,3 +114,10 @@ def test_an_imported_name_rebound_anywhere_keeps_the_cautious_fallback(middle):
 def test_a_name_that_is_only_read_stays_import_bound(middle):
     ids = _ids(PRE + middle + TAIL)
     assert "I::test_p" not in ids and "I::test_i" in ids
+
+
+def test_an_import_of_a_class_defined_in_the_same_file_is_not_import_bound():
+    """A module importing itself: ``from <this file> import P as Base`` names the earlier class."""
+    src = "import unittest\nfrom test_self import P as Base\n\n\nclass P(unittest.TestCase):\n"
+    src += "    def test_p(self):\n        pass\n" + TAIL
+    assert "I::test_p" in _ids(src)
