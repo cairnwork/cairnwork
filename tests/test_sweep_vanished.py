@@ -70,7 +70,7 @@ def test_a_real_parent_that_forks_and_exits_before_the_kill(monkeypatch, tmp_pat
     import subprocess
     import sys
 
-    import kill_guard
+    from adopt_helpers import adopt_on_kill
 
     value = "a" + secrets.token_hex(8)
     child_pid_file = str(tmp_path / "child.pid")
@@ -81,7 +81,8 @@ def test_a_real_parent_that_forks_and_exits_before_the_kill(monkeypatch, tmp_pat
     )
     parent = subprocess.Popen([sys.executable, "-c", code], env={**os.environ, "CW_V": value})
     parent.wait(timeout=30)  # exited and reaped: a kill now finds no such process
-    child = kill_guard.adopt(int(open(child_pid_file).read()))
+    adopt_on_kill(monkeypatch, child_pid_file)  # the orphan is this test's own: its pid file
+    child = int(open(child_pid_file).read())
     real, real_kill, signalled = confined._processes_with_environment, os.kill, []
 
     def kill(pid, sig):
