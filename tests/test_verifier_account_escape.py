@@ -158,7 +158,7 @@ def _racing_account(monkeypatch, survives_kills=1):
     def listed(self, deadline=None, attempts=1):
         return list(table)
 
-    def real_paths(self, pids):
+    def real_paths(self, pids, deadline=None):
         if (100, 1) in table and (101, 100) not in table:
             table.append((101, 100))  # started after the list was read, before the path check
         return {pid: (T0, DAEMON if pid == 100 else "/private/tmp/child") for pid in pids}
@@ -197,7 +197,7 @@ def _listing_account(monkeypatch, lists, seen=None):
     answers = iter(lists)
     asked = []
 
-    def real_paths(self, pids):
+    def real_paths(self, pids, deadline=None):
         asked.append(list(pids))
         return seen[len(asked) - 1] if seen else {pid: (T0, DAEMON) for pid in pids}
 

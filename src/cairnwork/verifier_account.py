@@ -40,7 +40,7 @@ from pathlib import Path
 from cairnwork import confined, lock_queue, survivor_argv, verifier_escape, verifier_seen
 from cairnwork.account_proc import run_bounded
 from cairnwork.grant_read import grant_read as _grant_read
-from cairnwork.verifier_grace import settle
+from cairnwork.verifier_grace import bounded, settle
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -218,10 +218,12 @@ class VerifierAccount:
         procs = self._list(deadline, attempts)
         return -1 if procs is None else len(procs)
 
-    def _real_paths(self, pids: list[int]) -> dict[int, verifier_escape.Seen] | None:
-        """Map each pid to (kernel start time, real executable path), run AS THE ACCOUNT so it may
-        query its own processes (verifier_escape.PIDPATH_HELPER). A pid with no record is counted.
-        None if the helper could not run (treated as "cannot tell")."""
+    def _real_paths(
+        self, pids: list[int], deadline: float | None = None
+    ) -> dict[int, verifier_escape.Seen] | None:
+        """pid -> (kernel start time, real executable path), read AS THE ACCOUNT (PIDPATH_HELPER);
+        a pid with no record is counted. None if the helper could not run or outlived ``deadline``
+        (#1819: the grace cap): "cannot tell"."""
         if not pids:
             return {}
         argv = self.wrap(
@@ -229,8 +231,8 @@ class VerifierAccount:
         )
         try:  # the helper writes UTF-8: decoded so, whatever the owner's locale (#537 E)
             done = subprocess.run(  # noqa: S603 - fixed argv, pids from ps
-                argv, capture_output=True, encoding="utf-8", errors="replace", timeout=30,
-                check=False,
+                argv, capture_output=True, encoding="utf-8", errors="replace",
+                check=False, timeout=bounded(deadline, 30),
             )  # fmt: skip
         except (OSError, subprocess.SubprocessError):
             return None
@@ -243,13 +245,11 @@ class VerifierAccount:
     ) -> int:
         """Processes the account runs that are NOT a launchd system daemon (-1: cannot tell).
         A daemon is exempt only when its real executable is allow-listed, its parent is launchd
-        (ppid 1) and it is Apple-signed; anything else — a candidate's leftover process, however it
-        named itself — is counted. A zero that rests on an exemption holds only if a later list
-        and a second helper call show the same processes, by pid and kernel start time (see
-        verifier_escape). If the list or the real paths cannot be read, the count is unknown (fail
-        closed), never zero."""
+        (ppid 1) and it is Apple-signed; anything else is counted. A zero resting on an exemption
+        needs a second list and helper call to agree (verifier_escape); unreadable is -1."""
+        paths = self._real_paths if deadline is None else lambda p: self._real_paths(p, deadline)
         return verifier_escape.escaped_count(
-            lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
+            lambda: self._list(deadline, attempts), paths, sys.platform == "darwin"
         )
 
     def reap(self, main: int = 0) -> survivor_argv.Survivors:

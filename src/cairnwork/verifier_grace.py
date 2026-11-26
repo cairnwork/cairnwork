@@ -28,6 +28,11 @@ class Main(int):
         return obj
 
 
+def bounded(deadline: float | None, cap: float) -> float:
+    """``cap`` seconds, or what is left until ``deadline`` if that is less (never below 0.1)."""
+    return cap if deadline is None else max(min(cap, deadline - time.monotonic()), 0.1)
+
+
 def _is_alive(alive: Callable[[], bool] | None) -> bool:
     """True unless the run is known gone; a probe that cannot answer counts as gone, so the
     process is refused rather than taken off (never a crash out of reap())."""
