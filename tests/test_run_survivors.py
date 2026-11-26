@@ -164,7 +164,8 @@ def test_a_marked_platform_binary_in_the_checkout_counts(own_platform_sleep, mon
     child, checkout = own_platform_sleep
     rows = _only(child.pid, monkeypatch)
     assert MARKER not in (rows[0][3] or ())
-    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),), since=0.0) == 1
+    dirs = (os.path.realpath(checkout),)
+    assert confined._sweep_survivors(TOKEN, -1, dirs, "", (checkout.parent,), 0.0) == 1
     assert child.wait(timeout=10) == -9  # the sweep ended it
 
 
