@@ -25,13 +25,25 @@ class TestCommitRejected(Exception):
         super().__init__(f"{code}: {_shown_detail(detail)}" if detail else code)
 
 
+# #1833: one fixed sentence per code, shown after the withheld count. It depends on the code alone,
+# never on the input, so it cannot carry text of the tests; add a code here only with such a text.
+FIXED_HINTS = {
+    "TESTS_DO_NOT_FAIL_ON_BASE": (
+        "a test class whose base is imported from another file is not read unless it is named"
+        " Test* or the base is named *TestCase: rename such a class to Test*"
+    ),
+}
+
+
 def author_reason(exc: BaseException, hidden: bool) -> str:
     """What the author reads for ``exc`` (#1688). A run with non-public tests (``hidden``, the
     #1186 signal: a test commit) shows a test-commit refusal as its code and a count: the detail
     (a test path, a message, a git error) is withheld, since it can carry text of the tests. Any
-    other exception, and every visible run, is ``str(exc)`` byte for byte."""
+    other exception, and every visible run, is ``str(exc)`` byte for byte.
+    A code in FIXED_HINTS adds its fixed sentence (#1833)."""
     if hidden and isinstance(exc, TestCommitRejected) and exc.has_detail:
-        return f"{exc.code}: 1 refusal (detail withheld)"
+        hint = FIXED_HINTS.get(exc.code)
+        return f"{exc.code}: 1 refusal (detail withheld)" + (f"; {hint}" if hint else "")
     return str(exc)
 
 
