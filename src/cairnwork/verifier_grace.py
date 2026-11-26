@@ -28,18 +28,30 @@ class Main(int):
         return obj
 
 
+def _is_alive(alive: Callable[[], bool] | None) -> bool:
+    """True unless the run is known gone; a probe that cannot answer counts as gone, so the
+    process is refused rather than taken off (never a crash out of reap())."""
+    if alive is None:
+        return True
+    try:
+        return bool(alive())
+    except Exception:  # noqa: BLE001 - any failure to ask means we cannot vouch for main
+        return False
+
+
 def settle(account, before: int, main: int, deadline: float):
     """(count, main, deadline): the account's count re-read until nothing beyond ``main`` is
-    left, at most GRACE_SECONDS; ``main`` is 0 once its run is gone; the deadline moves by the
-    time spent."""
+    left, at most GRACE_SECONDS in all (a slow recount is cut at the cap too); ``main`` is 0 once
+    its run is gone; the deadline moves by the time spent, never more than the cap."""
     start = time.monotonic()
     alive = getattr(main, "alive", None)
     taken = int(main)
     while True:
-        if alive is not None and not alive():
+        if taken and not _is_alive(alive):
             taken = 0  # nothing of ours is left to take off: anything counted is a survivor
         if before - taken <= 0 or time.monotonic() - start >= GRACE_SECONDS:
             break  # nothing beyond main (or unknown: -1), or the cap is spent
         time.sleep(GRACE_INTERVAL)
-        before = account._escaped_count(deadline, attempts=1)  # noqa: SLF001 - same package
-    return before, taken, deadline + (time.monotonic() - start)
+        cap = min(deadline, start + GRACE_SECONDS)
+        before = account._escaped_count(cap, attempts=1)  # noqa: SLF001 - same package
+    return before, taken, deadline + min(time.monotonic() - start, GRACE_SECONDS)
