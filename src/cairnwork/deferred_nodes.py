@@ -104,6 +104,30 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
 _Class = tuple[dict[str, str], bool, bool, str]
 
 
+def _root_name(base: ast.expr) -> str:
+    """The leftmost name of ``a.b.c`` (``a``); empty for any other expression. A loop, not
+    ``ast.unparse``, which recurses once per level and fails on a deeply nested base."""
+    while isinstance(base, ast.Attribute):
+        base = base.value
+    return base.id if isinstance(base, ast.Name) else ""
+
+
+def _may_collect(node: ast.ClassDef, reach: "_Reach") -> bool:
+    """#1833: could pytest collect ``node`` itself? Not a class the file uses as a base or by name
+    elsewhere (a shared or abstract base, a mixin: its tests run through its subclasses), not one
+    with an ``__init__``/``__new__`` or a ``__test__`` of its own. Only ever withholds the extra
+    own ids; the ids main reads are never touched, so this cannot leave fewer than main."""
+    if node.name in reach.referenced or _NOT_COLLECTED & {
+        item.name for item in node.body if isinstance(item, _DEFS)
+    }:
+        return False
+    return not any(
+        isinstance(n, ast.Name) and n.id == "__test__" and isinstance(n.ctx, ast.Store)
+        for item in node.body
+        for n in ast.walk(item)
+    )
+
+
 def _members(
     node: ast.ClassDef,
     classes: dict[str, _Class],
@@ -131,7 +155,11 @@ def _members(
         case = case or last.endswith("TestCase")
         target = base.id if isinstance(base, ast.Name) else ""
         target = (aliases or {}).get(target, target)
-        if target not in classes and ast.unparse(base).split(".")[0] in reach.imported:
+        if (
+            target not in classes
+            and _root_name(base) in reach.imported
+            and _may_collect(node, reach)
+        ):
             case = True  # #1833: imported, so pytest may collect it: its own ids are targets too
         if target in classes:
             inherited, base_blocked, base_case, _ = classes[target]  # its marks: reach follows it
@@ -193,6 +221,7 @@ class _Reach:
         self._found: dict[frozenset[str], str] = {}
         self._read: dict[int, list[str]] = {}
         self.imported = imported_names(tree)  # #1833
+        self.referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
         rest = []
         for stmt in tree.body:
             names = _binds(stmt)

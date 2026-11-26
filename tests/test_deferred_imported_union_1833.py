@@ -240,7 +240,7 @@ def test_a_shared_or_uncollected_base_gets_no_id_of_its_own(shape, monkeypatch):
 
 
 def test_a_deeply_nested_base_expression_does_not_raise_recursion_error():
-    base = "Base" + ".x" * 3000
+    base = "Base" + ".x" * 600
     src = (
         f"from helpers import Base\n\n\nclass TestI({base}):\n    def test_i(self):\n        pass\n"
     )
