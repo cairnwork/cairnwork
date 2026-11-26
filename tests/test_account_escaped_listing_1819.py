@@ -291,3 +291,32 @@ def test_listing_never_has_more_entries_than_the_count(monkeypatch, before, main
     assert got == before - main and len(got.argv) == len(names)
     assert all(n in line for n, line in zip(names, got.argv, strict=True))
     assert all(not line.startswith("bash") for line in got.argv)
+
+
+def test_a_survivor_whose_parent_is_an_exempt_daemon_is_not_taken_for_main(monkeypatch):
+    rows = "10 1 S 00:09 launchd_thing\n20 10 S 00:01 python\n" + MAIN
+    got = _acct_rows(monkeypatch, 2, 1, rows)
+    assert got == 1 and len(got.argv) == 1 and "python" in got.argv[0]
+    assert all(not line.startswith("bash") for line in got.argv)
+
+
+def test_the_listing_is_cut_to_the_count_when_ps_shows_more_rows(monkeypatch):
+    got = _acct_rows(monkeypatch, 2, 1, MAIN + LEFT, exempt="none")  # count 1, ps shows 2 left
+    assert got == 1 and len(got.argv) == 1
+
+
+@pytest.mark.parametrize(
+    ("before", "main", "rows", "shown"),
+    [
+        (8, 1, MAIN + "".join(f"{40 + i} 1 S 00:02 p{i}\n" for i in range(7)), 5),  # cut at 5
+        (2, 1, "20 1 S 00:02 python\n21 20 S 00:02 sleep\n", 1),  # launchd-parented candidate
+        (2, 1, MAIN, 1),  # len(rows) == drop: nothing is dropped, still at most count
+    ],
+)
+def test_main_with_truncation_launchd_parent_and_drop_boundary(
+    monkeypatch, before, main, rows, shown
+):
+    got = _acct_rows(monkeypatch, before, main, rows, exempt="none")
+    assert got == before - main and len(got.argv) == shown
+    assert len(got.argv) <= min(got, sa.MAX_LISTED)
+    assert shown < 5 or all(not line.startswith("bash") for line in got.argv)
