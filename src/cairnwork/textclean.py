@@ -7,6 +7,7 @@ the line and paragraph separators Zl, Zp. Same rule as experimental/blind_warn (
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable
 
@@ -52,4 +53,4 @@ def log_safe(text: str) -> str:
     that a log reads as a command broken up, wherever they sit (a later layer may start a line
     there)."""
     escaped = shown(text)[1:-1].replace("\\\\", "\\").replace("\\'", "'")
-    return escaped.replace("::", ": :").replace("##[", "# #[")
+    return re.sub(r":(?=:)", ": ", escaped).replace("##[", "# #[")

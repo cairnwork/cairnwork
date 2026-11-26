@@ -125,5 +125,10 @@ def test_named_deleted_drops_what_no_target_can_name(path):
 
 
 def test_named_deleted_keeps_plain_py_only():
-    deleted = ("tests/test_p_plugin.py", "tests/a/test_b-c.py", "tests/data/x.zip", "tests/conftest.py")
+    deleted = (
+        "tests/test_p_plugin.py",
+        "tests/a/test_b-c.py",
+        "tests/data/x.zip",
+        "tests/conftest.py",
+    )
     assert named_deleted(deleted, ("tests",)) == deleted[:2]
