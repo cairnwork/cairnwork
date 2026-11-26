@@ -183,7 +183,10 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    classes inherited from another module, custom python_functions/python_classes. Such a test
+    classes inherited from another module, custom python_functions/python_classes. #1833: the test
+    commit is read with a class whose base is imported also counting as a test case (its own ids
+    are targets); the base commit is read as before that, so a wider id there never cancels a new
+    one here. Such a test
     commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
     no other new test; one beside a visible new test is not. A changed test inside a module-level
     block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
