@@ -63,8 +63,8 @@ def _kill_session(*, kill_group: bool = True, budget: float = 3.0) -> None:
         if not pids:
             break
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
-    if kill_group:
-        os.killpg(0, signal.SIGKILL)
+    if kill_group and os.getpgrp() == os.getpid():  # only as the leader of our own group (#1849)
+        os.killpg(os.getpgrp(), signal.SIGKILL)
 
 
 def main() -> int:
