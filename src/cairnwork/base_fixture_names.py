@@ -65,8 +65,8 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, deleted=()) 
     changed = tuple(p for p in paths if _on_base(task.repo, task.base_commit, p))
     on_base = (*changed, *deleted)  # the reach sets: a deleted file can still be refused
     added = tuple(p for p in paths if p not in changed)
-    if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
-        return  # only conftest edits: no run, as before (#1769)
+    if not added and all(PurePosixPath(p).name == "conftest.py" for p in changed):
+        return  # only conftest edits: no run, as main (#1769); a deletion never decides this
     gone = named_deleted(deleted, tuple(task.test_roots))
     records, complete = reach_record(ctx, task, changed, run_id, gone)
     if not records:
