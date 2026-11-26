@@ -78,7 +78,7 @@ def _acct(monkeypatch, before, left, snap=(("sleep S 00.01",), ("account-escaped
         va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: before
     )
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, n, d: left)
-    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, **kw: snap)
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a: snap)
     return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
 
 
@@ -105,7 +105,7 @@ def test_reap_with_nothing_counted_carries_no_listing(monkeypatch):
 def test_the_snapshot_is_not_taken_when_nothing_is_running(monkeypatch):
     calls = []
     acct = _acct(monkeypatch, 0, 0)
-    monkeypatch.setattr(vs, "snapshot", lambda u, t, **kw: calls.append(u) or ((), ()))
+    monkeypatch.setattr(vs, "snapshot", lambda u, t, *a: calls.append(u) or ((), ()))
     acct.reap()
     assert calls == []
 
@@ -144,9 +144,7 @@ def test_snapshot_is_taken_before_the_kill(monkeypatch):
     monkeypatch.setattr(
         va.VerifierAccount, "_kill_until_clean", lambda self, n, d: order.append("kill") or 0
     )
-    monkeypatch.setattr(
-        vs, "snapshot", lambda user, timeout, **kw: order.append("snap") or ((), ())
-    )
+    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a: order.append("snap") or ((), ()))
     acct.reap()
     assert order == ["snap", "kill"]
 

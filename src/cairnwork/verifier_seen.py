@@ -13,15 +13,30 @@ import re
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
-from cairnwork import confined, survivor_argv
+from cairnwork import confined, survivor_argv, verifier_escape
 
 REASON = "account-escaped"
 _STAT = re.compile(r"[A-Za-z+<>]{1,5}")
+_PPID_DIGITS = 10
 _AGE = re.compile(r"[0-9]{1,3}(-[0-9]{2})?(:[0-9]{2}){1,2}")
 
 
-def snapshot(user: str, timeout: float) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _plain_ppid(text: str) -> bool:
+    return text.isascii() and text.isdigit() and len(text) <= _PPID_DIGITS
+
+
+def _exempt(rows: list, real_paths: Callable) -> set[str]:
+    """pids of launchd children that reap()'s count exempts (same rule: ppid 1, real path)."""
+    launchd = [int(row[0]) for row in rows if row[1] == "1"]
+    seen = real_paths(launchd) if launchd and sys.platform == "darwin" else None
+    return {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
+
+
+def snapshot(
+    user: str, timeout: float, real_paths: Callable | None = None
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(argv entries, reasons) for ``user``'s processes; ((), ()) when ps cannot be read.
     ``timeout`` is the time left to the caller; at most a quarter (and PS_TIMEOUT_SECONDS) is
     used, so this can never take the time the kill needs."""
@@ -37,12 +52,15 @@ def snapshot(user: str, timeout: float) -> tuple[tuple[str, ...], tuple[str, ...
         rows = []
         for line in done.stdout.split("\n"):
             parts = line.split(None, 4)
-            if len(parts) == 5 and parts[0].isdigit() and parts[1].isdigit():
+            if len(parts) == 5 and parts[0].isdigit() and _plain_ppid(parts[1]):
                 rows.append(parts)
-        rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
         names = {row[0]: row[4] for row in rows}
+        skip = _exempt(rows, real_paths) if real_paths else set()  # only what the count includes
+        rows = [row for row in rows if row[0] not in skip]
+        rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
+        rows = rows[: survivor_argv.MAX_LISTED]
         entries = [_entry(row[2], row[3], row[4], row[1], names.get(row[1])) for row in rows]
-        return tuple(entries[: survivor_argv.MAX_LISTED]), ((REASON,) if entries else ())
+        return tuple(entries), ((REASON,) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return (), ()
 
@@ -54,13 +72,15 @@ def _entry(stat: str, age: str, name: str, ppid: str, parent: str | None) -> str
     return f"{survivor_argv.prefix(name)} {shown_stat} {shown_age} ppid={ppid}/{up}"
 
 
-def before_kill(user: str, before: int, deadline: float) -> tuple[tuple, float]:
+def before_kill(
+    user: str, before: int, deadline: float, real_paths: Callable | None = None
+) -> tuple[tuple, float]:
     """The snapshot (only if ``before`` > 0) and the caller's deadline moved later by the time it
     took: the diagnostic never uses up the budget the kill needs (#1824 review)."""
     if before <= 0:
         return ((), ()), deadline
     start = time.monotonic()
-    seen = snapshot(user, max(deadline - start, 0.0))
+    seen = snapshot(user, max(deadline - start, 0.0), real_paths)
     return seen, deadline + (time.monotonic() - start)
 
 
