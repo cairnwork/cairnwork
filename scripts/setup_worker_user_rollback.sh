@@ -62,10 +62,34 @@ worker_pids() {   # prints pids; pgrep rc 1 = none, anything else is an error
   (( rc <= 1 )) || die "pgrep failed (rc $rc)"
   print -r -- "$out"
 }
-if dscl . -read "/Users/$WORKER" UniqueID >/dev/null 2>&1; then
-  WUID=$(dscl . -read "/Users/$WORKER" UniqueID | awk '{print $2}')
+# owner_uid_guard (#1849): killing "every process of uid N" as root is the owner's whole desktop when
+# N is the owner's uid (WORKER set or misread as the owner). Every owner we can name (the argument,
+# sudo's caller, the owner of $RUNS) is compared by uid; none resolvable fails closed.
+owner_uid_guard() {   # $1 = worker uid
+  local cand ouid seen=0
+  for cand in "$OWNER" "${SUDO_USER:-}" "$(stat -f %Su "$RUNS" 2>/dev/null || true)"; do
+    [[ -n "$cand" && "$cand" != root ]] || continue
+    if ! ouid=$(id -u "$cand" 2>/dev/null); then
+      # A name the caller gave us (OWNER argument, SUDO_USER) that does not resolve means we cannot
+      # compare its uid: fail closed. Only the stat-derived candidate (the last, taken from $RUNS,
+      # which may be missing or unreadable) is skipped when its owner cannot be resolved.
+      [[ "$cand" == "$OWNER" || "$cand" == "${SUDO_USER:-}" ]] && die "cannot resolve the owner '${cand//$'\n'/ }' to a uid; not killing by uid"
+      continue
+    fi
+    seen=1
+    [[ "$ouid" != "$1" ]] || die "worker uid $1 is the owner's ($cand); not killing that uid's processes"
+  done
+  (( seen )) || die "cannot tell who the owner is (pass the owner username); not killing by uid"
+}
+# Gate on the ACCOUNT, not on its UniqueID: a missing account has nothing to stop and the script goes
+# on; an account that exists but whose UniqueID cannot be read must die here, before any later step
+# (the account delete in step 4 would otherwise still run).
+if dscl . -read "/Users/$WORKER" >/dev/null 2>&1; then
+  WUID_RAW=$(dscl . -read "/Users/$WORKER" UniqueID 2>/dev/null) || die "worker account exists but its uid cannot be read"
+  WUID=$(print -r -- "$WUID_RAW" | awk '{print $2}')
   [[ "$WUID" == <-> ]] || die "cannot read the worker uid"
   (( WUID > 0 )) || die "worker uid is 0"
+  owner_uid_guard "$WUID"
   pids=$(worker_pids "$WUID")
   if [[ -n "$pids" ]]; then
     echo "stopping worker processes (uid $WUID): ${pids//$'\n'/ }"

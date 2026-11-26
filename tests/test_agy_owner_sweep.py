@@ -188,9 +188,10 @@ def test_an_interrupt_is_not_replaced_by_the_fence(tmp_path, monkeypatch):
 
 class _Ended:
     """A dispatcher or agy that already ended with `code`; with `timeout` our wait expires
-    first. No process is started: pid -1 is never signalled (os.kill and killpg are refused)."""
+    first. No process is started: pid 4_000_000 is above any real pid (macOS caps at 99999), so
+    safe_killpg lets it through and the kill finds nothing (-1 is refused, a residual)."""
 
-    pid = -1
+    pid = 4_000_000
     stdin = None
 
     def __init__(self, code: int, timeout: bool):
