@@ -42,11 +42,14 @@ def _alias(kind: str, co: Path, tmp_path: Path) -> Path:
     return out / "b"
 
 
-def _run(monkeypatch: Any, root: Path, entry: str, change: str) -> None:
+def _run(monkeypatch: Any, root: Path, entry: str, change: str, after_probe=None) -> None:
     record = CollectedRecord(frozenset(), (), (entry,), ())
 
     def fake_verifiers(ctx, base, specs, run_id):
-        return [SimpleNamespace(collect_record=resolve_record(record, root))]
+        resolved = resolve_record(record, root)
+        if after_probe:
+            after_probe()
+        return [SimpleNamespace(collect_record=resolved)]
 
     monkeypatch.setattr(bfn, "collect", lambda *a: None)
     monkeypatch.setattr(bfn, "check_conftests", lambda *a, **k: None)
@@ -104,3 +107,58 @@ def test_an_alias_to_a_target_outside_the_checkout_passes(co, tmp_path, monkeypa
     (tmp_path.resolve() / "link").symlink_to(elsewhere)
     entry = str(tmp_path.resolve() / "link" / "loop")
     _run(monkeypatch, co, entry, OTHER)
+
+
+@pytest.mark.parametrize("kind", ["loop", "closed", "name"])
+def test_an_alias_removed_before_the_check_still_refuses(co, tmp_path, monkeypatch, kind):
+    base = _alias("chain", co, tmp_path)
+    if kind == "loop":
+        (co / "loop").symlink_to(co / "loop")
+        entry, change = str(base / "loop"), "loop"
+    elif kind == "closed":
+        closed = co / "data" / "closed"
+        closed.mkdir()
+        (closed / "inner").write_text("")
+        entry = _fail(kind, monkeypatch, co, base / "data", "inner")
+        change = "data/closed/inner"
+    else:
+        entry = _fail(kind, monkeypatch, co, base / "data", "lib.zip")
+        change = ARCHIVE
+    with pytest.raises(TestCommitRejected) as exc:
+        _run(monkeypatch, co, entry, change, base.unlink)
+    assert exc.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+
+
+@pytest.mark.parametrize("kind", ["loop", "closed", "name"])
+@pytest.mark.parametrize("removed", [False, True])
+def test_an_unresolvable_alias_entry_refuses_any_change(co, tmp_path, monkeypatch, kind, removed):
+    base = _alias("chain", co, tmp_path)
+    if kind == "loop":
+        (co / "loop").symlink_to(co / "loop")
+        entry = str(base / "loop")
+    elif kind == "closed":
+        closed = co / "data" / "closed"
+        closed.mkdir()
+        (closed / "inner").write_text("")
+        entry = _fail(kind, monkeypatch, co, base / "data", "inner")
+    else:
+        entry = _fail(kind, monkeypatch, co, base / "data", "lib.zip")
+    hook = base.unlink if removed else None
+    with pytest.raises(TestCommitRejected) as exc:
+        _run(monkeypatch, co, entry, OTHER, hook)
+    assert exc.value.code == "TEST_COMMIT_CONFTEST_STATIC"
+
+
+@pytest.mark.parametrize("tail", ["pkg/lib.py", "pkg/gone.py", "outside"])
+def test_a_removed_alias_that_resolved_or_led_outside_passes(co, tmp_path, monkeypatch, tail):
+    if tail == "outside":
+        elsewhere = tmp_path.resolve() / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "loop").symlink_to(elsewhere / "loop")
+        base = tmp_path.resolve() / "link"
+        base.symlink_to(elsewhere)
+        entry = str(base / "loop")
+    else:
+        base = _alias("chain", co, tmp_path)
+        entry = str(base / tail)
+    _run(monkeypatch, co, entry, OTHER, base.unlink)
