@@ -49,7 +49,7 @@ from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, swe
 from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.notary import Notary
 from cairnwork.ownership import OWNER, OwnershipLedger, OwnershipRecord
-from cairnwork.proc_cwd import attempt_dirs
+from cairnwork.proc_cwd import attempt_dirs, dirs_since
 from cairnwork.reasons import _names
 from cairnwork.verifier_account import VerifierAccount
 from cairnwork.verify_cleanup import (  # noqa: F401 - re-exported: tests and callers import them here
@@ -159,11 +159,13 @@ def _settle(
     dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
     roots, other = _owner_roots(run_root, dispatched)
     dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
+    cwd_roots = [*roots, *([account.run_root] if account is not None else [])]  # #1849
+    since = dirs_since(dirs)  # born after its run dirs; None: no cwd sweep
 
     def look():  # the worker account it ran as (pipeline.py journals it) and the verifier's
         return cleanup_sweep.look_at(
             sweep_marked, (ATTEMPT_ENV, attempt_id), (worker, cleanup_sweep.user_of(account)),
-            dispatched=mark, cwd_dirs=dirs)  # fmt: skip
+            dispatched=mark, cwd_dirs=dirs, cwd_roots=cwd_roots, cwd_since=since)  # fmt: skip
 
     first = look()
     swept = confirm_gone(first, look)

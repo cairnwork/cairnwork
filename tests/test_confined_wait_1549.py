@@ -48,7 +48,12 @@ def test_exited_leader_is_a_zombie_when_the_group_is_signalled(
     states = _spy(monkeypatch)
     env = {**os.environ, confined.RUN_TOKEN_VAR: TOKEN}
     code, timed_out, _ = confined.execute(
-        [sys.executable, "-c", "raise SystemExit(7)"], tmp_path, env, 10, tmp_path / "a.log"
+        [sys.executable, "-c", "raise SystemExit(7)"],
+        tmp_path,
+        env,
+        10,
+        tmp_path / "a.log",
+        scope_roots=(tmp_path.parent,),
     )
     assert (code, timed_out) == (7, False)  # real exit status, not INTERNAL
     assert len(states) == 1
@@ -62,7 +67,12 @@ def test_timed_out_leader_is_running_when_the_group_is_signalled(
     states = _spy(monkeypatch)
     env = {**os.environ, confined.RUN_TOKEN_VAR: TOKEN}
     code, timed_out, _ = confined.execute(
-        [sys.executable, "-c", "import time; time.sleep(60)"], tmp_path, env, 1, tmp_path / "b.log"
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        tmp_path,
+        env,
+        1,
+        tmp_path / "b.log",
+        scope_roots=(tmp_path.parent,),
     )
     assert (code, timed_out) == (None, True)
     assert len(states) == 1
