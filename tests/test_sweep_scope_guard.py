@@ -37,7 +37,8 @@ HOME = os.path.realpath(os.path.expanduser("~"))
 TEMP = os.path.realpath(tempfile.gettempdir())
 BROAD = [
     ("/",), (HOME,), ("/Users",), ("/private/tmp",), ("/tmp",), ("/private/var/folders",),
-    ("/private/var/tmp",), (TEMP,), (os.path.dirname(TEMP),), "/x/y/z", b"/x/y/z",
+    ("/private/var/tmp",), ("/private/var/tmp/cw",),
+    ("/private/var/folders/zz",), (TEMP,), (os.path.dirname(TEMP),), "/x/y/z", b"/x/y/z",
 ]  # fmt: skip
 
 

@@ -235,21 +235,28 @@ _SHARED_ROOTS = ("/private/var/tmp", "/var/tmp", "/private/var/folders", "/var/f
 
 def too_broad(top) -> bool:
     """Whether a sweep directory is too broad to scope a kill: "/", fewer than three path
-    components ("/tmp", "/Users", "/private/tmp"), a shared root (``_SHARED_ROOTS``), or the
-    user's home or temp directory or an ancestor of either; checked as spelled and as resolved
-    now (only ever more refusals). A run's cwd of "/" once made the sweep SIGKILL every desktop
-    process sitting in "/" (#1849)."""
+    components ("/tmp", "/Users", "/private/tmp"), inside a shared root (``_SHARED_ROOTS``) but
+    not strictly inside the user's temp dir, or the user's home or temp dir or an ancestor of
+    either; checked as spelled and as resolved now (only ever more refusals). A run's cwd of "/"
+    once made the sweep SIGKILL every desktop process sitting in "/" (#1849)."""
     spelled = os.path.normpath(os.fsdecode(os.fspath(top)))
     for path in dict.fromkeys((spelled, os.path.realpath(spelled))):
         if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
             return True
-        if path in _SHARED_ROOTS:
+        temps = dict.fromkeys((tempfile.gettempdir(), os.path.realpath(tempfile.gettempdir())))
+        if any(_within(path, root) for root in _SHARED_ROOTS) and not any(
+            path != t and _within(path, t) for t in temps
+        ):  # inside a shared root, only strictly inside this user's temp dir is narrow
             return True
-        for mine in (os.path.expanduser("~"), tempfile.gettempdir()):
+        for mine in (os.path.expanduser("~"), *temps):
             for real in dict.fromkeys((mine, os.path.realpath(mine))):
-                if os.path.commonpath([path, real]) == path:
+                if _within(real, path):
                     return True
     return False
+
+
+def _within(path: str, top: str) -> bool:
+    return os.path.commonpath([path, top]) == top
 
 
 def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[int], int]:
