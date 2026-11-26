@@ -183,11 +183,10 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    classes inherited from another module, custom python_functions/python_classes.
-    #1833: main's set is kept whole; to it is added an id only the wider reading (a class with
-    an imported base also counts as a test case) gives on the test commit and whose digest
-    differs from that wider reading of the base, so an unchanged imported-base class is never a
-    new test (deferred_nodes.target_ids). Such a test
+    custom python_functions/python_classes. A class whose base is imported from another module
+    is read as a possible test case (#1833): its own tests count when their digest changes, but
+    the imported module itself is not read (a change there is not seen). Main's set is kept whole
+    and the wider reading only adds to it (deferred_nodes.target_ids). Such a test
     commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
     no other new test; one beside a visible new test is not. A changed test inside a module-level
     block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
@@ -249,13 +248,10 @@ def _named(node: str, targets: frozenset[str]) -> bool:
     return any("::".join(parts[:i]) in targets for i in range(2, len(parts) + 1))
 
 
-def _test_functions(
-    repo: Path, blob: str, *, present: bool = False, imported: bool = True
-) -> dict[str, str]:
-    """``present``: the file is known to exist, so a failed read is a refusal, not a new file.
-    ``imported=False``: read an imported base as main did (see ``test_functions``)."""
+def _test_functions(repo: Path, blob: str, *, present: bool = False) -> dict[str, str]:
+    """``present``: the file is known to exist, so a failed read is a refusal, not a new file."""
     tree = _tree(repo, blob, present=present)
-    return test_functions(tree, imported=imported)[0] if tree is not None else {}
+    return test_functions(tree)[0] if tree is not None else {}
 
 
 def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:

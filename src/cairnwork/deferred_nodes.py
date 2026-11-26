@@ -108,30 +108,33 @@ def test_functions(
 _Class = tuple[dict[str, str], bool, bool, str]
 
 
+def _diff(before: dict[str, str], after: dict[str, str], *, both: bool) -> set[str]:
+    return {
+        i for i, body in after.items() if (i in before if both else True) and before.get(i) != body
+    }
+
+
 def target_ids(old: ast.Module, new: ast.Module) -> tuple[set[str], frozenset[str]]:
     """(the node ids the test commit adds or changes in one file, the ``Test*`` classes of the new
-    file pytest does not collect), from the base file's tree and the test commit's. Main's set
-    is kept whole: both files read as main reads them. #1833 adds to it only an id the wider
-    reading (a class with an imported base also counts as a test case) gives on the new side and
-    main does not, and only when its digest differs from the wider reading of the old side: so an
-    unchanged imported-base class (a comment, another test edited) is never listed as new."""
-    main_before = test_functions(old, imported=False)[0]
-    main_after = test_functions(new, imported=False)[0]
-    wide_before = test_functions(old)[0]
-    after, uncollected = test_functions(new)
-    found = set()
-    for node_id, body in after.items():
-        before = main_before if node_id in main_after else wide_before
-        if before.get(node_id) != body:
-            found.add(node_id)
-    return found, uncollected
+    file pytest does not collect), from the base file's tree and the test commit's. The union of
+    two comparisons, each of one reading on both sides: main's reading (the set main gives, whole)
+    and the wider one (#1833: a class with an imported base also counts as a test case). Each
+    side of a comparison is read the same way, so a class defined twice under one name, which the
+    wider reading resolves differently, cannot make an unchanged file list a test; and an unchanged
+    imported-base class is never listed as new (a comment, another test edited)."""
+    narrow = _diff(test_functions(old, imported=False)[0], test_functions(new, imported=False)[0],
+                   both=False)  # fmt: skip
+    wide_after, uncollected = test_functions(new)
+    return narrow | _diff(test_functions(old)[0], wide_after, both=False), uncollected
 
 
 def changed_ids(old: ast.Module, new: ast.Module) -> set[str]:
-    """The node ids present in both files whose digest differs (``p2p_nodes.changed_tests``).
-    #1833: today both files read with the imported-base addition."""
-    before, after = test_functions(old)[0], test_functions(new)[0]
-    return {i for i in before.keys() & after.keys() if before[i] != after[i]}
+    """The node ids present in both files whose digest differs (``p2p_nodes.changed_tests``): main's
+    set (both files read as main reads them) united with the wider reading's (#1833), so it is
+    never smaller than main's."""
+    narrow = _diff(test_functions(old, imported=False)[0], test_functions(new, imported=False)[0],
+                   both=True)  # fmt: skip
+    return narrow | _diff(test_functions(old)[0], test_functions(new)[0], both=True)
 
 
 def _root_name(base: ast.expr) -> str:
