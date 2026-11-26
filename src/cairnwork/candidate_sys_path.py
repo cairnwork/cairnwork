@@ -180,7 +180,7 @@ def refuse_new_sys_path_mutation(
         scope = RelativeScope(repo, base, candidate)
         for path in changed:
             signal = path.endswith(".py") and _blob_signal(
-                repo, base, candidate, path, changed, shadowed, scope.resolver(path)
+                repo, base, candidate, path, changed, shadowed, None
             )
             if signal:  # a base signal is no exemption: it may be a comment next to a redirect
                 if signal == _MACHINERY:  # an in-process swap needs no file (#303 SWAP, finders)
@@ -195,7 +195,10 @@ def refuse_new_sys_path_mutation(
                         f"{path!r}: writes a file and edits the import path in the same change "
                         "(a shadow module can be created at run time)",
                     )
-                shadow = find_shadow_file(repo, candidate, test_commit, changed, base_commit=base)
+                exempt = _own_shadows(repo, base, candidate, changed, shadowed, scope)
+                shadow = find_shadow_file(
+                    repo, candidate, test_commit, changed, base_commit=base, exempt=exempt
+                )
                 if shadow:
                     raise CandidateRejected(
                         "CANDIDATE_SYS_PATH_MUTATION",
@@ -214,6 +217,25 @@ def refuse_new_sys_path_mutation(
         # A failed scan cannot establish verifier integrity, so it must not lead to VERIFIED.
         detail = f"cannot scan candidate import paths: {exc!r}"
         raise CandidateRejected("UNREADABLE_CHANGE", detail) from exc
+
+
+def _own_shadows(
+    repo: Path,
+    base: str,
+    candidate: str,
+    changed: dict[str, str],
+    shadowed: frozenset[str],
+    scope: RelativeScope,
+) -> frozenset[str]:
+    """Changed files the shadow search leaves out (#1807): a package's own module that a changed
+    relative import names, when no changed file has a path or import signal except through such
+    imports. The signal itself is always scanned as if the import named the stdlib module."""
+    for path in changed:
+        if path.endswith(".py") and _blob_signal(
+            repo, base, candidate, path, changed, shadowed, scope.resolver(path)
+        ):
+            return frozenset()
+    return scope.own_shadows(changed)
 
 
 def _same_name_modules(paths: Iterable[str]) -> frozenset[str]:

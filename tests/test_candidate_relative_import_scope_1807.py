@@ -67,7 +67,14 @@ def _own(tmp_path, base, new):
     ],
 )
 def test_a_relative_import_the_tree_resolves_passes(tmp_path, layout):
-    new = {path: text + "\nEXTRA = 1\n" for path, text in layout.items() if path.endswith(".py")}
+    # a changed file that nothing relative names is an ordinary shadow candidate, so only the
+    # files the layout actually uses are edited
+    used = layout.get("pkg/validator.py", "")
+    new = {
+        path: text + "\nEXTRA = 1\n"
+        for path, text in layout.items()
+        if path.endswith(".py") and (path != "pkg/types.py" or "types" in used or "sub" in used)
+    }
     assert _verdict(tmp_path, layout, new) is None
 
 

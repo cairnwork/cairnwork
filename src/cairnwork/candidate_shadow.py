@@ -27,13 +27,14 @@ def find_shadow_file(
     test_commit: str | None = None,
     changed: dict[str, str] | None = None,
     base_commit: str | None = None,
+    exempt: frozenset[str] = frozenset(),
 ) -> str | None:
     """Return the first changed nested file that can shadow an imported module.
 
     Base content is trusted. Imported names include dotted and relative imports, plus dynamic
     import calls in test files. Added, duplicate, or uniquely named modules outside import roots
     may shadow imports; existing packages and import roots are handled by ``_is_shadow``.
-    Source-loader residuals are documented in ``candidate_sys_path.py``."""
+    Source-loader residuals: ``candidate_sys_path.py``. ``exempt``: package-own modules."""
     commits = tuple(
         dict.fromkeys((candidate,) if test_commit is None else (candidate, test_commit))
     )
@@ -93,6 +94,8 @@ def find_shadow_file(
         if p.rsplit("/", 1)[-1] == "__init__.py" and changed.get(p) != "ADD"
     }
     for path in sorted(changed):
+        if path in exempt and (_module_name(path) or "") not in top_importers:
+            continue  # #1807
         if _is_shadow(
             path, changed, always, imported, counts, init_dirs, importer_dirs, top_importers
         ):

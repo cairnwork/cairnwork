@@ -20,6 +20,10 @@ MOCK = "def patch(x):\n    return x\n"
 TYPES = "def type_ok(x):\n    return x\n\n\ndef type_name(x):\n    return str(x)\n"
 
 
+def _put(path, text):
+    path.write_bytes(text if isinstance(text, bytes) else text.encode())
+
+
 def _verdict(tmp_path, base_files, new_files, name="repo"):
     """``base_files`` are committed first; ``new_files`` (path -> text) are then written. Every
     written path is an allowed own file. Returns the refusal code or None."""
@@ -30,13 +34,13 @@ def _verdict(tmp_path, base_files, new_files, name="repo"):
     git(repo, "config", "user.name", "a")
     for path, text in base_files.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).write_text(text)
+        _put(repo / path, text)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "base")
     base = git(repo, "rev-parse", "HEAD")
     for path, text in new_files.items():
         (repo / path).parent.mkdir(parents=True, exist_ok=True)
-        (repo / path).write_text(text)
+        _put(repo / path, text)
     git(repo, "add", "-A")
     git(repo, "commit", "-qm", "candidate")
     candidate = git(repo, "rev-parse", "HEAD")

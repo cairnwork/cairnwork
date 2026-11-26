@@ -34,8 +34,9 @@ from __future__ import annotations
 import ast
 import importlib.util
 import pkgutil
+import re
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from functools import cache
 from pathlib import Path
 
@@ -48,9 +49,15 @@ _REGULAR = ("100644", "100755")
 _BARRED = {n.casefold() for n in (*sys.stdlib_module_names, *_ALWAYS_SHADOW)}
 
 
+_CONFIG = {
+    "conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "noxfile.py",
+    "makefile", "sitecustomize.py", "usercustomize.py", ".env",
+}  # fmt: skip
+_CONFIG_SUFFIX = (".pth", ".yml", ".yaml")
+_PATH_WORDS = ("pythonpath", "sys.path", ".pth", "addsitedir", "syspath", "site")
 _MOVERS = {
-    "__path__", "extend_path", "submodule_search_locations", "__dict__", "__spec__", "setattr",
-    "globals", "vars", "exec", "eval", "__import__",
+    "__path__", "__package__", "extend_path", "submodule_search_locations", "__dict__",
+    "__spec__", "setattr", "globals", "vars", "exec", "eval", "__import__",
 }  # fmt: skip
 
 
@@ -74,6 +81,64 @@ def _moves_search_path(data: bytes) -> bool:
         if isinstance(node, ast.Constant) and node.value in _MOVERS and id(node) not in docs:
             return True
     return False
+
+
+_CONTEXT = {"__package__", "__spec__", "__name__", "__path__", "__loader__", "__file__"}
+_DYNAMIC = {"setattr", "globals", "vars", "exec", "eval", "__import__", "__dict__"}
+
+
+def _rebinds_context(data: bytes) -> bool:
+    """Whether a changed file can rewrite a module's package context: it binds, deletes or names
+    as a string one of ``_CONTEXT`` (reading ``__name__`` or ``__package__`` is ordinary code), or
+    calls a dynamic writer. A file that cannot be parsed counts as yes."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return True
+    docs = {id(n.value) for n in ast.walk(tree) if isinstance(n, ast.Expr)}
+    for n in ast.walk(tree):
+        bound = (
+            (isinstance(n, ast.Name) and not isinstance(n.ctx, ast.Load) and n.id)
+            or (isinstance(n, ast.Attribute) and not isinstance(n.ctx, ast.Load) and n.attr)
+            or (isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name)
+            or (isinstance(n, ast.arg) and n.arg)
+            or (isinstance(n, ast.ExceptHandler) and n.name)
+            or (isinstance(n, ast.alias) and (n.asname or n.name))
+        )
+        if bound in _CONTEXT:
+            return True
+        if isinstance(n, ast.Name) and n.id in _DYNAMIC:
+            return True
+        if isinstance(n, ast.Attribute) and n.attr in _DYNAMIC:
+            return True
+        if isinstance(n, ast.Constant) and n.value in _CONTEXT and id(n) not in docs:
+            return True
+    return False
+
+
+def _relative_targets(path: str, data: bytes) -> set[str]:
+    """Tree paths the relative imports of one file name (``a/b.py`` and ``a/b/__init__.py``);
+    ``from . import x`` names ``x``. A file that cannot be parsed names none."""
+    try:
+        tree = ast.parse(data)
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        return set()
+    dirs = path.split("/")[:-1]
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.level < 1:
+            continue
+        start = len(dirs) - (node.level - 1)
+        if start < 0:
+            continue
+        parts = node.module.split(".") if node.module else []
+        names = [parts] if node.module else []
+        names += [[*parts, a.name] for a in node.names]  # ``from . import x`` may name a module
+        for dotted in names:
+            for i in range(1, len(dotted) + 1):
+                stem = "/".join([*dirs[:start], *dotted[:i]])
+                found |= {f"{stem}.py", f"{stem}/__init__.py"}
+    return found
 
 
 @cache
@@ -117,6 +182,55 @@ class RelativeScope:
             except (GitCommandError, OSError, ValueError):
                 self._moves[init] = True
         return self._moves[init]
+
+    def own_shadows(self, changed: Iterable[str]) -> frozenset[str]:
+        """The changed files a changed relative import names as its package's own module, when the
+        package is proven (as for ``resolver``), no changed file rewrites its package or search
+        path, and no config text near a path word names the package directory. Anything unread,
+        too large or undecodable keeps the file a shadow candidate."""
+        paths = [p for p in changed if p.endswith(".py")]
+        try:
+            blobs = {p: read_git_bytes(self._repo, "show", f"{self._candidate}:{p}") for p in paths}
+        except (GitCommandError, OSError, ValueError):
+            return frozenset()
+        if any(_rebinds_context(data) for data in blobs.values()):
+            return frozenset()
+        named = {t for p, data in blobs.items() for t in _relative_targets(p, data)}
+        return frozenset(p for p in paths if p in named and self._own(p))
+
+    def _own(self, path: str) -> bool:
+        base, cand = self._files()
+        dirs = path.split("/")[:-1]
+        top = len(dirs)
+        while top > 0 and (init := "/".join([*dirs[:top], "__init__.py"])) in base and init in cand:
+            top -= 1
+        if top == len(dirs) or path not in cand or dirs[top].casefold() in _BARRED:
+            return False
+        chain = ("/".join([*dirs[:i], "__init__.py"]) for i in range(top + 1, len(dirs) + 1))
+        return not any(self._init_moves(i) for i in chain) and not self._dir_on_path(dirs)
+
+    def _dir_on_path(self, dirs: list[str]) -> bool:
+        """Whether a config text names the package directory next to a path word (unreadable,
+        too large, undecodable or too many files: yes). Only ever makes the check stricter."""
+        name = re.compile(rf"(?<!\w){re.escape(dirs[-1])}(?!\w)|{re.escape('/'.join(dirs))}", re.I)
+        seen = 0
+        for commit, tree in ((self._base, self._files()[0]), (self._candidate, self._files()[1])):
+            for f in sorted(tree):
+                leaf = f.rsplit("/", 1)[-1].casefold()
+                if not (leaf in _CONFIG or leaf.endswith(_CONFIG_SUFFIX)):
+                    continue
+                seen += 1
+                if seen > 200:
+                    return True
+                try:
+                    text = read_git_bytes(self._repo, "show", f"{commit}:{f}").decode("utf-8")
+                except (GitCommandError, OSError, ValueError):
+                    return True
+                if leaf.endswith(".pth") or (
+                    any(w in text.casefold() for w in _PATH_WORDS) and name.search(text)
+                ):
+                    return True
+        return False
 
     def _files(self) -> tuple[set[str], set[str]]:
         if self._trees is None:

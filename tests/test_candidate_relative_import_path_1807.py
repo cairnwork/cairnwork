@@ -33,14 +33,14 @@ QUIET = {
     "comment": "# __path__ = []  extend_path\nVERSION = 1\n",
     "all": '__all__ = ["a"]\n__version__ = "1"\n',
 }
-RUN = "from .pickle import loads\n"
+RUN = "from .types import type_ok\n"
 
 
 def _files(init: str, where: str = "pkg") -> tuple[dict[str, str], dict[str, str]]:
     base = {f"{where}/__init__.py": init, f"{where}/a.py": "X = 1\n"}
     if where != "pkg":
         base["pkg/__init__.py"] = ""
-    return base, {f"{where}/pickle.py": "X = 2\n", f"{where}/v.py": RUN}
+    return base, {f"{where}/types.py": "def type_ok(x):\n    return x\n", f"{where}/v.py": RUN}
 
 
 @pytest.mark.parametrize("name", list(MOVERS))
@@ -66,14 +66,14 @@ def test_an_init_that_only_mentions_the_name_keeps_the_exemption(tmp_path, name)
 
 
 def test_the_runtime_really_loads_another_module(tmp_path):
-    """The reason: a moved search path makes the relative import load the real ``pickle``."""
+    """The reason: a moved search path makes the relative import load the real ``types``."""
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg/__init__.py").write_text(MOVERS["method"])
-    (tmp_path / "pkg/pickle.py").write_text("X = 2\n")
-    (tmp_path / "pkg/v.py").write_text(RUN)
+    (tmp_path / "pkg/types.py").write_text("X = 2\n")
+    (tmp_path / "pkg/v.py").write_text("from .types import GenericAlias\n")
     code = (
         f"import sys\nsys.path.insert(0, {str(tmp_path)!r})\nimport pkg.v\n"
-        "print(sys.modules['pkg.pickle'].__file__)\n"
+        "print(sys.modules['pkg.types'].__file__)\n"
     )
     out = subprocess.run(
         [sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60, check=False

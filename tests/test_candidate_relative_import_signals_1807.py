@@ -70,11 +70,33 @@ for _name, _extra in {
     },
 }.items():
     ROWS[_name] = _row(_extra, {"pkg/types.py": TYPES + X, "pkg/validator.py": "VALUE = 1\n"})
-# Only the subprocess row is refused by the new rule (as on main); every other shape passes.
-EXPECT = {name: None for name in ROWS} | {"subprocess-runs-package-script": REFUSED}
+# Design C: the signal is scanned as on main and a package-own module leaves the shadow search
+# only when nothing puts the package directory on the path. Rows below are refused as on main;
+# the controls (no relative import) pass on main too, so they add nothing (Issue #1829).
+EXPECT = {name: None for name in ROWS} | {
+    name: REFUSED
+    for name in (
+        "subprocess-runs-package-script",
+        "base-conftest-sys-path-insert",
+        "base-pytest-ini-pythonpath",
+        "base-pyproject-pythonpath",
+        "repoint-types-also-changed",
+    )
+}
 
 
 @pytest.mark.parametrize("name", list(ROWS))
 def test_shape(tmp_path, name):
     got = _verdict(tmp_path, *ROWS[name])
     assert got == EXPECT[name]
+
+
+@pytest.mark.parametrize(
+    "conf",
+    [b"\xff\xfe pythonpath = pkg \x80\n", b"[pytest]\npythonpath = pkg\n" + b"#" * 3_000_000],
+    ids=["undecodable", "too-large"],
+)
+def test_a_config_text_that_cannot_be_read_means_not_excluded(tmp_path, conf):
+    """Condition: the config scan only blocks more, so the refusal main gives stays."""
+    base = {**PKG, "pytest.ini": conf}
+    assert _verdict(tmp_path, base, EDIT) == REFUSED
