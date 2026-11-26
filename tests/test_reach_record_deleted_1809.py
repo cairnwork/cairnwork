@@ -132,3 +132,34 @@ def test_named_deleted_keeps_plain_py_only():
         "tests/conftest.py",
     )
     assert named_deleted(deleted, ("tests",)) == deleted[:2]
+
+
+CONF, ZIP = "tests/conftest.py", "tests/data/bundle.zip"
+INIT = "tests/pkg/__init__.py"
+
+
+def _count_runs(tmp_path, monkeypatch, paths, deleted, base_extra=()):
+    task = _task(tmp_path, monkeypatch, extra=(CONF, ZIP, INIT, *base_extra))
+    monkeypatch.setattr(bfn, "collect", lambda *a, **k: None)  # only the reach runs count
+    runs = Runs(monkeypatch, task, lambda r, t: r.record())
+    bfn.check_with_base(CTX, task, paths, "r", deleted=deleted)
+    return runs.calls
+
+
+# main's rule, line by line: a run happens unless the commit adds nothing and every file it changes
+# on the base is a conftest.py. Deletions never take part in that decision.
+@pytest.mark.parametrize(
+    "paths, deleted, runs",
+    [
+        ((CONF,), (), False),  # conftest-only, no deletion: neither side runs
+        ((CONF,), (ZIP,), False),  # conftest-only + data deletion: main returns early
+        ((CONF,), (INIT,), False),  # conftest-only + package deletion
+        ((CONF,), (D,), False),  # conftest-only + .py deletion
+        ((CONF, X), (ZIP,), True),  # a non-conftest edit: main runs
+        ((CONF, "tests/new_test.py"), (ZIP,), True),  # an added file: main runs
+        ((X,), (), True),
+    ],
+)
+def test_run_or_not_matches_main(tmp_path, monkeypatch, paths, deleted, runs):
+    calls = _count_runs(tmp_path, monkeypatch, paths, deleted)
+    assert bool(calls) is runs
