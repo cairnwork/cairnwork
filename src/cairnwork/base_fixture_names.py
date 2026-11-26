@@ -44,19 +44,20 @@ def _on_base(repo: Path, base: str, path: str) -> bool:
     return done.returncode == 0
 
 
-def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str) -> None:
+def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, deleted=()) -> None:
     """``check_conftests`` with the base's collected fixture names (None when not obtained), then
     the runtime plugin and sys.path reach (#1769; refusals only)."""
     collected = collect(ctx, task, paths, run_id)
     check_conftests(task.repo, task.base_commit, task.test_commit, paths, collected=collected)
-    on_base = tuple(p for p in paths if _on_base(task.repo, task.base_commit, p))
+    on_base = (*(p for p in paths if _on_base(task.repo, task.base_commit, p)), *deleted)
     added = tuple(p for p in paths if p not in on_base)
     if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
         return  # only conftest edits: no run, as before (#1769)
-    record, complete = reach_record(ctx, task, on_base, run_id)
-    if record is None:
+    records, complete = reach_record(ctx, task, on_base, run_id)
+    if not records:
         return  # no run, no evidence: the static verdict stands
-    check_runtime_reach(record, on_base, added, _base_paths(task))
+    for record in records:  # each run has its own checkout root: check them one by one
+        check_runtime_reach(record, on_base, added, _base_paths(task))
     if not complete:  # fail closed: a record that left out a changed file or part of the tree
         raise TestCommitRejected(CODE, "the base run did not cover every changed or base test file")
 
@@ -71,18 +72,21 @@ def _base_paths(task) -> tuple[str, ...] | None:
 
 
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
-    """(record, complete): the record of one collect-only base run, or (None, False).
+    """(records, complete): the records of the collect-only base runs, or ((), False).
 
-    The run names the changed base .py files, every base conftest directory (a test file below it,
-    else its conftest.py: collecting either loads it), and the whole test tree up to
-    MAX_TREE_TARGETS files (above that one tree file, so a root conftest and the ini still load).
+    The verdict is main's (#1769) and the extra runs below can only add a refusal:
+    the run names the first MAX_TARGETS changed base .py files, every base conftest directory (a
+    test file below it, else its conftest.py) and the test tree up to MAX_TREE_TARGETS files (above
+    that one tree file, so a root conftest and the ini still load). If it gives no record, the
+    rerun drops exactly those named edits (``--ignore``; with nothing left it names the test
+    roots) and ``complete`` is False when a dropped file's base text shows a sys.path or plugin
+    signal or cannot be read. Changed files the first run did not name are collected by runs of
+    their own (halved while a group fails, at most MAX_EXTRA_RUNS); a file that cannot be collected
+    adds nothing, and the budget running out adds nothing: neither can relax the verdict.
     An unreadable tree, unreadable conftest directories or more than MAX_CONFTEST_DIRS of them
-    refuse the commit (TestCommitRejected): no run is made. ``complete`` is False when a changed
-    file that cannot be collected on the base was dropped (the rest run again, the directories
-    picked again from the tree minus that file) and its base text shows a sys.path or plugin
-    signal or cannot be read."""
+    refuse the commit (TestCommitRejected): no run is made."""
     if ctx.account is not None:
-        return None, False
+        return (), False
     roots = tuple(task.test_roots)
     tree = base_tree_targets(task.repo, task.base_commit, roots)
     dirs = conftest_dirs(task.repo, task.base_commit, roots)
@@ -91,9 +95,10 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
             CODE, "the base's test tree or conftest directories were not usable"
         )
     try:
-        edited = tuple(
+        every = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
-        )[:MAX_TARGETS]
+        )
+        edited = every[:MAX_TARGETS]
         for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
             if tag == "r2" and not edited:
                 break
@@ -101,15 +106,32 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
             picked = pick_dir_targets(left, dirs) or ()
             base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
             named = (*(p for p in edited if p not in dropped), *base, *picked)
-            targets = tuple(dict.fromkeys(named))
-            if not targets:
-                continue
-            record = _record_run(ctx, task, targets, f"{run_id}-{tag}")
+            targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest, the ini
+            record = _record_run(ctx, task, targets, f"{run_id}-{tag}", tuple(sorted(dropped)))
             if record is not None:
-                return record, not dropped or _quiet(task, edited)
+                more = _collect_all(ctx, task, tuple(p for p in every if p not in targets), run_id)
+                return (record, *more), not dropped or _quiet(task, edited)
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
-        return None, False
-    return None, False
+        return (), False
+    return (), False
+
+
+MAX_EXTRA_RUNS = 12  # runs for the changed files the first run did not name
+
+
+def _collect_all(ctx, task, files: tuple[str, ...], run_id: str):
+    """The records of runs of their own for ``files``: one run per group, a failed group halved, a
+    failed single file skipped, and nothing more once MAX_EXTRA_RUNS runs are used."""
+    records, queue, used = [], [files] if files else [], 0
+    while queue and used < MAX_EXTRA_RUNS:
+        group = queue.pop(0)
+        used += 1
+        record = _record_run(ctx, task, group, f"{run_id}-x{used}")
+        if record is not None:
+            records.append(record)
+        elif len(group) > 1:
+            queue.extend((group[: len(group) // 2], group[len(group) // 2 :]))
+    return tuple(records)
 
 
 SIGNAL = re.compile(rb"sys|path|plugin|importlib|import_module|__import__|exec|eval|site")
@@ -126,9 +148,11 @@ def _quiet(task, dropped: tuple[str, ...]) -> bool:
         return False
 
 
-def _record_run(ctx, task, targets: tuple[str, ...], run_id: str):
+def _record_run(ctx, task, targets: tuple[str, ...], run_id: str, ignore: tuple[str, ...] = ()):
     try:
-        spec = VerifierSpec("fixture-names", targets, collect_only=True, record_fixtures=True)
+        spec = VerifierSpec(
+            "fixture-names", targets, collect_only=True, record_fixtures=True, ignore=ignore
+        )
         runs = run_verifiers(ctx, task.base_commit, (spec,), run_id)
         return runs[0].collect_record if len(runs) == 1 else None
     except Exception:  # noqa: BLE001 - never read the exception: the candidate shapes its name
