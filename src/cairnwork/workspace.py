@@ -43,7 +43,7 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
 from cairnwork.protected_paths import is_protected, protected_note
-from cairnwork.refusal_types import CandidateRejected
+from cairnwork.refusal_types import CandidateRejected, _shown_detail
 from cairnwork.tamper_scan import CODE as TAMPER_CODE
 from cairnwork.tamper_scan import scan_patch
 from cairnwork.test_commit_paths import _keys
@@ -59,7 +59,7 @@ class WorkspaceError(Exception):
     code = "WORKSPACE_ERROR"
 
     def __init__(self, detail: str) -> None:
-        super().__init__(f"{self.code}: {detail}")
+        super().__init__(f"{self.code}: {_shown_detail(detail)}")
 
 
 @dataclass(frozen=True)
