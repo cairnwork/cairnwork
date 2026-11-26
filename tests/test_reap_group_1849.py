@@ -86,7 +86,7 @@ def test_a_lookup_that_fails_while_waiting_ends_the_wait(monkeypatch):
     real = world.run
 
     def flaky(cmd, **kwargs):
-        if world.group_calls >= 2:
+        if world.group_calls >= 1:
             world.rc = 2
         return real(cmd, **kwargs)
 
