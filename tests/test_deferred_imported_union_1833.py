@@ -374,3 +374,45 @@ def test_changed_and_new_ids_are_never_fewer_than_main(pair):
     old, new = (PAIRS | DUP_PAIRS)[pair][:2]
     assert _main_changed(old, new) <= _changed(old, new)
     assert _main_targets(old, new) <= _targets(old, new)
+
+
+# Named pins for a class defined twice (the review's conditions).
+REDEF_FILE = "tests/test_redef.py"
+REDEF_LATER = DUP.replace("assert 2", "assert {m}")
+
+
+def test_redefined_class_unchanged_file_lists_nothing_new():
+    old, new, _ = DUP_PAIRS["same"]
+    assert _targets(old, new) == set()
+
+
+def test_redefined_class_comment_only_lists_nothing_new():
+    old, new, _ = DUP_PAIRS["comment-before"]
+    assert _targets(old, new) == set()
+
+
+def test_redefined_class_untargeted_still_requires_file():
+    from cairnwork.deferred_tests import untargeted
+
+    old, new, _ = DUP_PAIRS["comment-before"]
+    nodes = [f"{REDEF_FILE}::{i}" for i in _targets(old, new)]
+    assert untargeted((REDEF_FILE,), nodes, [f"{REDEF_FILE}::Checks::test_a"]) == (REDEF_FILE,)
+
+
+def test_redefined_class_changed_tests_keeps_main_id():
+    old, new, _ = DUP_PAIRS["first-class-changed"]
+    assert "Checks::test_a" in _main_changed(old, new)
+    assert "Checks::test_a" in _changed(old, new)
+
+
+def test_redefined_class_later_definition_change_listed():
+    old = REDEF_LATER.format(n=1, m=2)
+    new = REDEF_LATER.format(n=1, m=3)
+    assert "Checks::test_a" in _targets(old, new)
+    assert "Checks::test_a" in _changed(old, new)
+
+
+@pytest.mark.parametrize("pair", [*PAIRS, *DUP_PAIRS])
+def test_changed_tests_never_fewer_than_main_on_pairs(pair):
+    old, new = (PAIRS | DUP_PAIRS)[pair][:2]
+    assert _main_changed(old, new) <= _changed(old, new)
