@@ -63,7 +63,12 @@ def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
     )
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     _rc, _timed_out, survivors = confined.execute(
-        [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
+        [sys.executable, str(script)],
+        tmp_path,
+        env,
+        30,
+        tmp_path / "log",
+        scope_roots=(tmp_path.parent,),
     )
     assert survivors == 1  # the rule is unchanged: one survivor
     shown = survivors.argv[0]  # macOS ps names the framework binary, not the venv link
@@ -93,7 +98,12 @@ def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
                       " preexec_fn=os.setsid)\n")  # fmt: skip
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
     *_, survivors = confined.execute(
-        [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
+        [sys.executable, str(script)],
+        tmp_path,
+        env,
+        30,
+        tmp_path / "log",
+        scope_roots=(tmp_path.parent,),
     )
     assert survivors >= 1 and any(a.startswith("sh -c") for a in survivors.argv)
 

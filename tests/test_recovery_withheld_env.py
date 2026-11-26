@@ -73,7 +73,9 @@ def test_a_withheld_process_in_an_attempt_dir_is_killed_and_labelled_cwd(
     cwds[FAKE] = str(runs / f"{ATTEMPT}-q-v0.work" / "sub")  # unresolved: tmp is a symlink
     cwds[FAKE + 1] = str(runs / ATTEMPT)
     killed = _table(monkeypatch, [_plain(FAKE), _plain(FAKE + 1)])
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert killed == [FAKE, FAKE + 1]
     assert (found.killed, found.denied, found.found, found.gone) == (2, 0, 2, False)
     assert found.held_by == ((FAKE, "cwd"), (FAKE + 1, "cwd"))
@@ -89,7 +91,9 @@ def test_a_withheld_process_outside_the_attempt_dirs_is_not_killed(monkeypatch, 
     cwds[FAKE + 3] = ""
     rows = [_plain(FAKE + i) for i in range(4)]
     killed = _table(monkeypatch, rows)
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert killed == [] and found.gone and found.held_by == ()
 
 
@@ -101,7 +105,9 @@ def test_an_unknown_answer_is_not_killed_and_counts_as_vanished(monkeypatch, rea
     cwds[FAKE] = str(runs / ATTEMPT)
     cwds[FAKE + 1] = None  # withheld, but its cwd cannot be read
     killed = _table(monkeypatch, [_plain(FAKE), _plain(FAKE + 1), _plain(FAKE + 2)])
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert killed == [] and found.vanished == 2 and not found.gone
     assert ("cwd", FAKE) not in calls and ("cwd", FAKE + 2) not in calls  # not withheld: no read
 
@@ -114,7 +120,9 @@ def test_a_refused_kill_is_a_denied_cwd_survivor(monkeypatch, readers, runs):
         raise PermissionError
 
     _table(monkeypatch, [_plain()], kill=refuse)
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert (found.killed, found.denied, found.held_by) == (0, 1, ((FAKE, "cwd"),))
     assert not found.gone
 
@@ -127,7 +135,9 @@ def test_a_withheld_process_that_exits_before_its_kill_is_vanished(monkeypatch, 
         raise ProcessLookupError
 
     _table(monkeypatch, [_plain()], kill=gone)
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert (found.vanished, found.found, found.gone) == (1, 0, False)
 
 
@@ -138,7 +148,9 @@ def test_only_the_owners_unmarked_readable_rows_are_read(monkeypatch, readers, r
     marked = (FAKE, FAKE, ME, {f"{ATTEMPT_ENV}={ATTEMPT}"})
     hidden = (FAKE + 1, FAKE + 1, ME, None)  # ps showed "(name)": today's hidden path
     killed = _table(monkeypatch, [marked, hidden, _plain(FAKE + 2, OTHER_UID), _plain(FAKE + 3)])
-    found = sweep_marked(ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_since=0.0)
+    found = sweep_marked(
+        ATTEMPT_ENV, ATTEMPT, cwd_dirs=_dirs(runs), cwd_roots=(runs,), cwd_since=0.0
+    )
     assert {pid for _, pid in calls} == {FAKE + 3}
     assert sorted(killed) == [FAKE, FAKE + 3]
     assert found.held_by == ((FAKE, "marked"), (FAKE + 1, "hidden"), (FAKE + 3, "cwd"))

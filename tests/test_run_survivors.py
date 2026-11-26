@@ -133,7 +133,7 @@ def test_execute_sweeps_with_the_checkout_and_the_start_mark(monkeypatch, tmp_pa
     monkeypatch.setattr(confined, "sweep_marked", sweep)
     env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: TOKEN}
     returncode, timed_out, survivors = confined.execute(
-        ["/usr/bin/true"], tmp_path, env, 30, tmp_path / "log"
+        ["/usr/bin/true"], tmp_path, env, 30, tmp_path / "log", scope_roots=(tmp_path.parent,)
     )
     assert (returncode, timed_out, survivors) == (0, False, 0)
     assert seen["value"] == TOKEN and seen["dispatched"] == "boot-1 12.5"
@@ -182,7 +182,10 @@ def test_a_checkout_swapped_for_a_symlink_keeps_the_sweep_where_the_run_started(
         _only(child.pid, monkeypatch)
         env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: TOKEN}
         swap = ["/bin/sh", "-c", "cd .. && mv checkout moved && ln -s outside checkout"]
-        assert confined.execute(swap, checkout, env, 30, tmp_path / "log")[0] == 0
+        assert (
+            confined.execute(swap, checkout, env, 30, tmp_path / "log", scope_roots=(tmp_path,))[0]
+            == 0
+        )
         assert checkout.is_symlink()
         with pytest.raises(subprocess.TimeoutExpired):  # a SIGKILL would end it within this
             child.wait(timeout=2)
@@ -243,7 +246,10 @@ def test_a_swapped_checkout_keeps_the_sweep_in_place_where_the_environment_reads
         _only(child.pid, monkeypatch)
         env = {"PATH": "/usr/bin:/bin", confined.RUN_TOKEN_VAR: TOKEN}
         swap = ["/bin/sh", "-c", "cd .. && mv checkout moved && ln -s outside checkout"]
-        assert confined.execute(swap, checkout, env, 30, tmp_path / "log")[0] == 0
+        assert (
+            confined.execute(swap, checkout, env, 30, tmp_path / "log", scope_roots=(tmp_path,))[0]
+            == 0
+        )
         assert checkout.is_symlink()
         with pytest.raises(subprocess.TimeoutExpired):  # a SIGKILL would end it within this
             child.wait(timeout=2)
