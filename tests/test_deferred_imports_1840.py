@@ -1,4 +1,5 @@
-"""#1840 head4: an import-bound base is never read more narrowly than the cautious reading.
+"""#1840 head4 (rule now in test_deferred_imports_1840_design.py): an import-bound base
+is never read more narrowly than the cautious reading.
 
 The cautious reading (a base that is not import-bound may be any earlier class of the file) is
 what main does. A file that rebinds the imported base name through any channel the AST does not
@@ -76,9 +77,6 @@ def test_every_rebinding_channel_keeps_main_s_ids(name, monkeypatch):
 
 
 MUST_PASS = {
-    "read": "print(Base)\n",
-    "attribute-assign": "Base.attr = 1\n",
-    "alias": "Alias = Base\n",
     "plain-mock-of-other": "mock.patch('os.getcwd').start()\n",
     "unrelated-string": "LABEL = 'hello'\n",
     "other-module-attr": "import os\nos.environ['X'] = '1'\n",
@@ -86,9 +84,14 @@ MUST_PASS = {
 
 
 @pytest.mark.parametrize("name", MUST_PASS)
-def test_a_name_that_is_only_read_or_aliased_stays_import_bound(name):
+def test_a_file_that_never_uses_the_name_but_as_a_base_stays_import_bound(name):
     ids = _ids(HEAD + P + IMP + MUST_PASS[name] + TAIL)
     assert "I::test_p" not in ids and "I::test_i" in ids
+
+
+@pytest.mark.parametrize("use", ["print(Base)\n", "Base.attr = 1\n", "Alias = Base\n"])
+def test_any_other_use_of_the_name_takes_it_out_of_import_bound(use):
+    assert "I::test_p" in _ids(HEAD + P + IMP + use + TAIL)  # #1840 head5: main's reading
 
 
 @pytest.mark.parametrize("name", ALL)

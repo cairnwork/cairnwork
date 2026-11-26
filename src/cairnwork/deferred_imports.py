@@ -69,6 +69,25 @@ def _module_writes(tree: ast.Module, modules: set[str]) -> bool:
     )
 
 
+def _used_outside_bases(tree: ast.Module) -> set[str]:
+    """#1840 head5, the rule that does not need a list of ways to change a class: every name the
+    file reads or writes anywhere except as (the root of) an entry of a class's base list. Such a
+    name is never import-bound, whatever the other use is (a read, an argument, an attribute
+    access or store, an alias, ``del``, a decorator, a keyword, any call that might write to it)."""
+    in_bases: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            for base in node.bases:
+                root = base
+                while isinstance(root, ast.Attribute):
+                    root = root.value
+                if isinstance(root, ast.Name):
+                    in_bases.add(id(root))
+    used = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and id(n) not in in_bases}
+    used.update(a.arg for a in ast.walk(tree) if isinstance(a, ast.arg))
+    return used
+
+
 def imported_names(tree: ast.Module) -> frozenset[str]:
     """Names bound exactly once in the whole file, by a top-level import. Every other binding of
     the name, anywhere (an assignment, ``for``, ``with``, walrus, annotation, ``match`` capture,
@@ -79,6 +98,9 @@ def imported_names(tree: ast.Module) -> frozenset[str]:
     ``__import__``, ``importlib``, ``sys.modules`` or ``__dict__``, trusts no name; an import of a
     class the file itself defines (a module importing itself) is not trusted either. Known limit:
     a unittest subclass built at run time is not seen here (tracked in its own Issue).
+    #1840 head5: above all, a name is import-bound only if it appears nowhere in the file but in
+    a class's base list (``_used_outside_bases``); any other use of it, however it could change
+    the class, gives the cautious reading, so no list of such writes decides the matter.
     #1840: a name is also not trusted when the file spells it as a string, a keyword argument name
     or the attribute of a store, and nothing is trusted when a module imported by ``import x`` has
     an attribute stored or deleted. These lists are not exhaustive (a write whose target name is
@@ -113,6 +135,9 @@ def imported_names(tree: ast.Module) -> frozenset[str]:
             count.update(n for n in (getattr(node, "name", None), getattr(node, "rest", None)) if n)
     spelled = _named_elsewhere(tree)
     needles = _needles(tree)
+    used = _used_outside_bases(tree)
     return frozenset(
-        name for name in top if count[name] == 1 and not ({name} | needles[name]) & spelled
+        name
+        for name in top
+        if count[name] == 1 and name not in used and not ({name} | needles[name]) & spelled
     )

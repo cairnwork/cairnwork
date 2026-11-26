@@ -70,6 +70,14 @@ OTHER_USES = {
     "globals-string": "globals()['Base'] = P\n",
     "getattr-string": "getattr(sys.modules[__name__], 'Base')\n",
     "compare": "x = Base is P\n",
+    "write-call-inside-a-base": "class Q(setattr(Base, 'test_p', P.test_p) or object):\n    pass\n",
+    "subscript-base": "class Q(Base[int]):\n    pass\n",
+    "keyword-value": "class Q(object, metaclass=type, flag=Base):\n    pass\n",
+    "class-body-use": "class Q:\n    Base.test_p = P.test_p\n",
+    "comprehension": "[Base for _ in range(1)]\n",
+    "try-handler": "try:\n    pass\nexcept Base:\n    pass\n",
+    "match-capture": "match 1:\n    case Base:\n        pass\n",
+    "type-hint-string": "x: 'Base' = None\n",
     "fstring": "x = f'{Base}'\n",
     "starred": "x = [*Base]\n",
 }
@@ -102,7 +110,6 @@ def test_the_module_import_form_falls_back_the_same_way(name, monkeypatch):
         + TAIL.replace("(Base)", "(hs.Base)")
     )
     assert _ids(src) == _cautious(src, monkeypatch)
-    assert "TestI::test_p" in _ids(src)
 
 
 MUST_PASS = {

@@ -110,10 +110,15 @@ def test_an_imported_name_rebound_anywhere_keeps_the_cautious_fallback(middle):
     assert "I::test_p" in _ids(PRE + REBINDS[middle] + TAIL)
 
 
-@pytest.mark.parametrize("middle", ["print(Base)\n", "Base.attr = 1\n", "x = Base\n", ""])
-def test_a_name_that_is_only_read_stays_import_bound(middle):
-    ids = _ids(PRE + middle + TAIL)
+def test_a_name_used_only_as_a_base_stays_import_bound():
+    ids = _ids(PRE + TAIL)
     assert "I::test_p" not in ids and "I::test_i" in ids
+
+
+@pytest.mark.parametrize("middle", ["print(Base)\n", "Base.attr = 1\n", "x = Base\n"])
+def test_any_other_use_of_the_name_keeps_the_cautious_fallback(middle):
+    """#1840 head5: only a name that appears nowhere but in a base list is read narrowly."""
+    assert "I::test_p" in _ids(PRE + middle + TAIL)
 
 
 def test_an_import_of_a_class_defined_in_the_same_file_is_not_import_bound():
