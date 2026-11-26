@@ -29,10 +29,10 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from cairnwork import candidate_env, protection, replay_set, runlock, verify_scope
+from cairnwork import candidate_env, cleanup_sweep, protection, replay_set, runlock, verify_scope
 from cairnwork.account_check import base_stage, precheck
 from cairnwork.blackbox import Declaration
-from cairnwork.confined import ATTEMPT_ENV, confirm_gone, sweep_marked
+from cairnwork.confined import confirm_gone, sweep_marked
 from cairnwork.deferred_store import USED_DIR, consume
 from cairnwork.deferred_tests import (
     BaseUncomparable,
@@ -376,7 +376,7 @@ def cleanup(intake: Intake) -> dict[str, Any]:
             _gap()
             if not _same_file(fd, marker):
                 continue  # replaced by a run that started meanwhile
-            look = partial(sweep_marked, ATTEMPT_ENV, marker.name, dispatched=read_start_mark(fd))
+            look = cleanup_sweep.look_for(sweep_marked, intake, marker.name, read_start_mark(fd))
             swept = confirm_gone(look(), look)
             _remove_leftovers(intake.run_root, marker.name)
             shutil.rmtree(work := intake.state / "verify-scratch" / marker.name, ignore_errors=True)

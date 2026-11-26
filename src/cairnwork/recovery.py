@@ -44,7 +44,7 @@ from contextlib import nullcontext, suppress
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import runlock, unswept
+from cairnwork import cleanup_sweep, runlock, unswept
 from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, sweep_marked
 from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.notary import Notary
@@ -160,9 +160,10 @@ def _settle(
     roots, other = _owner_roots(run_root, dispatched)
     dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
 
-    def look():  # the worker account it ran as, if any (pipeline.py journals it)
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker, dispatched=mark,
-                            cwd_dirs=dirs)  # fmt: skip
+    def look():  # the worker account it ran as (pipeline.py journals it) and the verifier's
+        return cleanup_sweep.look_at(
+            sweep_marked, (ATTEMPT_ENV, attempt_id), (worker, cleanup_sweep.user_of(account)),
+            dispatched=mark, cwd_dirs=dirs)  # fmt: skip
 
     first = look()
     swept = confirm_gone(first, look)
