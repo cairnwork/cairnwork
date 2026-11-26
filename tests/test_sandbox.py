@@ -11,12 +11,12 @@ import sys
 
 import pytest
 from adopt_helpers import adopt_started_in_test
+from conftest import commit_change, git
 from fixture_tree import reach_env, world_base
 
 import cairnwork_sandbox
 from cairnwork.verifiers import parse_verifier, run_verifiers
 from cairnwork.verify_context import VerifyContext
-from conftest import commit_change, git
 
 
 @pytest.fixture
