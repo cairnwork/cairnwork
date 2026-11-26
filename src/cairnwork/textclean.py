@@ -7,6 +7,7 @@ the line and paragraph separators Zl, Zp. Same rule as experimental/blind_warn (
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections.abc import Callable
 
@@ -44,3 +45,12 @@ def shown(text: object) -> str:
         else:
             escaped.append(char)
     return "'" + "".join(escaped) + "'"
+
+
+def log_safe(text: str) -> str:
+    """``text`` for a refusal that a CI log prints: hidden characters escaped as ``shown`` does
+    (newline, carriage return and ESC become x0a, x0d, x1b escapes) and the ``::`` and ``##[``
+    that a log reads as a command broken up, wherever they sit (a later layer may start a line
+    there)."""
+    escaped = shown(text)[1:-1].replace("\\\\", "\\").replace("\\'", "'")
+    return re.sub(r":(?=:)", ": ", escaped).replace("##[", "# #[")

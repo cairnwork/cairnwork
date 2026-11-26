@@ -308,3 +308,64 @@ def test_a_file_less_plugin_name_still_matches_a_changed_file_and_says_changes(r
     record = rec(root, plugins=[("pkg.mod", None)])
     assert "changes" in refused_with(record, ["pkg/mod.py"], frozenset({"pkg/mod.py"}))
     check_runtime_reach(record, ["pkg/other.py"], [], base_paths=frozenset({"pkg/other.py"}))
+
+
+# #1809 follow-ups from the #1772 review (c8e94333)
+@pytest.mark.parametrize(
+    ("changed", "added", "base", "refuses"),
+    [
+        (["pkg/mod/sub.py"], [], {"pkg/mod/__init__.py", "pkg/mod/sub.py"}, True),
+        ([], ["pkg/mod/new.py"], {"pkg/mod/__init__.py"}, True),
+        (
+            ["vendor/pkg/mod/deep/x.py"],
+            [],
+            {"vendor/pkg/mod/__init__.py", "vendor/pkg/mod/deep/x.py"},
+            True,
+        ),
+        ([], ["pkg/mod/new.py"], None, True),  # unknown base: the package may exist
+        ([], ["pkg/mod/new.py", "pkg/mod/__init__.py"], {"pkg/other.py"}, True),
+        ([], ["pkg/mod/new.py"], {"pkg/other.py"}, False),  # pkg/mod is no package there
+        (["pkg/mod/data.txt"], [], {"pkg/mod/__init__.py", "pkg/mod/data.txt"}, False),
+        (["pkg/mod/conftest.py"], [], {"pkg/mod/__init__.py", "pkg/mod/conftest.py"}, False),
+        (["pkg/modx/sub.py"], [], {"pkg/modx/__init__.py", "pkg/modx/sub.py"}, False),
+    ],
+)
+def test_a_py_file_below_a_package_known_only_by_name_is_matched(
+    root, changed, added, base, refuses
+):
+    record = rec(root, plugins=[("pkg.mod", None)])
+    base = None if base is None else frozenset(base)
+    if refuses:
+        refused_with(record, changed, base, added)
+    else:
+        check_runtime_reach(record, changed, added, base_paths=base)
+
+
+def test_the_exact_spelling_excuse_applies_below_a_package_plugin(root):
+    (root / "pkg").mkdir()
+    record = rec(root, plugins=[("pkg", str(root / "pkg" / "__init__.py"))])
+    check_runtime_reach(record, ["PKG/x.py"], [], base_paths=frozenset({"PKG/x.py"}))
+    refused_with(record, ["PKG/x.py"], frozenset())
+    refused_with(record, ["PKG/x.py"], None)
+
+
+def test_a_conftest_below_a_package_plugin_is_left_to_the_conftest_rules(root):
+    (root / "pkg").mkdir()
+    record = rec(root, plugins=[("pkg", str(root / "pkg" / "__init__.py"))])
+    check_runtime_reach(record, ["pkg/conftest.py"], [], base_paths=None)
+
+
+@pytest.mark.parametrize(
+    ("changed", "refuses"),
+    [
+        ("pkg/__pycache__/mod.cpython-311.pyc", True),
+        ("pkg/mod.pyc", True),
+        ("pkg/__pycache__/other.cpython-311.pyc", False),
+    ],
+)
+def test_a_bytecode_file_maps_back_to_a_plugin_known_only_by_name(root, changed, refuses):
+    record = rec(root, plugins=[("pkg.mod", None)])
+    if refuses:
+        refused_with(record, [changed], None)
+    else:
+        check_runtime_reach(record, [changed], [], base_paths=None)

@@ -31,7 +31,7 @@ ARCHIVE_PATH = (
 ARCHIVE = "x = 1\n"
 
 
-def _test_commit(project, files, declared):
+def _test_commit(project, files, declared, delete=()):
     base = git(project, "rev-parse", "HEAD")
     root = Path(project).parent
     origin = root / "origin.git"
@@ -44,7 +44,7 @@ def _test_commit(project, files, declared):
     git(work, "config", "user.name", "t")
     git(work, "checkout", "-q", "--detach", base)
     message = "tests" + (f"\n\n{DATA_TRAILER}: {' '.join(declared)}\n" if declared else "")
-    tests = commit_change(work, files, message=message)
+    tests = commit_change(work, files, delete=delete, message=message)
     git(work, "push", "-q", "origin", f"{tests}:refs/heads/tests-{tests[:8]}")
     return base, tests
 
