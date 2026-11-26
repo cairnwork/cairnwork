@@ -60,5 +60,7 @@ def settle(account, before: int, main: int, deadline: float):
             break  # nothing beyond main (or unknown: -1), or the cap is spent: keep the last count
         time.sleep(min(GRACE_INTERVAL, left / 2))  # always leave the recount some budget
         cap = min(deadline, start + GRACE_SECONDS)
-        before = account._escaped_count(cap, attempts=1)  # noqa: SLF001 - same package
+        again = account._escaped_count(cap, attempts=1)  # noqa: SLF001 - same package
+        if again >= 0:  # a later unknown never replaces a count that was already known
+            before = again
     return before, taken, deadline + min(time.monotonic() - start, GRACE_SECONDS)

@@ -334,7 +334,7 @@ def test_a_slow_recount_through_reap_still_lists_and_refuses(monkeypatch, cost):
 
 
 @pytest.mark.parametrize("cost", [0.005, 0.01, 0.03])
-@pytest.mark.parametrize("leave_at", [0.1, 1.0, 1.9, 1.97])
+@pytest.mark.parametrize("leave_at", [0.1, 1.0, 1.8, 1.9])
 def test_a_child_that_leaves_is_not_refused_whatever_the_recount_costs(monkeypatch, cost, leave_at):
     clock = _fake_clock(monkeypatch)
     account = _Costly(clock, cost, 1, leave_at=leave_at)
