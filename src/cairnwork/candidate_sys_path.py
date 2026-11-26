@@ -7,7 +7,8 @@ function that never reaches machinery is not refused even when the file uses get
 while calling, moving or rewriting machinery, or flipping the block that wraps it, is. A file
 with only a path redirect or program launch (sys.path, __path__, site, PYTHONPATH, subprocess) is
 refused only when a file the candidate changed can shadow an imported module (candidate_shadow.py),
-so an honest edit that inserts its own directory still verifies.
+so an honest edit that inserts its own directory still verifies. A new file named like a
+standard-library module is judged on its own, signal or not (candidate_stdlib_root.py, #1829).
 Residuals (#1115), left to the blackbox and verifier checks: base machinery reached through
 registries, dunders or other unrecognized same-file alias forms; other control-flow edits inside
 code that reaches machinery. Also unscanned: a ``.pyc`` without source; sys.path outside the repo;
@@ -53,6 +54,7 @@ from cairnwork.candidate_statements import (
     machinery_changed,
     rebound_safe_modules,
 )
+from cairnwork.candidate_stdlib_root import refuse_stdlib_named_adds
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.gitcmd import GitCommandError
@@ -200,6 +202,9 @@ def refuse_new_sys_path_mutation(
                         f"{path!r}: has a source-visible sys.path/import-machinery signal; "
                         f"{shadow!r} can shadow an imported module",
                     )
+        # a new standard-library-named file needs no signal to shadow (#1829); checked last so
+        # the signal rules above keep their own messages
+        refuse_stdlib_named_adds(repo, candidate, changes.entries, own)
     except CandidateRejected:
         raise
     except (
