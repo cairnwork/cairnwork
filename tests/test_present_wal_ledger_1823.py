@@ -14,13 +14,13 @@ from cairnwork.intake_request import IntakeRefused
 from cairnwork.notary import NotarySchemaMismatch
 
 
-def _deny(monkeypatch, name):
+def _deny(monkeypatch, name, message="Permission denied"):
     for attr in ("stat", "lstat"):
         real = getattr(os, attr)
 
         def guarded(path, *args, _real=real, **kwargs):
             if os.path.basename(os.fspath(path)) == name:
-                raise PermissionError(13, "Permission denied")
+                raise PermissionError(13, message)
             return _real(path, *args, **kwargs)
 
         monkeypatch.setattr(os, attr, guarded)
@@ -65,3 +65,36 @@ def test_a_missing_ledger_still_means_nothing_in_flight(tmp_path):
     intake = Intake(tmp_path / "state")
     intake.prepare()
     assert intake.in_flight()["count"] == 0
+
+
+def _refusal(tmp_path, monkeypatch, site, message):
+    if site == "wal":
+        path = _notary(tmp_path)
+        _deny(monkeypatch, "notary.sqlite-wal", message)
+        call = lambda: notary_migrate._probe(path)  # noqa: E731
+    else:
+        intake = Intake(tmp_path / "state")
+        intake.prepare()
+        intake.ledger.in_flight()
+        _deny(monkeypatch, "ownership.sqlite", message)
+        call = intake.in_flight
+    with pytest.raises(IntakeRefused) as refused:
+        call()
+    return str(refused.value)
+
+
+@pytest.mark.parametrize("site", ["wal", "ledger"])
+@pytest.mark.parametrize("prefix", ["::error::", "##[error]"])
+def test_a_workflow_command_in_the_os_error_text_cannot_start_a_log_line(
+    tmp_path, monkeypatch, site, prefix
+):
+    shown = _refusal(tmp_path, monkeypatch, site, f"denied\n{prefix}boom\r{prefix}again")
+    assert "\n" not in shown and "\r" not in shown
+    assert not any(line.startswith(prefix) for line in shown.splitlines())
+    assert prefix in shown  # kept on the one line, readable
+
+
+@pytest.mark.parametrize("site", ["wal", "ledger"])
+def test_an_ordinary_os_error_text_stays_readable(tmp_path, monkeypatch, site):
+    shown = _refusal(tmp_path, monkeypatch, site, "Permission denied")
+    assert shown.startswith("BAD_STATE: ") and shown.endswith("Permission denied")
