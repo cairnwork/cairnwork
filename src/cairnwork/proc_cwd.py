@@ -29,6 +29,7 @@ import re
 import signal
 import stat
 import sys
+import tempfile
 from pathlib import Path
 
 from cairnwork import survivor_argv
@@ -229,18 +230,26 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
     return False
 
 
+_SHARED_ROOTS = ("/private/var/tmp", "/var/tmp", "/private/var/folders", "/var/folders")
+
+
 def too_broad(top) -> bool:
-    """Whether a (realpath) sweep directory is too broad to scope a kill: "/", fewer than three
-    path components ("/tmp", "/Users", "/private/tmp"), or the user's home or an ancestor of it.
-    A run's cwd of "/" once made the sweep SIGKILL every desktop process sitting in "/"."""
-    path = os.path.normpath(os.fsdecode(os.fspath(top)))
-    if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
-        return True
-    home = os.path.realpath(os.path.expanduser("~"))
-    try:
-        return os.path.commonpath([path, home]) == path
-    except ValueError:
-        return False
+    """Whether a sweep directory is too broad to scope a kill: "/", fewer than three path
+    components ("/tmp", "/Users", "/private/tmp"), a shared root (``_SHARED_ROOTS``), or the
+    user's home or temp directory or an ancestor of either; checked as spelled and as resolved
+    now (only ever more refusals). A run's cwd of "/" once made the sweep SIGKILL every desktop
+    process sitting in "/" (#1849)."""
+    spelled = os.path.normpath(os.fsdecode(os.fspath(top)))
+    for path in dict.fromkeys((spelled, os.path.realpath(spelled))):
+        if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
+            return True
+        if path in _SHARED_ROOTS:
+            return True
+        for mine in (os.path.expanduser("~"), tempfile.gettempdir()):
+            for real in dict.fromkeys((mine, os.path.realpath(mine))):
+                if os.path.commonpath([path, real]) == path:
+                    return True
+    return False
 
 
 def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[int], int]:
@@ -264,8 +273,11 @@ def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[
     vanished = 0
     if not dirs or not _MACOS:
         return killed, denied, vanished
-    if isinstance(dirs, (str, bytes)) or any(too_broad(d) for d in dirs):
-        raise ValueError("sweep directories must be a collection of narrow run directories")
+    if isinstance(dirs, (str, bytes)):
+        raise ValueError("sweep directories must be a collection, not one path")
+    dirs = tuple(dirs)  # a one-shot iterable is read once
+    if any(too_broad(d) for d in dirs):
+        raise ValueError("sweep directories must be narrow run directories")
     tops = [os.fspath(d) for d in dirs]  # realpaths taken earlier: not followed again (#578)
     for pid, _pgid, uid, environment in rows:
         if uid != mine or environment is None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from typing import Any
 
 import pytest
@@ -33,9 +34,14 @@ def _fake_reads(monkeypatch, cwd: str) -> None:
 HOME = os.path.realpath(os.path.expanduser("~"))
 
 
-@pytest.mark.parametrize(
-    "dirs", [("/",), (HOME,), ("/Users",), ("/private/tmp",), ("/tmp",), "/x/y/z", b"/x/y/z"]
-)
+TEMP = os.path.realpath(tempfile.gettempdir())
+BROAD = [
+    ("/",), (HOME,), ("/Users",), ("/private/tmp",), ("/tmp",), ("/private/var/folders",),
+    ("/private/var/tmp",), (TEMP,), (os.path.dirname(TEMP),), "/x/y/z", b"/x/y/z",
+]  # fmt: skip
+
+
+@pytest.mark.parametrize("dirs", BROAD)
 def test_a_broad_or_bare_string_scope_raises_and_kills_nothing(monkeypatch, kills, dirs):
     _fake_reads(monkeypatch, "/")
     rows = [(4242, 4242, os.getuid(), {})]
@@ -83,3 +89,17 @@ def test_too_broad_draws_the_line_at_three_components_and_home():
     assert proc_cwd.too_broad(HOME)
     assert not proc_cwd.too_broad("/private/tmp/x")
     assert not proc_cwd.too_broad(os.path.join(HOME, "workspace", "x"))
+
+
+def test_a_deep_symlink_to_a_broad_directory_is_broad(tmp_path):
+    link = tmp_path / "a" / "b"
+    link.parent.mkdir()
+    link.symlink_to("/")
+    assert proc_cwd.too_broad(link)
+
+
+def test_a_generator_scope_is_read_once_and_still_kills_inside(monkeypatch, kills, tmp_path):
+    deep = os.path.realpath(tmp_path)
+    _fake_reads(monkeypatch, deep)
+    killed, _, _ = proc_cwd.kill_withheld_in([(7, 7, os.getuid(), {})], iter([deep]), os.getuid())
+    assert killed == [7]
