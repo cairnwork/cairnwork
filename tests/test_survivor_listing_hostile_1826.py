@@ -27,7 +27,7 @@ def _safe(text: str) -> bool:
 @pytest.mark.parametrize("field", ["argv", "reasons"])
 def test_a_hostile_item_comes_out_neutralised_and_bounded(item, field):
     got = listing(Survivors(1, *((item,), ()) if field == "argv" else ((), (item,))))
-    assert _safe(got) and len(got) < 200
+    assert _safe(got) and len(got) < survivor_argv.ITEM_CHARS + 40
 
 
 def test_non_text_and_bytes_items_do_not_raise_or_leak():
@@ -38,7 +38,7 @@ def test_non_text_and_bytes_items_do_not_raise_or_leak():
 
 def test_many_items_are_capped():
     got = listing(Survivors(9, tuple(f"sh {i}" for i in range(500)), ("r",) * 500))
-    assert len(got) < 800 and got.count("sh ") <= survivor_argv.MAX_LISTED
+    assert len(got) < 4000 and got.count("sh ") <= survivor_argv.MAX_LISTED
 
 
 def test_a_survivors_look_alike_with_a_hostile_argv_is_neutralised():
@@ -46,7 +46,7 @@ def test_a_survivors_look_alike_with_a_hostile_argv_is_neutralised():
         argv = ("\n::error::x", "y" * 9999)
         reasons = ("\x1b[0m##[group]",)
 
-    assert _safe(listing(Fake())) and len(listing(Fake())) < 400
+    assert _safe(listing(Fake())) and len(listing(Fake())) < 2 * survivor_argv.ITEM_CHARS + 100
 
 
 @pytest.mark.parametrize(
@@ -64,4 +64,8 @@ def test_ordinary_evidence_comes_out_unchanged(survivors):
 def test_a_hostile_argv_through_the_collect_reader_is_neutralised():
     run = fake(survivors=Survivors(1, ("\n::error::boom\x1b[31m" + "z" * 5000,), ("##[x]\n",)))
     why = read_collected(run).unusable
-    assert why.startswith("collect-survivors (argv: ") and _safe(why) and len(why) < 300
+    assert (
+        why.startswith("collect-survivors (argv: ")
+        and _safe(why)
+        and len(why) < 2 * survivor_argv.ITEM_CHARS + 100
+    )

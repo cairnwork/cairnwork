@@ -17,6 +17,7 @@ import sys
 from cairnwork.textclean import replace_hidden
 
 ARGV_ITEMS, ARGV_CHARS, MAX_LISTED = 3, 80, 5
+ITEM_CHARS = 200  # listing() cuts any one item here; prefix() output is shorter, so it is unchanged
 RAW_CHARS = 4096  # read this much of an argv, no more: the masking cost grows with its input
 # the record delimiters of reasons.explain(), as reasons._names (no import: reasons imports this)
 _DELIMITERS = re.compile(r"[\[\];:]")
@@ -115,8 +116,8 @@ def _items(value: object) -> list[str]:
         if not isinstance(item, str):
             out.append(ARGV_HIDDEN)
             continue
-        text = _DELIMITERS.sub("?", replace_hidden(item[: ARGV_CHARS + 1]))
-        out.append(text[:ARGV_CHARS] + ("..." if len(text) > ARGV_CHARS else ""))
+        text = _DELIMITERS.sub("?", replace_hidden(item[: ITEM_CHARS + 1]))
+        out.append(text[:ITEM_CHARS] + ("..." if len(text) > ITEM_CHARS else ""))
     return out
 
 
