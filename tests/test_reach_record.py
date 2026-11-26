@@ -127,14 +127,15 @@ def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, 
     assert runs.targets == [
         ("tests/sib/test_s.py", "tests/test_a.py"),
         ("tests/test_a.py", "tests/sib/conftest.py"),  # the dropped file's directory picked again
+        ("tests/sib/test_s.py",),  # the dropped file on its own: extra runs only add checks
     ]
 
 
-def test_a_dropped_file_with_no_path_signal_is_accepted_as_the_old_head_did(task, monkeypatch):
-    """Layer1 ruling 2: a broken base test that touches no sys.path or plugin is not a refusal."""
+def test_a_dropped_file_whose_own_run_shows_no_reach_is_accepted(task, monkeypatch):
+    """A broken base test that touches no sys.path or plugin is not a refusal (as on main)."""
     runs = Runs(monkeypatch, [None, _record(task)])
     check(task, ("tests/sib/test_s.py",))
-    assert len(runs.targets) == 2
+    assert len(runs.targets) == 3
 
 
 @pytest.mark.parametrize("unreadable", [False, True])
