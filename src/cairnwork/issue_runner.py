@@ -30,7 +30,7 @@ import unicodedata
 from pathlib import Path
 from typing import Any
 
-from cairnwork import issue_hook, issue_task
+from cairnwork import issue_hook, issue_task, present
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.deferred_tests import TestCommitRejected
 from cairnwork.gitcmd import NETWORK_TIMEOUT_SECONDS, GitCommandError, run_git
@@ -309,7 +309,7 @@ def _recall(intake: Intake, repo: str, number: int) -> dict[str, Any] | None:
     """The record take wrote (None if none); a bad one is ISSUE_RECORD_UNREADABLE."""
     path = _record_path(intake, repo, number)
     try:
-        known = json.loads(path.read_text()) if path.exists() else None
+        known = json.loads(path.read_text()) if present.exists(path) else None
         if known is None or isinstance(known["task_id"], str):
             return known
     except (ValueError, TypeError, KeyError, RecursionError):  # cut short, not JSON, wrong shape

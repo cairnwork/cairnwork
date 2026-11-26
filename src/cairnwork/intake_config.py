@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from cairnwork import present
 from cairnwork.p2p_selection import DEFAULT_BUDGET_SECONDS, DEFAULT_MODE
 
 # verifier_python: the target repository's own interpreter (scripts/setup_target_venv.sh),
@@ -78,7 +79,7 @@ def has_token(token_file: Any) -> bool:
     """A regular file holding a token; it is read again at each Core call (rotation)."""
     try:
         path = Path(token_file)
-        return path.is_file() and bool(path.read_text(encoding="utf-8").strip())
+        return present.is_file(path) and bool(path.read_text(encoding="utf-8").strip())
     except (OSError, TypeError, ValueError):
         return False
 
@@ -87,6 +88,6 @@ def stored_config(path: Path) -> Any:
     """The state config as stored ({} when absent); None when it cannot be read: cut short, not
     JSON, not UTF-8 or nested too deep (#909)."""
     try:
-        return json.loads(path.read_text()) if path.exists() else {}
+        return json.loads(path.read_text()) if present.exists(path) else {}
     except (ValueError, RecursionError):
         return None

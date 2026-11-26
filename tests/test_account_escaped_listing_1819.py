@@ -196,3 +196,22 @@ def test_reap_records_the_main_value_as_a_fixed_reason(monkeypatch):
     assert got.reasons == ("account-escaped", "main=1")
     assert _acct(monkeypatch, 2, 0).reap().reasons == ("account-escaped", "main=0")
     assert _acct(monkeypatch, 1, 0, snap=((), ())).reap().reasons == ()
+
+
+def _argv_of(monkeypatch, platform):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(vs.subprocess, "run", run)
+    monkeypatch.setattr(vs.sys, "platform", platform)
+    vs.snapshot("x", 4.0)
+    return seen[0]
+
+
+def test_ps_argv_has_x_on_darwin_only(monkeypatch):
+    """The platform branch of verifier_seen (macOS needs -x to list other sessions' processes)."""
+    assert "-x" in _argv_of(monkeypatch, "darwin")
+    assert "-x" not in _argv_of(monkeypatch, "linux")
