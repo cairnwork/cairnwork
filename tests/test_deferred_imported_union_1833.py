@@ -312,7 +312,7 @@ PAIRS = {
         "def test_z():\n    assert True\n",
         "from helpers import Base\n\n\nclass Checks(Base):\n    def test_i(self):\n"
         "        assert flag()\n\n\ndef test_z():\n    assert True\n",
-        {"Checks::test_i"},
+        {"Checks::test_i", "test_z"},  # test_z: main lists it too (the file's module part changed)
     ),
 }
 

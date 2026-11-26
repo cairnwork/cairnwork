@@ -110,11 +110,21 @@ _Class = tuple[dict[str, str], bool, bool, str]
 
 def target_ids(old: ast.Module, new: ast.Module) -> tuple[set[str], frozenset[str]]:
     """(the node ids the test commit adds or changes in one file, the ``Test*`` classes of the new
-    file pytest does not collect), from the base file's tree and the test commit's. #1833: today
-    the base side reads as main does and the new side with the imported-base addition."""
-    before = test_functions(old, imported=False)[0]
+    file pytest does not collect), from the base file's tree and the test commit's. Main's set
+    is kept whole: both files read as main reads them. #1833 adds to it only an id the wider
+    reading (a class with an imported base also counts as a test case) gives on the new side and
+    main does not, and only when its digest differs from the wider reading of the old side: so an
+    unchanged imported-base class (a comment, another test edited) is never listed as new."""
+    main_before = test_functions(old, imported=False)[0]
+    main_after = test_functions(new, imported=False)[0]
+    wide_before = test_functions(old)[0]
     after, uncollected = test_functions(new)
-    return {i for i, body in after.items() if before.get(i) != body}, uncollected
+    found = set()
+    for node_id, body in after.items():
+        before = main_before if node_id in main_after else wide_before
+        if before.get(node_id) != body:
+            found.add(node_id)
+    return found, uncollected
 
 
 def _root_name(base: ast.expr) -> str:
