@@ -229,6 +229,20 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
     return False
 
 
+def too_broad(top) -> bool:
+    """Whether a (realpath) sweep directory is too broad to scope a kill: "/", fewer than three
+    path components ("/tmp", "/Users", "/private/tmp"), or the user's home or an ancestor of it.
+    A run's cwd of "/" once made the sweep SIGKILL every desktop process sitting in "/"."""
+    path = os.path.normpath(os.fsdecode(os.fspath(top)))
+    if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
+        return True
+    home = os.path.realpath(os.path.expanduser("~"))
+    try:
+        return os.path.commonpath([path, home]) == path
+    except ValueError:
+        return False
+
+
 def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
@@ -250,6 +264,8 @@ def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[
     vanished = 0
     if not dirs or not _MACOS:
         return killed, denied, vanished
+    if isinstance(dirs, (str, bytes)) or any(too_broad(d) for d in dirs):
+        raise ValueError("sweep directories must be a collection of narrow run directories")
     tops = [os.fspath(d) for d in dirs]  # realpaths taken earlier: not followed again (#578)
     for pid, _pgid, uid, environment in rows:
         if uid != mine or environment is None:

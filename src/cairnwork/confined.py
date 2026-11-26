@@ -42,9 +42,11 @@ def execute(
     token = env.get(RUN_TOKEN_VAR)
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
+    dirs = (os.path.realpath(cwd),) if cwd is not None else ()  # now: the run may swap it (#578)
+    if any(proc_cwd.too_broad(d) for d in dirs):  # the sweep would kill unrelated processes
+        raise ValueError(f"cwd is too broad to confine a run: {cwd!r}")
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-    dirs = (os.path.realpath(cwd),) if cwd is not None else ()  # now: the run may swap it (#578)
     with os.fdopen(fd, "wb") as log:
         process = subprocess.Popen(  # noqa: S603 - argv built from an allow-listed spec, no shell
             argv,
