@@ -273,21 +273,21 @@ def test_only_the_callers_main_left_is_not_listed_as_escaped(monkeypatch):
     assert got == 0 and got.argv == () and "account-escaped" not in got.reasons
 
 
-MAIN = "30 99 S 00:01 mainrun\n"  # the caller's own run: its parent is outside the account
-LEFT = "20 1 S 00:02 leftone\n21 1 S 00:02 lefttwo\n"  # launchd children, not exempt
+MAIN = "30 99 S 00:01 bash\n"  # the caller's own run: its parent is outside the account
+LEFT = "20 1 S 00:02 python\n21 1 S 00:02 sleep\n"  # launchd noderen, not exempt
 
 
 @pytest.mark.parametrize(
     ("before", "main", "rows", "names"),
     [
-        (2, 1, MAIN + "20 1 S 00:02 leftone\n", ["leftone"]),
-        (3, 1, MAIN + LEFT, ["leftone", "lefttwo"]),
-        (2, 0, LEFT, ["leftone", "lefttwo"]),
-        (2, 1, "20 21 S 00:02 child\n21 1 S 00:02 daemon\n", ["child"]),
+        (2, 1, MAIN + "20 1 S 00:02 python\n", ["python"]),
+        (3, 1, MAIN + LEFT, ["python", "sleep"]),
+        (2, 0, LEFT, ["python", "sleep"]),
+        (2, 1, "20 21 S 00:02 node\n21 1 S 00:02 cat\n", ["node"]),
     ],
 )
 def test_listing_never_has_more_entries_than_the_count(monkeypatch, before, main, rows, names):
     got = _acct_rows(monkeypatch, before, main, rows, exempt="none")
     assert got == before - main and len(got.argv) == len(names)
     assert all(n in line for n, line in zip(names, got.argv, strict=True))
-    assert all("mainrun" not in line for line in got.argv)
+    assert all(not line.startswith("bash") for line in got.argv)
