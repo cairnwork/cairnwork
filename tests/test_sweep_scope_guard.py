@@ -109,3 +109,23 @@ def test_a_generator_scope_is_read_once_and_still_kills_inside(monkeypatch, kill
 def test_a_tmpdir_pointing_at_a_shared_root_does_not_open_it(monkeypatch):
     monkeypatch.setattr(tempfile, "tempdir", "/private/var/tmp")
     assert proc_cwd.too_broad("/private/var/tmp/cw")
+
+
+@pytest.mark.parametrize("target", ["/", HOME, TEMP])
+def test_a_run_dir_swapped_for_a_symlink_after_the_scope_was_taken_does_not_abort(
+    monkeypatch, kills, tmp_path, target
+):
+    top = os.path.realpath(tmp_path / "attempt" / "checkout")
+    os.makedirs(top)
+    os.rename(top, top + ".gone")
+    os.symlink(target, top)
+    _fake_reads(monkeypatch, "/")
+    assert proc_cwd.kill_withheld_in([(7, 7, os.getuid(), {})], (top,), os.getuid()) == ([], [], 0)
+    assert kills == []
+
+
+def test_execute_refuses_a_cwd_that_is_a_symlink_to_root(monkeypatch, tmp_path):
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    (tmp_path / "l").symlink_to("/")
+    with pytest.raises(ValueError):
+        confined.execute(["true"], tmp_path / "l", {confined.RUN_TOKEN_VAR: "t"}, 5, tmp_path / "x")

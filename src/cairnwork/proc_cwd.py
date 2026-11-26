@@ -233,14 +233,14 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
 _SHARED_ROOTS = ("/private/var/tmp", "/var/tmp", "/private/var/folders", "/var/folders")
 
 
-def too_broad(top) -> bool:
+def too_broad(top, resolve: bool = True) -> bool:
     """Whether a sweep directory is too broad to scope a kill: "/", fewer than three path
     components ("/tmp", "/Users", "/private/tmp"), inside a shared root (``_SHARED_ROOTS``) but
     not strictly inside the user's temp dir, or the user's home or temp dir or an ancestor of
-    either; checked as spelled and as resolved now (only ever more refusals). A run's cwd of "/"
+    either; checked as spelled and, with ``resolve``, as resolved now. A run's cwd of "/"
     once made the sweep SIGKILL every desktop process sitting in "/" (#1849)."""
     spelled = os.path.normpath(os.fsdecode(os.fspath(top)))
-    for path in dict.fromkeys((spelled, os.path.realpath(spelled))):
+    for path in dict.fromkeys((spelled, os.path.realpath(spelled) if resolve else spelled)):
         if not os.path.isabs(path) or len([p for p in path.split(os.sep) if p]) < 3:
             return True
         temps = [
@@ -296,7 +296,7 @@ def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[
     if isinstance(dirs, (str, bytes)):
         raise ValueError("sweep directories must be a collection, not one path")
     dirs = tuple(dirs)  # a one-shot iterable is read once
-    if any(too_broad(d) for d in dirs):
+    if any(too_broad(d, resolve=False) for d in dirs):  # as given: never followed (#578)
         raise ValueError("sweep directories must be narrow run directories")
     tops = [os.fspath(d) for d in dirs]  # realpaths taken earlier: not followed again (#578)
     for pid, _pgid, uid, environment in rows:
