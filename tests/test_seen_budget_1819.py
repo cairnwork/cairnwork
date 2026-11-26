@@ -31,7 +31,7 @@ def test_a_slow_path_lookup_ends_at_the_budget_and_says_unknown(monkeypatch):
     assert vs.UNKNOWN in got.reasons and vs.INCOMPLETE in got.reasons
 
 
-def test_slow_signature_checks_add_up_to_no_more_than_the_budget(monkeypatch):
+def test_slow_signature_checks_stop_at_the_budget_between_checks(monkeypatch):
     monkeypatch.setattr(vs, "BUDGET", 0.4)
     monkeypatch.setattr(vs.sys, "platform", "darwin")
     rows = "".join(f"{10 + i} 1 S 00:09 d{i}\n" for i in range(40))
