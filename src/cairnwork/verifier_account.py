@@ -40,6 +40,7 @@ from pathlib import Path
 from cairnwork import confined, lock_queue, survivor_argv, verifier_escape, verifier_seen
 from cairnwork.account_proc import run_bounded
 from cairnwork.grant_read import grant_read as _grant_read
+from cairnwork.verifier_grace import settle
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -260,6 +261,7 @@ class VerifierAccount:
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)
+            before, main, deadline = settle(self, before, main, deadline)
             seen, deadline = verifier_seen.before_kill(self.user, before, deadline)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):

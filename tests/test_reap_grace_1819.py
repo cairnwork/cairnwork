@@ -7,6 +7,7 @@ Seams: ``_escaped_count`` (counts in order), ``_kill_until_clean``, a fake clock
 from pathlib import Path
 
 import cairnwork.verifier_account as va
+import cairnwork.verifier_grace as vg
 import cairnwork.verifier_seen as vs
 
 LISTING = (("python R 00.01 ppid=9/-",), ("account-escaped",))
@@ -38,7 +39,7 @@ def _world(monkeypatch, counts, kill_left=0):
 
 
 def test_the_grace_is_a_named_cap_of_two_seconds_in_quarter_second_steps():
-    assert va.GRACE_SECONDS == 2.0 and va.GRACE_INTERVAL == 0.25
+    assert vg.GRACE_SECONDS == 2.0 and vg.GRACE_INTERVAL == 0.25
 
 
 def test_a_child_gone_inside_the_grace_counts_zero(monkeypatch):
@@ -50,7 +51,7 @@ def test_a_process_alive_past_the_grace_is_refused_with_its_listing(monkeypatch)
     acct, _, clock = _world(monkeypatch, [2])
     got = acct.reap(1)
     assert got == 1 and got.argv == LISTING[0] and "account-escaped" in got.reasons
-    assert clock["now"] <= va.GRACE_SECONDS + 1e-9  # the cap is spent, not exceeded
+    assert clock["now"] <= vg.GRACE_SECONDS + 1e-9  # the cap is spent, not exceeded
 
 
 def test_a_relay_of_changing_processes_is_refused(monkeypatch):
@@ -94,9 +95,26 @@ def test_a_kill_that_leaves_something_still_refuses_after_a_clean_grace(monkeypa
 
 
 def test_main_gone_with_one_resident_left_is_refused_with_its_listing(monkeypatch):
-    """pre-existing hole: ``main`` is a plain number. If the main run already exited and one
+    """pre-existing hole: ``main`` was a plain number. If the main run already exited and one
     resident process remains, count - main must not read as zero."""
     acct, _, _ = _world(monkeypatch, [1])
-    monkeypatch.setattr(va.VerifierAccount, "_pid_alive", lambda self, pid: False, raising=False)
-    got = acct.reap(1, main_pid=4242)
+    got = acct.reap(vg.Main(1, lambda: False))
     assert got == 1 and got.argv == LISTING[0]
+
+
+def test_main_still_alive_is_taken_off_as_before(monkeypatch):
+    acct, _, _ = _world(monkeypatch, [1])
+    assert acct.reap(vg.Main(1, lambda: True)) == 0
+
+
+def test_a_main_that_dies_during_the_grace_stops_being_taken_off(monkeypatch):
+    state = {"alive": True}
+    acct, _, _ = _world(monkeypatch, [2, 1])  # the child went, main is the one left...
+    ticking = va.time.sleep
+
+    def sleep(seconds):
+        state["alive"] = False
+        ticking(seconds)
+
+    monkeypatch.setattr(va.time, "sleep", sleep)
+    assert acct.reap(vg.Main(1, lambda: state["alive"])) == 1  # ...but main is gone: a resident

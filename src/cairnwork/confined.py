@@ -23,6 +23,7 @@ from cairnwork.pipe_copy import MAX_LOG_BYTES as MAX_LOG_BYTES  # re-exported (v
 from cairnwork.pipe_copy import MAX_REPORT_BYTES as MAX_REPORT_BYTES  # re-exported (report_guard)
 from cairnwork.pipe_copy import _limit_file_size, copy_capped
 from cairnwork.proc_linux import _linux_environment, _linux_processes  # moved (#814): size cap
+from cairnwork.verifier_grace import Main
 
 RUN_TOKEN_VAR = "CAIRNWORK_VERIFIER_RUN"
 ATTEMPT_ENV = "CAIRNWORK_ATTEMPT"  # marks every process of an attempt, for recovery
@@ -66,7 +67,13 @@ def execute(
             running = stop is not None and not timed_out and _running(process.pid)
             # Another account's processes: the owner cannot signal them; reap() kills them
             # all and says how many were running (the main one, if it timed out, included).
-            escaped = (reap(1) if running else reap()) if reap is not None else 0
+            escaped = (
+                0
+                if reap is None
+                else reap(Main(1, lambda: _running(process.pid)))
+                if running
+                else reap()
+            )
             finished = True
         finally:
             _kill_group(process.pid)

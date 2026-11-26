@@ -13,6 +13,7 @@ import pytest
 
 import cairnwork.confined as confined
 import cairnwork.verifier_account as va
+import cairnwork.verifier_grace as vg
 from cairnwork.core_request import VerifierObservation
 from cairnwork.reasons import explain, verdict_reason, why_not_passed
 
@@ -94,6 +95,7 @@ def test_an_escaped_process_that_exits_during_the_retry_window_still_counts(monk
     # answers: the count, the #1819 name snapshot (before the kill), then the post-kill list
     fake, _ = _fake_account("777 500\n", ["777 500 S 00:01 sleep\n", ""])
     monkeypatch.setattr(va.subprocess, "run", fake)
+    monkeypatch.setattr(vg, "GRACE_SECONDS", 0.0)  # the grace re-count has its own tests (#1819)
     assert va.VerifierAccount(user="nobody").reap() == 1
 
 
