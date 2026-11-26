@@ -127,6 +127,7 @@ def test_a_changed_file_that_cannot_be_collected_does_not_void_the_record(task, 
     assert runs.targets == [
         ("tests/sib/test_s.py", "tests/test_a.py"),
         ("tests/test_a.py", "tests/sib/conftest.py"),  # the dropped file's directory picked again
+        ("tests/sib/test_s.py",),  # the dropped file alone: gave nothing, so its text decides
     ]
 
 
@@ -134,7 +135,7 @@ def test_a_dropped_file_with_no_path_signal_is_accepted_as_the_old_head_did(task
     """Layer1 ruling 2: a broken base test that touches no sys.path or plugin is not a refusal."""
     runs = Runs(monkeypatch, [None, _record(task)])
     check(task, ("tests/sib/test_s.py",))
-    assert len(runs.targets) == 2
+    assert len(runs.targets) == 3  # the rerun, then the dropped file alone (no record: by text)
 
 
 @pytest.mark.parametrize("unreadable", [False, True])
@@ -350,10 +351,16 @@ def test_the_rerun_drops_every_changed_py_file_whatever_their_number(task, monke
     monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
     monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
     monkeypatch.setattr(bfn, "_quiet", lambda *a: True)
-    runs = Runs(monkeypatch, [None, _record(task)])
+    # main's rerun drops the first MAX_TARGETS; a third run drops every changed file
+    stages = 2 if count <= bfn.MAX_TARGETS else 3
+    runs = Runs(monkeypatch, [None] * (stages - 1) + [_record(task)])
     check(task, changed)
-    assert not set(changed) & set(runs.targets[-1])
-    assert "tests/test_a.py" in runs.targets[-1]
+    last = runs.targets[stages - 1]
+    assert not set(changed) & set(last)
+    assert "tests/test_a.py" in last
+    # the files a rerun dropped are collected afterwards by runs of their own
+    later = {p for t in runs.targets[stages:] for p in t}
+    assert later == set(changed[: bfn.MAX_TARGETS] if stages == 2 else changed)
 
 
 # #1809: a file the commit deletes is a changed base file for the reach check
@@ -392,7 +399,7 @@ def test_more_changed_py_files_than_the_run_can_name_are_not_taken_as_covered(ta
     monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 0)  # the tree run names one file, not the edits
     quiet = []
     monkeypatch.setattr(bfn, "_quiet", lambda *a: quiet.append(a) or False)
-    Runs(monkeypatch, [_record(task), _record(task)])
+    Runs(monkeypatch, [_record(task), None])  # the run of the unnamed edit gives no record
     with pytest.raises(TestCommitRejected) as caught:
         check(task, changed)
     assert caught.value.code == CODE

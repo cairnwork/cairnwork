@@ -55,10 +55,11 @@ def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, deleted=()) 
     added = tuple(p for p in paths if p not in on_base)
     if not added and all(PurePosixPath(p).name == "conftest.py" for p in on_base):
         return  # only conftest edits: no run, as before (#1769)
-    record, complete = reach_record(ctx, task, on_base, run_id)
-    if record is None:
+    records, complete = reach_record(ctx, task, on_base, run_id)
+    if not records:
         return  # no run, no evidence: the static verdict stands
-    check_runtime_reach(record, on_base, added, _base_paths(task))
+    for record in records:
+        check_runtime_reach(record, on_base, added, _base_paths(task))
     if not complete:  # fail closed: a record that left out a changed file or part of the tree
         raise TestCommitRejected(CODE, "the base run did not cover every changed or base test file")
 
@@ -73,7 +74,7 @@ def _base_paths(task) -> tuple[str, ...] | None:
 
 
 def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
-    """(record, complete): the record of one collect-only base run, or (None, False).
+    """(records, complete): the records of the collect-only base runs, or ((), False).
 
     The run names the changed base .py files, every base conftest directory (a test file below it,
     else its conftest.py: collecting either loads it), and the whole test tree up to
@@ -84,7 +85,7 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
     picked again from the tree minus that file) and its base text shows a sys.path or plugin
     signal or cannot be read."""
     if ctx.account is not None:
-        return None, False
+        return (), False
     roots = tuple(task.test_roots)
     tree = base_tree_targets(task.repo, task.base_commit, roots)
     dirs = conftest_dirs(task.repo, task.base_commit, roots)
@@ -93,25 +94,62 @@ def reach_record(ctx, task, changed: tuple[str, ...], run_id: str):
             CODE, "the base's test tree or conftest directories were not usable"
         )
     try:
-        edited = tuple(
+        every = tuple(
             p for p in changed if p.endswith(".py") and PurePosixPath(p).name != "conftest.py"
         )
-        for dropped, tag in ((frozenset(), "r"), (frozenset(edited), "r2")):
-            if tag == "r2" and not edited:
-                break
+        edited = every[:MAX_TARGETS]
+        # the run as on main, then main's rerun (the named edits dropped), then every edit dropped
+        stages, last = [], None
+        for dropped, tag in (
+            (frozenset(), "r"),
+            (frozenset(edited), "r2"),
+            (frozenset(every), "r3"),
+        ):
+            if dropped != last and (dropped or tag == "r"):
+                stages.append((dropped, tag))
+            last = dropped
+        for dropped, tag in stages:
             left = tuple(p for p in tree if p not in dropped)
             picked = pick_dir_targets(left, dirs) or ()
             base = left if len(tree) <= MAX_TREE_TARGETS else left[:1]
-            named = (*(p for p in edited[:MAX_TARGETS] if p not in dropped), *base, *picked)
+            named = (*(p for p in edited if p not in dropped), *base, *picked)
             targets = tuple(dict.fromkeys(named)) or roots  # roots: the root conftest and ini load
             # a dropped file is --ignore'd on the rerun, so a lone one cannot break it again
             record = _record_run(ctx, task, targets, f"{run_id}-{tag}", tuple(sorted(dropped)))
-            if record is not None:
-                unseen = tuple(p for p in edited if p not in dropped and p not in targets)
-                return record, _quiet(task, (*dropped, *unseen)) if dropped or unseen else True
+            if record is None:
+                continue
+            # an edited file the run did not name, or dropped, is collected by runs of its own
+            # (halved while a group fails); the text signal judges only a file alone that
+            # cannot be collected
+            todo = tuple(p for p in every if p in dropped or p not in targets)
+            more, unread = _collect_all(ctx, task, todo, f"{run_id}-{tag}u")
+            return (record, *more), not unread or _quiet(task, unread)
     except Exception:  # noqa: BLE001 - any fault means no record: the static verdict stands
-        return None, False
-    return None, False
+        return (), False
+    return (), False
+
+
+MAX_EXTRA_RUNS = 12  # runs for the files the main run did not read; the rest go by text
+
+
+def _collect_all(ctx, task, files: tuple[str, ...], run_id: str):
+    """(records, unread): one run per group of ``files``; a failed group is halved, a failed single
+    file is unread, and so is whatever is left when MAX_EXTRA_RUNS runs are used."""
+    records, unread, queue, used = [], [], [files] if files else [], 0
+    while queue:
+        group = queue.pop(0)
+        if used >= MAX_EXTRA_RUNS:
+            unread.extend(group)
+            continue
+        used += 1
+        record = _record_run(ctx, task, group, f"{run_id}{used}")
+        if record is not None:
+            records.append(record)
+        elif len(group) == 1:
+            unread.extend(group)
+        else:
+            queue.extend((group[: len(group) // 2], group[len(group) // 2 :]))
+    return tuple(records), tuple(unread)
 
 
 SIGNAL = re.compile(rb"sys|path|plugin|importlib|import_module|__import__|exec|eval|site")
