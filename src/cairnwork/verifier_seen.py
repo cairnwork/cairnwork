@@ -34,12 +34,12 @@ def _exempt(rows: list, real_paths: Callable) -> set[str]:
     return {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
 
 
-def _without_main(rows: list, drop: int) -> list:
+def _without_main(rows: list, drop: int, pids: set[str]) -> list:
     """Leave out ``drop`` rows that look like the caller's main run: first those whose parent is
-    not a listed row and not launchd (the harness's own collector), then rows from the end."""
+    not any pid ps showed (``pids``, before exempt rows were removed) and not launchd (the
+    harness's own collector), then rows from the end."""
     if drop <= 0 or len(rows) <= drop:
         return rows
-    pids = {row[0] for row in rows}
     out = [i for i, row in enumerate(rows) if row[1] not in pids and row[1] != "1"][:drop]
     out += [i for i in reversed(range(len(rows))) if i not in out][: drop - len(out)]
     return [row for i, row in enumerate(rows) if i not in out]
@@ -70,7 +70,7 @@ def snapshot(
         skip = _exempt(rows, real_paths) if real_paths else set()  # only what the count includes
         rows = [row for row in rows if row[0] not in skip]
         rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
-        rows = _without_main(rows, drop)[: survivor_argv.MAX_LISTED]
+        rows = _without_main(rows, drop, set(names))[: survivor_argv.MAX_LISTED]
         entries = [_entry(row[2], row[3], row[4], row[1], names.get(row[1])) for row in rows]
         return tuple(entries), ((REASON,) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
@@ -97,7 +97,7 @@ def before_kill(
 
 
 def result(count: int, seen: tuple, main: int) -> survivor_argv.Survivors:
-    """``count`` with its listing; listing and fixed ``main=`` reason only if there is one."""
+    """``count`` with its listing (never longer than ``count``) and a fixed ``main=`` reason."""
     if not count or not seen[0]:
         return survivor_argv.Survivors(count)
-    return survivor_argv.Survivors(count, seen[0], (*seen[1], f"main={main}"))
+    return survivor_argv.Survivors(count, seen[0][:count], (*seen[1], f"main={main}"))
