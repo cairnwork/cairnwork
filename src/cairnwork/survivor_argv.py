@@ -14,7 +14,10 @@ import re
 import subprocess
 import sys
 
+from cairnwork.textclean import replace_hidden
+
 ARGV_ITEMS, ARGV_CHARS, MAX_LISTED = 3, 80, 5
+ITEM_CHARS = 200  # listing() cuts any one item here; prefix() output is shorter, so it is unchanged
 RAW_CHARS = 4096  # read this much of an argv, no more: the masking cost grows with its input
 # the record delimiters of reasons.explain(), as reasons._names (no import: reasons imports this)
 _DELIMITERS = re.compile(r"[\[\];:]")
@@ -102,10 +105,30 @@ def note(seen: dict[int, str], pid: int) -> None:
         seen[pid] = prefix(read_argv(pid))
 
 
+def _items(value: object) -> list[str]:
+    """At most MAX_LISTED items of ``value``, each text, cut, with control and hidden characters and
+    the record delimiters replaced (so no line starts with ``::`` or ``##[``); never raises."""
+    try:
+        raw = [value] if isinstance(value, str | bytes) else list(value)[:MAX_LISTED]  # type: ignore[call-overload]
+    except TypeError:
+        return []
+    out = []
+    for item in raw:
+        if isinstance(item, bytes):
+            item = item[:RAW_CHARS].decode("utf-8", "replace")
+        if not isinstance(item, str):
+            out.append(ARGV_HIDDEN)
+            continue
+        text = _DELIMITERS.sub("?", replace_hidden(item[: ITEM_CHARS + 1]))
+        out.append(text[:ITEM_CHARS] + ("..." if len(text) > ITEM_CHARS else ""))
+    return out
+
+
 def listing(survivors: object) -> str:
-    """Format the bounded argv and fixed reason evidence for surviving work."""
-    argv = getattr(survivors, "argv", ())
-    reasons = getattr(survivors, "reasons", ())
+    """Format the bounded argv and fixed reason evidence for surviving work. The input is not
+    trusted (#1826): every item is cleaned here, whoever the caller is."""
+    argv = _items(getattr(survivors, "argv", ()))
+    reasons = _items(getattr(survivors, "reasons", ()))
     details = []
     if argv:
         details.append(f"argv: {', '.join(argv)}")
