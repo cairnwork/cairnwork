@@ -3,6 +3,7 @@ state, age, fixed reason ``account-escaped``). Text only: counts and verdicts st
 """
 
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -24,8 +25,11 @@ def _fake_run(stdout, rc=0, stderr=""):
 
 
 def _snap(monkeypatch, stdout, **kw):
+    """(argv, reasons) the listing makes of one raw ps text (count = lines, nothing exempt)."""
     monkeypatch.setattr(vs.subprocess, "run", _fake_run(stdout, **kw))
-    return vs.snapshot("x", 5.0)
+    raw, _ = vs.before_kill("x", 1, time.monotonic() + 100.0)
+    got = vs.result(max(len(stdout.splitlines()), 1), raw, None, 0, 1)
+    return got.argv, got.reasons[:-1]  # the last reason is main=<n>
 
 
 def test_rows_become_bounded_argv_prefixes_with_state_and_age(monkeypatch):
@@ -72,21 +76,25 @@ def test_ps_failing_gives_no_listing_and_never_raises(monkeypatch):
         raise subprocess.TimeoutExpired("ps", 1)
 
     monkeypatch.setattr(vs.subprocess, "run", boom)
-    assert vs.snapshot("x", 5.0) == ((), ())
+    assert vs.before_kill("x", 1, 500.0)[0] is None
+    assert _snap(monkeypatch, PS) == ((), ())
 
 
-def _acct(monkeypatch, before, left, snap=(("sleep S 00.01",), ("account-escaped",))):
+def _acct(monkeypatch, before, left, ps="9 1 S 00:01 sleep\n", **kw):
+    monkeypatch.setattr(vs.subprocess, "run", _fake_run(ps, **kw))
+    monkeypatch.setattr(vs.sys, "platform", "linux")
     monkeypatch.setattr(
         va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: before
     )
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, n, d: left)
-    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a: snap)
     return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
 
 
 def test_reap_lists_what_it_counted(monkeypatch):
     got = _acct(monkeypatch, 2, 0).reap()
-    assert got == 2 and got.argv == ("sleep S 00.01",)  # count 2, one entry: marked as incomplete
+    assert got == 2 and got.argv == (
+        "sleep S 00.01 ppid=1/-",
+    )  # count 2, one entry: marked as incomplete
     assert got.reasons == ("account-escaped", "listing=incomplete", "main=0")
 
 
@@ -106,7 +114,7 @@ def test_reap_with_nothing_counted_carries_no_listing(monkeypatch):
 def test_the_snapshot_is_not_taken_when_nothing_is_running(monkeypatch):
     calls = []
     acct = _acct(monkeypatch, 0, 0)
-    monkeypatch.setattr(vs, "snapshot", lambda u, t, *a: calls.append(u) or ((), ()))
+    monkeypatch.setattr(vs.subprocess, "run", lambda *a, **k: calls.append(a))
     acct.reap()
     assert calls == []
 
@@ -145,7 +153,9 @@ def test_snapshot_is_taken_before_the_kill(monkeypatch):
     monkeypatch.setattr(
         va.VerifierAccount, "_kill_until_clean", lambda self, n, d: order.append("kill") or 0
     )
-    monkeypatch.setattr(vs, "snapshot", lambda user, timeout, *a: order.append("snap") or ((), ()))
+    monkeypatch.setattr(
+        vs.subprocess, "run", lambda *a, **k: order.append("snap") or _fake_run("")(*a, **k)
+    )
     acct.reap()
     assert order == ["snap", "kill"]
 
@@ -181,8 +191,9 @@ def test_snapshot_timeout_is_capped(monkeypatch):
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr(vs.subprocess, "run", run)
-    vs.snapshot("x", 120.0)
-    vs.snapshot("x", 4.0)
+    now = time.monotonic()
+    vs.before_kill("x", 1, now + 120.0)
+    vs.before_kill("x", 1, now + 4.0)
     assert seen[0] <= 30 and seen[1] <= 1.0
 
 
@@ -197,7 +208,7 @@ def test_reap_records_the_main_value_as_a_fixed_reason(monkeypatch):
     got = _acct(monkeypatch, 3, 0).reap(1)
     assert got.reasons[0] == "account-escaped" and got.reasons[-1] == "main=1"
     assert _acct(monkeypatch, 2, 0).reap().reasons[-1] == "main=0"
-    assert _acct(monkeypatch, 1, 0, snap=((), ())).reap().reasons == ()
+    assert _acct(monkeypatch, 1, 0, rc=2).reap().reasons == ()
 
 
 def _argv_of(monkeypatch, platform):
@@ -209,7 +220,7 @@ def _argv_of(monkeypatch, platform):
 
     monkeypatch.setattr(vs.subprocess, "run", run)
     monkeypatch.setattr(vs.sys, "platform", platform)
-    vs.snapshot("x", 4.0)
+    vs.before_kill("x", 1, time.monotonic() + 4.0)
     return seen[0]
 
 
@@ -329,7 +340,7 @@ def test_a_listing_that_agrees_with_the_count_is_not_marked(monkeypatch, before,
 
 
 def test_a_failed_ps_stays_a_plain_count_with_no_marker(monkeypatch):
-    got = _acct(monkeypatch, 2, 0, snap=((), ())).reap()
+    got = _acct(monkeypatch, 2, 0, rc=2).reap()
     assert got == 2 and got.argv == () and got.reasons == ()
 
 
