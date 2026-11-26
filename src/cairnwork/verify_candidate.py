@@ -59,6 +59,7 @@ from cairnwork.verify_candidate_checks import (
 from cairnwork.verify_cleanup import (
     clear_account,
     leftovers,
+    list_markers,
     path_absent,
     read_start_mark,
     write_start_mark,
@@ -67,7 +68,6 @@ from cairnwork.verify_context import VerifyContext, verifier_interpreter
 
 from cairnwork.verify_parts import binding_of as _binding, remove_clone  # isort: skip
 from cairnwork.workspace import (
-    ATTEMPT_ID,
     Attempt,
     CandidateRejected,
     WorkspaceError,
@@ -360,12 +360,10 @@ def cleanup(intake: Intake) -> dict[str, Any]:
     markers = intake.state / "verify-runs"
     out: dict[str, Any] = {"cleaned": []}
     try:
-        found = sorted(markers.iterdir()) if markers.is_dir() else []
+        found = list_markers(markers)
     except OSError:
         return out | {"kept": [markers.name]}  # cannot be read: reported, not trusted as empty
     for marker in found:
-        if marker.is_symlink() or not ATTEMPT_ID.fullmatch(marker.name):
-            continue
         try:
             fd = os.open(marker, os.O_RDWR | os.O_NOFOLLOW)
         except FileNotFoundError:

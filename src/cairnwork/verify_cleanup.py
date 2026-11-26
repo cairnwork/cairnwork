@@ -17,8 +17,7 @@ from cairnwork.intake_request import IntakeRefused
 from cairnwork.run_tags import EVIDENCE_MARK
 from cairnwork.run_tags import RUN_TAGS as _RUN_TAGS
 from cairnwork.verifier_account import VerifierAccount, VerifierAccountError
-
-_CANONICAL = re.compile(r"[0-9]+(\.[0-9]+)?", re.ASCII)  # one spelling: what boot_mark writes
+from cairnwork.workspace import ATTEMPT_ID
 
 
 def path_absent(path: Path) -> bool:
@@ -64,21 +63,24 @@ def write_start_mark(fd: int) -> None:
 
 
 def read_start_mark(fd: int) -> str:
-    """The marker's start mark, or "" (strict rule) unless it is ``"<this boot's id> <seconds>"``
-    in the one canonical spelling with 0 <= seconds <= now: the file is not trusted, a mark from
-    the future hides survivors."""
+    """The marker's start mark, or "" (strict rule) unless it is the one form ``boot_mark()``
+    writes (proc_start's rule), from this boot, and not later than now: the file is not trusted,
+    a mark from the future hides survivors."""
     try:
         text = os.pread(fd, 256, 0).decode("utf-8", "replace")
-        mine, now = text.split(" "), proc_start.boot_mark().split(" ")
-        ok = (
-            len(mine) == len(now) == 2
-            and mine[0] == now[0]
-            and _CANONICAL.fullmatch(mine[1]) is not None
-            and 0 <= float(mine[1]) <= float(now[1])
-        )
-    except (OSError, ValueError):
+    except OSError:
         return ""
-    return text if ok else ""
+    mine, now = (proc_start._dispatched(m, "/proc") for m in (text, proc_start.boot_mark()))
+    return text if mine is not None and now is not None and mine <= now else ""
+
+
+def list_markers(markers: Path) -> list[Path]:
+    """The attempt markers (plain files named as an attempt) in ``markers``, sorted; [] when the
+    directory is absent or not a directory. Raises OSError when it, or anything on the way to it,
+    cannot be searched or listed: not seeing the markers is not having none."""
+    if not _is_dir(markers):
+        return []
+    return sorted(p for p in markers.iterdir() if ATTEMPT_ID.fullmatch(p.name) and not _is_link(p))
 
 
 def leftovers(run_root: Path, attempt_id: str) -> list[str]:
