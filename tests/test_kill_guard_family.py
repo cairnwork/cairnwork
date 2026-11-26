@@ -35,7 +35,8 @@ def _pid_file(tmp_path, text):
 
 
 def test_a_pid_file_names_a_detached_process_and_what_runs_below_it(monkeypatch, tmp_path):
-    sent = _setup(monkeypatch, {ROOT: (1, ROOT), KID: (ROOT, KID), STRANGER: (1, STRANGER)})
+    rows = {ROOT: (1, ROOT), KID: (ROOT, KID), STRANGER: (1, STRANGER)}
+    sent = _setup(monkeypatch, rows, {ROOT: NEW, KID: NEW, STRANGER: NEW})
     adopt_helpers.adopt_on_kill(monkeypatch, _pid_file(tmp_path, str(ROOT)))
     os.kill(ROOT, 9)
     os.kill(KID, 9)
@@ -88,19 +89,31 @@ def test_a_number_the_file_names_that_is_gone_does_not_cover_a_stranger_below_it
 
 
 def test_signal_zero_is_never_redirected(monkeypatch, tmp_path):
-    sent = _setup(monkeypatch, {ROOT: (1, ROOT)})
+    sent = _setup(monkeypatch, {ROOT: (1, ROOT)}, {ROOT: NEW})
     adopt_helpers.adopt_on_kill(monkeypatch, _pid_file(tmp_path, str(ROOT)))
     os.kill(ROOT, 0)
     assert sent == [("kill", ROOT, 0)]  # the guard's own pass-through, not REAL_KILL
 
 
-@pytest.mark.parametrize("start,passes", [(NEW, True), (OLD, False), (None, False)])
-def test_a_process_nobody_can_name_is_taken_only_if_it_started_during_the_test(
-    monkeypatch, start, passes
+MARK = "/tmp/pytest-of-x/test_marked0"
+
+
+@pytest.mark.parametrize(
+    "start,argv,passes",
+    [
+        (NEW, f"python -c {MARK}/late", True),
+        (NEW, "-zsh", False),  # a stranger that started meanwhile: no marker
+        (OLD, f"python -c {MARK}/late", False),
+        (None, f"python -c {MARK}/late", False),
+    ],
+)
+def test_a_process_nobody_can_name_is_taken_only_with_the_tests_marker_and_a_new_start(
+    monkeypatch, start, argv, passes
 ):
     starts = {} if start is None else {ROOT: start}
     sent = _setup(monkeypatch, {ROOT: (1, ROOT)}, starts)
-    adopt_helpers.adopt_started_in_test(monkeypatch)
+    monkeypatch.setattr(kill_guard, "_argv", lambda pid: argv)
+    adopt_helpers.adopt_started_in_test(monkeypatch, MARK)
     if passes:
         os.kill(ROOT, 9)
         assert sent == [("kill", ROOT, 9)]
@@ -108,6 +121,16 @@ def test_a_process_nobody_can_name_is_taken_only_if_it_started_during_the_test(
         with pytest.raises(KillGuardError):
             os.kill(ROOT, 9)
         assert sent == []
+
+
+def test_a_pid_file_process_that_started_before_the_test_is_refused_on_first_sight(
+    monkeypatch, tmp_path
+):
+    sent = _setup(monkeypatch, {ROOT: (1, ROOT)}, {ROOT: OLD})  # the number was reused
+    adopt_helpers.adopt_on_kill(monkeypatch, _pid_file(tmp_path, str(ROOT)))
+    with pytest.raises(KillGuardError):
+        os.kill(ROOT, 9)
+    assert sent == []
 
 
 class _Ps:

@@ -26,7 +26,11 @@ def _family(pid_files, seen: dict[int, int]) -> set[int]:
         return set()
     starts = kill_guard._starts()
     roots &= set(table)  # a root that is gone may have its number reused: not ours any more
-    roots = {p for p in roots if p not in seen or starts.get(p) == seen[p]}
+    t0 = kill_guard.ACTIVE[-1].t0 if kill_guard.ACTIVE else None  # first sight: it must be new
+    first = {p for p in roots if p not in seen}
+    roots = {p for p in roots if p in seen and starts.get(p) == seen[p]} | {
+        p for p in first if t0 is not None and starts.get(p, -1) >= t0 - 2
+    }
     family = set(roots)
     grew = True
     while grew:
@@ -54,14 +58,15 @@ def adopt_on_kill(monkeypatch, *pid_files) -> None:
     monkeypatch.setattr(os, "kill", kill)
 
 
-def adopt_started_in_test(monkeypatch) -> None:
+def adopt_started_in_test(monkeypatch, marker) -> None:
     """For a detached process whose pid no file can name (a sandboxed run's grandchild): when the
-    code under test signals a pid, adopt() it first, so it passes only if it started after the
-    test began. The code under test picks its targets by its own run token, not this helper."""
+    code under test signals a pid, adopt() it, but only if its argv carries ``marker`` (the
+    test's own tmp_path, which the escaped child's ``-c`` code names) and it started after the
+    test began. A same-uid stranger that started meanwhile has no marker and is refused."""
     guarded = os.kill
 
     def kill(pid, sig):
-        if sig != 0 and isinstance(pid, int):
+        if sig != 0 and isinstance(pid, int) and str(marker) in kill_guard._argv(pid):
             kill_guard.adopt(pid)
         return guarded(pid, sig)
 

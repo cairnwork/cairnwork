@@ -193,7 +193,7 @@ def test_a_process_that_leaves_the_group_is_contained(project, tmp_path, monkeyp
         "def test_spawn():\n"
         f"    subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True)\n"
     )
-    adopt_started_in_test(monkeypatch)  # Seatbelt: the sweep kills the run's own escaped child
+    adopt_started_in_test(monkeypatch, tmp_path)  # Seatbelt: swept child
     result = verify(project, tmp_path, {"tests/test_daemon.py": code}, "tests/test_daemon.py")
     backend = cairnwork_sandbox.platform_backend()
     if backend is not None and backend.name == "seatbelt":

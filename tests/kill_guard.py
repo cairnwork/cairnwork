@@ -95,6 +95,26 @@ def _starts() -> dict[int, int]:
     return found
 
 
+def _argv(pid: int) -> str:
+    """The command line of ``pid`` (``ps -o command=``); empty when it cannot be read."""
+    try:
+        with _REAL_POPEN(  # noqa: S603 - fixed argv
+            [_PS, "-o", "command=", "-p", str(int(pid))],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ) as proc:
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return ""
+            return out if proc.returncode == 0 else ""
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def _descendants(table: dict[int, tuple[int, int]]) -> set[int]:
     found = {os.getpid()}
     grew = True
