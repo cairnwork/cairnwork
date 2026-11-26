@@ -7,6 +7,8 @@ counts only while it is unreaped (its number may be reused afterwards). Signal 0
 whether a pid exists and always passes. A target that is already gone passes through, so the
 real call raises the ProcessLookupError the code under test expects. The guard fails closed:
 a process table that cannot be read (or lacks this process) refuses every non-zero signal.
+An orphan stays ours only while its start time (ps lstart) is the one first seen; adopt() takes
+only a process that started after the test began, so a reused pid or group number is a stranger.
 Scope: only os.kill / os.killpg called inside the test process; sudo, /bin/kill and signals
 sent by child processes are not covered.
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from contextlib import suppress
 
 _PS = "/bin/ps"
@@ -60,6 +63,37 @@ def _table() -> dict[int, tuple[int, int]]:
     return rows
 
 
+def _starts() -> dict[int, int]:
+    """Start time (epoch seconds) of every process, from ``ps -o lstart=``. Empty when it cannot
+    be read: then nothing is recognised as ours by lineage or adopt (fails closed)."""
+    try:
+        with _REAL_POPEN(  # noqa: S603 - fixed argv
+            [_PS, "-axo", "pid=,lstart="],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            env={"LC_ALL": "C", "PATH": "/usr/bin:/bin"},
+        ) as proc:
+            try:
+                out, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                return {}
+            if proc.returncode != 0:
+                return {}
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    found: dict[int, int] = {}
+    for line in out.splitlines():
+        pid, _, when = line.strip().partition(" ")
+        try:
+            found[int(pid)] = int(time.mktime(time.strptime(when.strip(), "%a %b %d %H:%M:%S %Y")))
+        except ValueError:
+            continue
+    return found
+
+
 def _descendants(table: dict[int, tuple[int, int]]) -> set[int]:
     found = {os.getpid()}
     grew = True
@@ -79,7 +113,7 @@ def adopt(pid: int) -> int:
     """A test names a detached process of its own (a daemon its subprocess started, whose pid it
     read from its own state or pid file) so it may be signalled; returns the pid."""
     if ACTIVE:
-        ACTIVE[-1].lineage.add(pid)
+        ACTIVE[-1].adopt(pid)
     return pid
 
 
@@ -87,18 +121,33 @@ class Guard:
     def __init__(self, real_kill, real_killpg) -> None:
         self.real_kill, self.real_killpg = real_kill, real_killpg
         self.started: list[subprocess.Popen] = []  # Popen children this process started
-        self.lineage: set[int] = set()  # pids seen below this process (an orphan stays ours)
+        self.t0 = int(time.time())  # a process must have started at or after this to be adopted
+        # pid -> start time of every process seen below this process (an orphan stays ours, a
+        # pid reused by a stranger has another start time and no longer matches)
+        self.lineage: dict[int, int] = {}
+        self._now: dict[int, int] = {}  # start times as of the last look
+
+    def adopt(self, pid: int) -> None:
+        """Remember a detached process of this test; only one that started after the test began
+        (and whose start time is known) is accepted."""
+        start = _starts().get(pid)
+        if start is not None and start >= self.t0:
+            self.lineage[pid] = start
 
     def _look(self) -> dict[int, tuple[int, int]]:
         """Read the table and remember who is below this process right now: a descendant whose
         parent is later killed is reparented to launchd and no longer shows as one."""
         table = _table()
-        self.lineage |= _descendants(table)
+        self._now = _starts()
+        for pid in _descendants(table):
+            if pid in self._now:
+                self.lineage[pid] = self._now[pid]
         return table
 
     def _own(self, table: dict[int, tuple[int, int]]) -> set[int]:
         reaped = {p.pid for p in self.started if p.pid in table and p.poll() is not None}
-        return (_descendants(table) | self.lineage) - reaped
+        same = {p for p, start in self.lineage.items() if self._now.get(p) == start}
+        return (_descendants(table) | same) - reaped
 
     def _live_started(self) -> set[int]:
         """Pids of recorded children that are still unreaped (their number is still theirs)."""
