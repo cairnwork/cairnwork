@@ -18,6 +18,8 @@ from collections.abc import Callable
 from cairnwork import confined, survivor_argv, verifier_escape
 
 REASON = "account-escaped"
+UNRESOLVED, UNKNOWN = "main=unresolved", "exempt=unknown"
+_MAX = survivor_argv.MAX_LISTED
 _STAT = re.compile(r"[A-Za-z+<>]{1,5}")
 _PPID_DIGITS = 10
 _AGE = re.compile(r"[0-9]{1,3}(-[0-9]{2})?(:[0-9]{2}){1,2}")
@@ -27,22 +29,25 @@ def _plain_ppid(text: str) -> bool:
     return text.isascii() and text.isdigit() and len(text) <= _PPID_DIGITS
 
 
-def _exempt(rows: list, real_paths: Callable) -> set[str]:
-    """pids of launchd children that reap()'s count exempts (same rule: ppid 1, real path)."""
+def _exempt(rows: list, real_paths: Callable) -> tuple[set[str], bool]:
+    """(pids of launchd children that reap()'s count exempts, whether some path was unknown)."""
     launchd = [int(row[0]) for row in rows if row[1] == "1"]
     seen = real_paths(launchd) if launchd and sys.platform == "darwin" else None
-    return {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
+    found = {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
+    return found, bool(launchd) and sys.platform == "darwin" and len(seen or {}) < len(launchd)
 
 
-def _without_main(rows: list, drop: int, pids: set[str]) -> list:
-    """Leave out ``drop`` rows that look like the caller's main run: first those whose parent is
-    not any pid ps showed (``pids``, before exempt rows were removed) and not launchd (the
-    harness's own collector), then rows from the end."""
-    if drop <= 0 or len(rows) <= drop:
-        return rows
-    out = [i for i, row in enumerate(rows) if row[1] not in pids and row[1] != "1"][:drop]
-    out += [i for i in reversed(range(len(rows))) if i not in out][: drop - len(out)]
-    return [row for i, row in enumerate(rows) if i not in out]
+def _without_main(rows: list, drop: int, pids: set[str]) -> tuple[list, bool]:
+    """(rows without the caller's main run, whether that was certain). main is the harness's own
+    collector: a row whose parent is not any pid ps showed (``pids``, before exempt rows were
+    removed) and not launchd. Exactly ``drop`` such rows: they go. Any other number: nothing is
+    guessed, every row stays and the caller says the choice is unresolved."""
+    if drop <= 0:
+        return rows, True
+    out = [i for i, row in enumerate(rows) if row[1] not in pids and row[1] != "1"]
+    if len(out) != drop:
+        return rows, False
+    return [row for i, row in enumerate(rows) if i not in out], True
 
 
 def snapshot(
@@ -50,8 +55,9 @@ def snapshot(
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
     """(argv entries, reasons) for ``user``'s processes; ((), ()) when ps cannot be read.
     ``timeout`` is the time left to the caller; at most a quarter (and PS_TIMEOUT_SECONDS) is
-    used, so this can never take the time the kill needs. ``drop`` rows that look like the caller's
-    main run are left out, so the listing is never longer than the count (see _without_main)."""
+    used for ps (the exempt-path lookup is a separate bounded call). ``drop`` rows that are the
+    caller's main run are left out (see _without_main); when that is uncertain or a path is
+    unknown, nothing is guessed and the reasons say so."""
     try:
         timeout = min(timeout / 4, confined.PS_TIMEOUT_SECONDS)
         flag = ["-x"] if sys.platform == "darwin" else []
@@ -67,12 +73,13 @@ def snapshot(
             if len(parts) == 5 and parts[0].isdigit() and _plain_ppid(parts[1]):
                 rows.append(parts)
         names = {row[0]: row[4] for row in rows}
-        skip = _exempt(rows, real_paths) if real_paths else set()  # only what the count includes
+        skip, unknown = _exempt(rows, real_paths) if real_paths else (set(), False)
         rows = [row for row in rows if row[0] not in skip]
         rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
-        rows = _without_main(rows, drop, set(names))[: survivor_argv.MAX_LISTED]
-        entries = [_entry(row[2], row[3], row[4], row[1], names.get(row[1])) for row in rows]
-        return tuple(entries), ((REASON,) if entries else ())
+        rows, certain = _without_main(rows, drop, set(names))
+        entries = [_entry(r[2], r[3], r[4], r[1], names.get(r[1])) for r in rows[:_MAX]]
+        notes = (*(() if certain else (UNRESOLVED,)), *((UNKNOWN,) if unknown else ()))
+        return tuple(entries), ((REASON, *notes) if entries else ())
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return (), ()
 
@@ -97,7 +104,11 @@ def before_kill(
 
 
 def result(count: int, seen: tuple, main: int) -> survivor_argv.Survivors:
-    """``count`` with its listing (never longer than ``count``) and a fixed ``main=`` reason."""
+    """``count`` with its listing and a fixed ``main=`` reason. The listing is cut to ``count``
+    only when every choice behind it was certain (no ``main=unresolved``, no ``exempt=unknown``)."""
     if not count or not seen[0]:
         return survivor_argv.Survivors(count)
-    return survivor_argv.Survivors(count, seen[0][:count], (*seen[1], f"main={main}"))
+    sure = UNRESOLVED not in seen[1] and UNKNOWN not in seen[1]
+    return survivor_argv.Survivors(
+        count, seen[0][:count] if sure else seen[0], (*seen[1], f"main={main}")
+    )
