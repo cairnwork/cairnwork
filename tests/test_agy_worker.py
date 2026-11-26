@@ -9,6 +9,7 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from adopt_helpers import adopt_on_kill
 
 from cairnwork.confined import ATTEMPT_ENV, MAX_LOG_BYTES
 from cairnwork.workers import agy as agy_module
@@ -73,14 +74,17 @@ def test_agy_log_is_capped(tmp_path):
     assert (tmp_path / f"{attempt(2)}.agy.log").stat().st_size == MAX_LOG_BYTES + 1
 
 
-def test_a_marked_process_agy_leaves_behind_is_killed(tmp_path):
+def test_a_marked_process_agy_leaves_behind_is_killed(tmp_path, monkeypatch):
+    pid_file = tmp_path / "left.pid"
     agy = fake_agy(
         tmp_path,
         "import subprocess\n"
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],"
         " start_new_session=True)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
         "print('started', flush=True)",
     )
+    adopt_on_kill(monkeypatch, pid_file)  # the leftover is this test's own: its pid file names it
     workdir = tmp_path / attempt(3)
     workdir.mkdir()
     started = time.monotonic()
@@ -88,16 +92,19 @@ def test_a_marked_process_agy_leaves_behind_is_killed(tmp_path):
     assert time.monotonic() - started < 30
 
 
-def test_an_unmarked_process_holding_the_output_fails_the_run(tmp_path):
+def test_an_unmarked_process_holding_the_output_fails_the_run(tmp_path, monkeypatch):
     """Outside the clone too: one inside it whose environment macOS withholds (an empty one reads
     so) is tied to the attempt by its working directory and killed (#537)."""
+    pid_file = tmp_path / "held.pid"
     agy = fake_agy(
         tmp_path,
         "import subprocess\n"
-        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(15)'],"
+        "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(15)'],"
         " start_new_session=True, env={}, cwd='/')\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
         "print('started', flush=True)",
     )
+    adopt_on_kill(monkeypatch, pid_file)  # the holder is this test's own: its pid file names it
     workdir = tmp_path / attempt(4)
     workdir.mkdir()
     started = time.monotonic()

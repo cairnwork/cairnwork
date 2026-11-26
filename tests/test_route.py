@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+import kill_guard
 import pytest
 from _child_python import run_module
 from conftest import commit_change, git
@@ -194,7 +195,7 @@ def test_a_killed_runner_leaves_a_failed_task_never_a_rerun(state, project):
     (state.parent / "delay").write_text("30")
     route(state, "accept")
     _, out = route(state, "submit", stdin=request(project))
-    runner = _runner_pid(out["task_id"])
+    runner = kill_guard.adopt(_runner_pid(out["task_id"]))
     os.killpg(runner, signal.SIGKILL)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:

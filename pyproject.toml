@@ -57,6 +57,10 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "BLE", "S110", "S112", "UP"]
 
+[tool.ruff.lint.isort]
+# the repo-root conftest.py (test kill guard) must not turn `import conftest` first-party
+known-third-party = ["conftest"]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]
 

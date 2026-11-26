@@ -8,6 +8,8 @@ import threading
 import time
 from typing import Any
 
+import kill_guard
+
 from cairnwork import confined, survivor_argv
 
 TOKEN = "pipe-499-token"
@@ -53,7 +55,9 @@ def test_blocked_copier_is_counted_and_cleanup_returns(monkeypatch: Any, tmp_pat
         assert survivor_argv.listing(survivors) == " (reason: output copier still reading)"
     finally:
         if child_pid is not None:
-            os.kill(child_pid, 9)
+            # detached orphan of this test's own child (read from its pid file): not a Popen
+            # this process recorded, so the guard would refuse it; end it by the real call
+            kill_guard.REAL_KILL(child_pid, 9)
         for thread in threads:
             real_join(thread, 3)
             assert not thread.is_alive()
