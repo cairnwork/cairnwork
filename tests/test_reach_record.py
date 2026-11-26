@@ -389,18 +389,3 @@ def test_deleting_only_a_conftest_makes_no_run(task, monkeypatch):
     runs = Runs(monkeypatch, [_record(task)])
     check(task, (), deleted=("tests/sib/conftest.py",))
     assert runs.targets == []
-
-
-def test_more_changed_py_files_than_the_run_can_name_are_not_taken_as_covered(task, monkeypatch):
-    """The first run names only MAX_TARGETS of them; it must not stand as a full record."""
-    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(bfn.MAX_TARGETS + 1))
-    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
-    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
-    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 0)  # the tree run names one file, not the edits
-    quiet = []
-    monkeypatch.setattr(bfn, "_quiet", lambda *a: quiet.append(a) or False)
-    Runs(monkeypatch, [_record(task), None])  # the run of the unnamed edit gives no record
-    with pytest.raises(TestCommitRejected) as caught:
-        check(task, changed)
-    assert caught.value.code == CODE
-    assert quiet

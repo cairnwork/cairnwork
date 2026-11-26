@@ -6,7 +6,7 @@ import pytest
 from cairnwork import base_fixture_names as bfn
 from cairnwork.deferred_overlay import TestCommitRejected
 from tests import test_reach_record as base
-from tests.test_reach_record import CODE, CTX, _record
+from tests.test_reach_record import CODE, CTX, Runs, _record, check
 
 task = base.task  # the same fixture
 
@@ -119,3 +119,18 @@ def test_the_extra_runs_are_bounded_and_the_rest_go_by_text(task, monkeypatch):
         "r",
     )
     assert records == () and set(unread) == set(changed)
+
+
+def test_more_changed_py_files_than_the_run_can_name_are_not_taken_as_covered(task, monkeypatch):
+    """The first run names only MAX_TARGETS of them; it must not stand as a full record."""
+    changed = tuple(f"tests/many/test_{i:02d}.py" for i in range(bfn.MAX_TARGETS + 1))
+    monkeypatch.setattr(bfn, "base_tree_targets", lambda *a: (*changed, "tests/test_a.py"))
+    monkeypatch.setattr(bfn, "_on_base", lambda *a: True)
+    monkeypatch.setattr(bfn, "MAX_TREE_TARGETS", 0)  # the tree run names one file, not the edits
+    quiet = []
+    monkeypatch.setattr(bfn, "_quiet", lambda *a: quiet.append(a) or False)
+    Runs(monkeypatch, [_record(task), None])  # the run of the unnamed edit gives no record
+    with pytest.raises(TestCommitRejected) as caught:
+        check(task, changed)
+    assert caught.value.code == CODE
+    assert quiet
