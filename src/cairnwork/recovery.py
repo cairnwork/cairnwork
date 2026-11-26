@@ -47,6 +47,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import proc_start, runlock, unswept
+from cairnwork.cleanup_sweep import look_at, user_of
 from cairnwork.confined import ATTEMPT_ENV, SWEEP_UNAVAILABLE, confirm_gone, sweep_marked
 from cairnwork.journal import Journal, dispatch_mark
 from cairnwork.notary import Notary
@@ -145,15 +146,14 @@ def _settle(
     if ran_as == unswept.UNKNOWN_ACCOUNT and configured:
         ran_as = configured  # journaled before #244: assume the configured worker account
     worker = None if ran_as in ("", unswept.UNKNOWN_ACCOUNT) else ran_as
-
     mark = dispatch_mark(phases)  # a hidden process older than the attempt is not its own
     dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
     roots, other = _owner_roots(run_root, dispatched)
     dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
 
-    def look():  # the worker account it ran as, if any (pipeline.py journals it)
-        return sweep_marked(ATTEMPT_ENV, attempt_id, account=worker, dispatched=mark,
-                            cwd_dirs=dirs)  # fmt: skip
+    def look():  # the worker account it ran as, if any, and the verifier account (#1827)
+        return look_at(sweep_marked, (ATTEMPT_ENV, attempt_id), (worker, user_of(account)),
+                       dispatched=mark, cwd_dirs=dirs)  # fmt: skip
 
     first = look()
     swept = confirm_gone(first, look)

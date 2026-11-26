@@ -83,7 +83,11 @@ def test_an_account_run_directory_that_stays_keeps_the_attempt(tmp_path, monkeyp
     (acct.run_root / f"{AID}-v-v0").mkdir(parents=True)
     monkeypatch.setattr(Intake, "verifier_account", lambda self: acct)
     _table(monkeypatch, [])
-    out = module.cleanup(Intake(tmp_path))
+    acct.run_root.chmod(0o500)  # nobody can remove the directory inside
+    try:
+        out = module.cleanup(Intake(tmp_path))
+    finally:
+        acct.run_root.chmod(0o700)
     assert out["cleaned"] == [] and out["kept"] == [AID]
     assert marker.exists()
 
@@ -216,10 +220,10 @@ def test_merged_is_unclean_if_either_look_is():
 def test_look_at_looks_once_per_distinct_account():
     seen: list[Any] = []
 
-    def look(name):
-        seen.append(name)
+    def look(*_head, account, **_kw):
+        seen.append(account)
         return Sweep(listed=True)
 
-    cleanup_sweep.look_at(look, None, None)
-    cleanup_sweep.look_at(look, "w", "v", "w")
+    cleanup_sweep.look_at(look, ("v", "a"), (None, None))
+    cleanup_sweep.look_at(look, ("v", "a"), ("w", "v", "w"))
     assert seen == [None, "w", "v"]
