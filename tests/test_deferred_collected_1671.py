@@ -22,9 +22,11 @@ BAD_IMPORT = "import no_such_module_1671\n\ndef test_never():\n    pass\n"
 MARK = "marker_9f3c2e71"  # a body string that must not come back in any result field
 BODY = f"    def test_h(self):\n        assert '{MARK}'\n"
 WRONG = {  # categories: arguments read at import, a skip that fires only then
-    "class-attribute-from-argv": "import sys\nfrom unittest import TestCase as TC\n"
+    "class-attribute-from-argv": "import sys\nimport unittest\nTC = unittest.TestCase\n"
     "class Hid(TC):\n    __test__ = '--collect-only' not in sys.argv\n" + BODY,
-    "module-skip-from-argv": "import sys\nimport pytest\nfrom unittest import TestCase as TC\n"
+    "subscript-base-from-argv": "import sys\nimport unittest\nbs = [unittest.TestCase]\n"
+    "class Hid(bs[0]):\n    __test__ = '--collect-only' not in sys.argv\n" + BODY,
+    "module-skip-from-argv": "import sys\nimport pytest\nimport unittest\nTC = unittest.TestCase\n"
     "if '--collect-only' in sys.argv:\n    pytest.skip('x', allow_module_level=True)\n"
     "class Hid(TC):\n" + BODY,
 }

@@ -18,13 +18,14 @@ NONE = Collected()
 PATH = "tests/test_regression.py"
 HIDDEN = "    def test_h(self):\n        pass\n"
 WRONG = {  # categories: a unittest base the reader cannot name, a default runTest
-    "from-import-alias": "from unittest import TestCase as TC\nclass Hid(TC):\n" + HIDDEN,
     "attribute-base": "import unittest\nB = unittest.TestCase\nclass Hid(B):\n" + HIDDEN,
     "subscript-base": "import unittest\nbs = [unittest.TestCase]\nclass Hid(bs[0]):\n" + HIDDEN,
     "default-runtest": "import unittest\nclass Hid(unittest.TestCase):\n    def runTest(self):\n"
     "        pass\n",
 }
 RIGHT = {
+    # #1833: an imported name is a possible test-case base, so its tests are targets now
+    "from-import-alias": "from unittest import TestCase as TC\nclass Hid(TC):\n" + HIDDEN,
     "plain-class": "class TestHid:\n" + HIDDEN,
     "direct-testcase": "import unittest\nclass Hid(unittest.TestCase):\n" + HIDDEN,
     "parametrized": "import pytest\n@pytest.mark.parametrize('n', [1, 2])\n"
