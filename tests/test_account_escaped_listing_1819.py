@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 import cairnwork.survivor_argv as sa
 import cairnwork.verifier_account as va
 import cairnwork.verifier_escape as ve
@@ -237,7 +239,7 @@ def test_entries_are_built_only_for_the_listed_rows(monkeypatch):
 EXEMPT = "/usr/libexec/exempt"
 
 
-def _acct_rows(monkeypatch, before, main, rows):
+def _acct_rows(monkeypatch, before, main, rows, exempt=EXEMPT):
     """reap() with a real snapshot over ``rows``; pid 10 is a launchd child that is exempt."""
     monkeypatch.setattr(vs.subprocess, "run", _fake_run(rows))
     monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda s, d=None, attempts=1: before)
@@ -246,7 +248,7 @@ def _acct_rows(monkeypatch, before, main, rows):
         va.VerifierAccount, "_real_paths", lambda s, pids: {p: (1.0, EXEMPT) for p in pids}
     )
     monkeypatch.setattr(vs.sys, "platform", "darwin")
-    monkeypatch.setattr(ve, "is_exempt", lambda path, ppid: path == EXEMPT)
+    monkeypatch.setattr(ve, "is_exempt", lambda path, ppid: path == exempt)
     return va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
 
 
@@ -269,3 +271,23 @@ def test_only_an_exempt_daemon_left_gives_no_listing(monkeypatch):
 def test_only_the_callers_main_left_is_not_listed_as_escaped(monkeypatch):
     got = _acct_rows(monkeypatch, 1, 1, "20 15 S 00:01 python\n")
     assert got == 0 and got.argv == () and "account-escaped" not in got.reasons
+
+
+MAIN = "30 99 S 00:01 mainrun\n"  # the caller's own run: its parent is outside the account
+LEFT = "20 1 S 00:02 leftone\n21 1 S 00:02 lefttwo\n"  # launchd children, not exempt
+
+
+@pytest.mark.parametrize(
+    ("before", "main", "rows", "names"),
+    [
+        (2, 1, MAIN + "20 1 S 00:02 leftone\n", ["leftone"]),
+        (3, 1, MAIN + LEFT, ["leftone", "lefttwo"]),
+        (2, 0, LEFT, ["leftone", "lefttwo"]),
+        (2, 1, "20 21 S 00:02 child\n21 1 S 00:02 daemon\n", ["child"]),
+    ],
+)
+def test_listing_never_has_more_entries_than_the_count(monkeypatch, before, main, rows, names):
+    got = _acct_rows(monkeypatch, before, main, rows, exempt="none")
+    assert got == before - main and len(got.argv) == len(names)
+    assert all(n in line for n, line in zip(names, got.argv, strict=True))
+    assert all("mainrun" not in line for line in got.argv)
