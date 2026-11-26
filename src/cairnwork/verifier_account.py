@@ -260,14 +260,12 @@ class VerifierAccount:
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             before = self._escaped_count(deadline, attempts=1)
-            seen, deadline = verifier_seen.before_kill(
-                self.user, before, deadline, self._real_paths, main if before > main else 0
-            )
+            seen, deadline = verifier_seen.before_kill(self.user, before, deadline)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
             return survivor_argv.Survivors(1)
         count = max(before, 0) + 1 if before < 0 or left != 0 else max(before - main, 0)
-        return verifier_seen.result(count, seen, main)
+        return verifier_seen.result(count, seen, self._real_paths, main, before)
 
     def kill_all(self, attempts: int = 5) -> int:
         """SIGKILL every process of the account; return how many ESCAPED processes are left (-1:

@@ -77,7 +77,7 @@ def test_ps_failing_gives_no_listing_and_never_raises(monkeypatch):
 
     monkeypatch.setattr(vs.subprocess, "run", boom)
     assert vs.before_kill("x", 1, 500.0)[0] is None
-    assert _snap(monkeypatch, PS) == ((), ())
+    assert vs.result(2, None, None, 0, 1).reasons == ()
 
 
 def _acct(monkeypatch, before, left, ps="9 1 S 00:01 sleep\n", **kw):

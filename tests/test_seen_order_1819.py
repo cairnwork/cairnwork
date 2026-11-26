@@ -51,7 +51,7 @@ class Env:
         def paths(acct, pids, deadline=None):
             self.log.append("real_paths")
             self.clock["now"] += cost("real_paths")
-            return {p: (1.0, EXEMPT) for p in pids}
+            return {p: (1.0, EXEMPT if p == 10 else "/bin/other") for p in pids}
 
         def exempt(path, ppid):
             self.log.append("is_exempt")
@@ -159,7 +159,7 @@ def test_no_worker_thread_is_left_after_a_timeout(monkeypatch):
 
     def slow(acct, pids, deadline=None):
         time.sleep(0.5)
-        return {p: (1.0, EXEMPT) for p in pids}
+        return {p: (1.0, EXEMPT if p == 10 else "/bin/other") for p in pids}
 
     monkeypatch.setattr(va.VerifierAccount, "_real_paths", slow)
     threads = threading.active_count()
