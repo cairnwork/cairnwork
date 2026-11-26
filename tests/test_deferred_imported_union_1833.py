@@ -1,11 +1,7 @@
-"""#1833: a test class with an imported base keeps every id the cautious reading gives.
-
-The ids of a class with an imported base are the union of main's reading (every earlier class
-of the file may be the base: none is dropped) and the class's own, which are targets because the
-class is read as a possible test case. So no run-time rewrite of the base (``__bases__``, a
-renamed ``setattr``, a decorator, a metaclass, ``__init_subclass__``, a write through the
-subclass) can leave fewer ids than main gives: the property needs no list of such writes. Every
-shape that three earlier review rounds used to defeat a narrower reading is pinned here."""
+"""#1833: a test class with an imported base keeps every id the cautious reading gives (main's,
+none dropped) plus its own, so no run-time rewrite of the base can leave fewer ids. A file with a
+class the wider reading withholds keeps main's reading whole. The shapes of the earlier review
+rounds are pinned here."""
 
 import ast
 
@@ -37,128 +33,111 @@ def _main_reading(src: str, monkeypatch) -> set[str]:
         return _ids(src)
 
 
+_H, _D, _FB = "import helpers\n", "def ", "from builtins import "
 SHAPES = {
-    "AFTER_IMPORT-attr-store-same-name": ("class NS:\n    pass\n\n\nNS.Base = P\n"),
-    "AFTER_IMPORT-b-globals-subscript": ("def _f():\n    pass\n\n\n_f.__globals__['Base'] = P\n"),
-    "AFTER_IMPORT-builtins-setattr": ("import builtins\nbuiltins.setattr(sys, 'x', 1)\n"),
-    "AFTER_IMPORT-c-getframe": ("sys._getframe().f_globals['Base'] = P\n"),
-    "AFTER_IMPORT-currentframe": ("import inspect\ninspect.currentframe().f_globals['Base'] = P\n"),
-    "AFTER_IMPORT-d-modules-name": ("from sys import modules\nmodules[__name__].Base = P\n"),
-    "AFTER_IMPORT-delattr": ("delattr(sys, 'Base')\n"),
-    "AFTER_IMPORT-dotted-string": ("TARGET = 'test_self.Base'\n"),
-    "AFTER_IMPORT-e-self-import": ("import test_self as me\nme.Base = P\n"),
-    "AFTER_IMPORT-f-monkeypatch": ("pytest.MonkeyPatch().setattr('test_self.Base', P)\n"),
-    "AFTER_IMPORT-frame-update": ("sys._getframe().f_globals.update(Base=P)\n"),
-    "AFTER_IMPORT-g-mock-patch-start": ("mock.patch('test_self.Base', P).start()\n"),
-    "AFTER_IMPORT-mock-patch-object": (
-        "import helpers\nmock.patch.object(helpers, 'Base', P).start()\n"
-    ),
-    "AFTER_IMPORT-module-attr-after": ("import helpers\nhelpers.Base = P\n"),
-    "AFTER_IMPORT-module-dict-write": ("import helpers\nhelpers.__dict__['Base'] = P\n"),
-    "AFTER_IMPORT-monkeypatch-fixture": (
-        "def test_mp(monkeypatch):\n    monkeypatch.setattr('helpers.Base', P)\n"
-    ),
-    "AFTER_IMPORT-reload": ("import importlib\nimportlib.reload(sys)\n"),
-    "AFTER_IMPORT-string-name-only": ("NAMES = ['Base']\n"),
-    "AFTER_IMPORT-type-call-dict": ("ns = vars(sys.modules['test_self'])\n"),
-    "AFTER_IMPORT-types-module": ("import types\ntypes.SimpleNamespace(Base=P)\n"),
-    "BEFORE_IMPORT-a-module-attr-before-import": ("import helpers\nhelpers.Base = P\n"),
-    "OTHER_USES-alias": ("Alias = Base\n"),
-    "OTHER_USES-alias-then-write": ("A = Base\nA.__bases__ = (P,)\n"),
-    "OTHER_USES-annotated": ("Base: int = 1\n"),
-    "OTHER_USES-argument": ("def f(x):\n    return x\n\n\nf(Base)\n"),
-    "OTHER_USES-attr-del": ("del Base.test_p\n"),
-    "OTHER_USES-augassign": ("Base += 1\n"),
-    "OTHER_USES-bases-assign": ("Base.__bases__ = (P,)\n"),
-    "OTHER_USES-bases-assign-tuple-target": ("Base.__bases__, x = (P,), 1\n"),
-    "OTHER_USES-builtins-delattr-renamed": (
-        "from builtins import delattr as rm\nrm(Base, 'test_x')\n"
-    ),
-    "OTHER_USES-builtins-setattr-renamed": (
-        "from builtins import setattr as put\nput(Base, 'test_p', P.test_p)\n"
-    ),
-    "OTHER_USES-call": ("Base()\n"),
-    "OTHER_USES-class-body-use": ("class Q:\n    Base.test_p = P.test_p\n"),
-    "OTHER_USES-compare": ("x = Base is P\n"),
-    "OTHER_USES-comprehension": ("[Base for _ in range(1)]\n"),
-    "OTHER_USES-decorator": ("@Base\ndef dec():\n    pass\n"),
-    "OTHER_USES-del-name": ("del Base\n"),
-    "OTHER_USES-delattr-bound-to-name": ("rm = delattr\nrm(Base, 'x')\n"),
-    "OTHER_USES-dict-write": ("Base.__dict__['test_p'] = P.test_p\n"),
-    "OTHER_USES-for-target": ("for Base in [P]:\n    pass\n"),
-    "OTHER_USES-fstring": ("x = f'{Base}'\n"),
-    "OTHER_USES-function-param": ("def g(Base):\n    return Base\n"),
-    "OTHER_USES-getattr-string": ("getattr(sys.modules[__name__], 'Base')\n"),
-    "OTHER_USES-global-decl": ("def g():\n    global Base\n    Base = P\n"),
-    "OTHER_USES-globals-string": ("globals()['Base'] = P\n"),
-    "OTHER_USES-keyword-value": ("class Q(object, metaclass=type, flag=Base):\n    pass\n"),
-    "OTHER_USES-lambda-param": ("h = lambda Base: Base\n"),
-    "OTHER_USES-match-capture": ("match 1:\n    case Base:\n        pass\n"),
-    "OTHER_USES-metaclass-kw": ("class M(metaclass=Base):\n    pass\n"),
-    "OTHER_USES-nonlocal-decl": (
-        "def g():\n    Base = 1\n\n    def h():\n        nonlocal Base\n        Base = P\n"
-    ),
-    "OTHER_USES-other-class-base-plus-use": ("class Q(Base):\n    X = Base\n"),
-    "OTHER_USES-read": ("print(Base)\n"),
-    "OTHER_USES-rebind": ("Base = P\n"),
-    "OTHER_USES-setattr-attr-store": ("Base.test_p = P.test_p\n"),
-    "OTHER_USES-setattr-bound-to-name": ("put = setattr\nput(Base, 'test_p', P.test_p)\n"),
-    "OTHER_USES-starred": ("x = [*Base]\n"),
-    "OTHER_USES-subscript": ("x = Base[0]\n"),
-    "OTHER_USES-subscript-base": ("class Q(Base[int]):\n    pass\n"),
-    "OTHER_USES-try-handler": ("try:\n    pass\nexcept Base:\n    pass\n"),
-    "OTHER_USES-type-hint-string": ("x: 'Base' = None\n"),
-    "OTHER_USES-type-setattr": ("type.__setattr__(Base, 'test_p', P.test_p)\n"),
-    "OTHER_USES-vars-write": ("vars(Base)['test_p'] = P.test_p\n"),
-    "OTHER_USES-walrus": ("(Base := P)\n"),
-    "OTHER_USES-with-target": (
-        "import contextlib\nwith contextlib.nullcontext(P) as Base:\n    pass\n"
-    ),
-    "OTHER_USES-write-call-inside-a-base": (
-        "class Q(setattr(Base, 'test_p', P.test_p) or object):\n    pass\n"
-    ),
-    "REBINDS-annotated": ("Base: type = make(P)\n"),
-    "REBINDS-assign": ("Base = make(P)\n"),
-    "REBINDS-async-def-rename": ("async def Base():\n    pass\n"),
-    "REBINDS-class-in-if": ("if True:\n    class Base(P):\n        pass\n"),
-    "REBINDS-class-in-match": ("match 0:\n    case _:\n        class Base(P):\n            pass\n"),
-    "REBINDS-class-in-try": (
-        "try:\n    class Base(P):\n        pass\nexcept Exception:\n    pass\n"
-    ),
-    "REBINDS-class-in-while": ("while True:\n    class Base(P):\n        pass\n    break\n"),
-    "REBINDS-class-in-with": ("with ctx():\n    class Base(P):\n        pass\n"),
-    "REBINDS-def-rename": ("def Base():\n    pass\n"),
-    "REBINDS-except-target": ("try:\n    pass\nexcept Exception as Base:\n    pass\n"),
-    "REBINDS-exec-string": ("exec('Base = P')\n"),
-    "REBINDS-for-target": ("for Base in (P,):\n    pass\n"),
-    "REBINDS-global-write": ("def f():\n    global Base\n    Base = P\nf()\n"),
-    "REBINDS-if-assign": ("if True:\n    Base = P\n"),
-    "REBINDS-import-in-if": ("if True:\n    from test_self import P as Base\n"),
-    "REBINDS-later-star-import": ("from other import *\n"),
-    "REBINDS-match-as": ("match P:\n    case object() as Base:\n        pass\n"),
-    "REBINDS-match-capture": ("match P:\n    case Base:\n        pass\n"),
-    "REBINDS-match-mapping-rest": ("match {}:\n    case {**Base}:\n        pass\n"),
-    "REBINDS-match-star": ("match [P]:\n    case [*Base]:\n        pass\n"),
-    "REBINDS-module-dict": ("__dict__['Base'] = P\n"),
-    "REBINDS-namespace-dict": ("globals()['Base'] = P\n"),
-    "REBINDS-second-import": ("from test_self import P as Base\n"),
-    "REBINDS-setattr-module": ("import sys\nsetattr(sys.modules[__name__], 'Base', P)\n"),
-    "REBINDS-sys-modules-attribute": ("import sys\nsys.modules[__name__].Base = P\n"),
-    "REBINDS-walrus": ("(Base := P)\n"),
-    "REBINDS-with-as": ("with ctx() as Base:\n    pass\n"),
-    "decorator-writes-through-bases": (
-        "def deco(cls):\n    cls.__bases__[0].test_p = P.test_p\n    return cls\n"
-    ),
-    "init-subclass": (
-        "class Hook:\n    def __init_subclass__(cls):\n        cls.__bases__[0].test_p = P.test_p\n"
-    ),
+    "AFTER_IMPORT-attr-store-same-name": "class NS:\n    pass\n\n\nNS.Base = P\n",
+    "AFTER_IMPORT-b-globals-subscript": "def _f():\n    pass\n\n\n_f.__globals__['Base'] = P\n",
+    "AFTER_IMPORT-builtins-setattr": "import builtins\nbuiltins.setattr(sys, 'x', 1)\n",
+    "AFTER_IMPORT-c-getframe": "sys._getframe().f_globals['Base'] = P\n",
+    "AFTER_IMPORT-currentframe": "import inspect\ninspect.currentframe().f_globals['Base'] = P\n",
+    "AFTER_IMPORT-d-modules-name": "from sys import modules\nmodules[__name__].Base = P\n",
+    "AFTER_IMPORT-delattr": "delattr(sys, 'Base')\n",
+    "AFTER_IMPORT-dotted-string": "TARGET = 'test_self.Base'\n",
+    "AFTER_IMPORT-e-self-import": "import test_self as me\nme.Base = P\n",
+    "AFTER_IMPORT-f-monkeypatch": "pytest.MonkeyPatch().setattr('test_self.Base', P)\n",
+    "AFTER_IMPORT-frame-update": "sys._getframe().f_globals.update(Base=P)\n",
+    "AFTER_IMPORT-g-mock-patch-start": "mock.patch('test_self.Base', P).start()\n",
+    "AFTER_IMPORT-mock-patch-object": _H + "mock.patch.object(helpers, 'Base', P).start()\n",
+    "AFTER_IMPORT-module-attr-after": "import helpers\nhelpers.Base = P\n",
+    "AFTER_IMPORT-module-dict-write": "import helpers\nhelpers.__dict__['Base'] = P\n",
+    "AFTER_IMPORT-monkeypatch-fixture": _D
+    + "test_mp(monkeypatch):\n monkeypatch.setattr('helpers.Base', P)\n",
+    "AFTER_IMPORT-reload": "import importlib\nimportlib.reload(sys)\n",
+    "AFTER_IMPORT-string-name-only": "NAMES = ['Base']\n",
+    "AFTER_IMPORT-type-call-dict": "ns = vars(sys.modules['test_self'])\n",
+    "AFTER_IMPORT-types-module": "import types\ntypes.SimpleNamespace(Base=P)\n",
+    "BEFORE_IMPORT-a-module-attr-before-import": "import helpers\nhelpers.Base = P\n",
+    "OTHER_USES-alias": "Alias = Base\n",
+    "OTHER_USES-alias-then-write": "A = Base\nA.__bases__ = (P,)\n",
+    "OTHER_USES-annotated": "Base: int = 1\n",
+    "OTHER_USES-argument": "def f(x):\n    return x\n\n\nf(Base)\n",
+    "OTHER_USES-attr-del": "del Base.test_p\n",
+    "OTHER_USES-augassign": "Base += 1\n",
+    "OTHER_USES-bases-assign": "Base.__bases__ = (P,)\n",
+    "OTHER_USES-bases-assign-tuple-target": "Base.__bases__, x = (P,), 1\n",
+    "OTHER_USES-builtins-delattr-renamed": _FB + "delattr as rm\nrm(Base, 'test_x')\n",
+    "OTHER_USES-builtins-setattr-renamed": _FB + "setattr as put\nput(Base, 'test_p', P.test_p)\n",
+    "OTHER_USES-call": "Base()\n",
+    "OTHER_USES-class-body-use": "class Q:\n    Base.test_p = P.test_p\n",
+    "OTHER_USES-compare": "x = Base is P\n",
+    "OTHER_USES-comprehension": "[Base for _ in range(1)]\n",
+    "OTHER_USES-decorator": "@Base\ndef dec():\n    pass\n",
+    "OTHER_USES-del-name": "del Base\n",
+    "OTHER_USES-delattr-bound-to-name": "rm = delattr\nrm(Base, 'x')\n",
+    "OTHER_USES-dict-write": "Base.__dict__['test_p'] = P.test_p\n",
+    "OTHER_USES-for-target": "for Base in [P]:\n    pass\n",
+    "OTHER_USES-fstring": "x = f'{Base}'\n",
+    "OTHER_USES-function-param": "def g(Base):\n    return Base\n",
+    "OTHER_USES-getattr-string": "getattr(sys.modules[__name__], 'Base')\n",
+    "OTHER_USES-global-decl": "def g():\n    global Base\n    Base = P\n",
+    "OTHER_USES-globals-string": "globals()['Base'] = P\n",
+    "OTHER_USES-keyword-value": "class Q(object, metaclass=type, flag=Base):\n    pass\n",
+    "OTHER_USES-lambda-param": "h = lambda Base: Base\n",
+    "OTHER_USES-match-capture": "match 1:\n    case Base:\n        pass\n",
+    "OTHER_USES-metaclass-kw": "class M(metaclass=Base):\n    pass\n",
+    "OTHER_USES-nonlocal-decl": "def g():\n Base = 1\n\n def h():\n  nonlocal Base\n  Base = P\n",
+    "OTHER_USES-other-class-base-plus-use": "class Q(Base):\n    X = Base\n",
+    "OTHER_USES-read": "print(Base)\n",
+    "OTHER_USES-rebind": "Base = P\n",
+    "OTHER_USES-setattr-attr-store": "Base.test_p = P.test_p\n",
+    "OTHER_USES-setattr-bound-to-name": "put = setattr\nput(Base, 'test_p', P.test_p)\n",
+    "OTHER_USES-starred": "x = [*Base]\n",
+    "OTHER_USES-subscript": "x = Base[0]\n",
+    "OTHER_USES-subscript-base": "class Q(Base[int]):\n    pass\n",
+    "OTHER_USES-try-handler": "try:\n    pass\nexcept Base:\n    pass\n",
+    "OTHER_USES-type-hint-string": "x: 'Base' = None\n",
+    "OTHER_USES-type-setattr": "type.__setattr__(Base, 'test_p', P.test_p)\n",
+    "OTHER_USES-vars-write": "vars(Base)['test_p'] = P.test_p\n",
+    "OTHER_USES-walrus": "(Base := P)\n",
+    "OTHER_USES-with-target": "import contextlib\nwith contextlib.nullcontext(P) as Base:\n pass\n",
+    "OTHER_USES-write-call-inside-a-base": "class Q(setattr(Base, 'x', 1) or object):\n pass\n",
+    "REBINDS-annotated": "Base: type = make(P)\n",
+    "REBINDS-assign": "Base = make(P)\n",
+    "REBINDS-async-def-rename": "async def Base():\n    pass\n",
+    "REBINDS-class-in-if": "if True:\n    class Base(P):\n        pass\n",
+    "REBINDS-class-in-match": "match 0:\n    case _:\n        class Base(P):\n            pass\n",
+    "REBINDS-class-in-try": "try:\n class Base(P):\n  pass\nexcept Exception:\n pass\n",
+    "REBINDS-class-in-while": "while True:\n    class Base(P):\n        pass\n    break\n",
+    "REBINDS-class-in-with": "with ctx():\n    class Base(P):\n        pass\n",
+    "REBINDS-def-rename": "def Base():\n    pass\n",
+    "REBINDS-except-target": "try:\n    pass\nexcept Exception as Base:\n    pass\n",
+    "REBINDS-exec-string": "exec('Base = P')\n",
+    "REBINDS-for-target": "for Base in (P,):\n    pass\n",
+    "REBINDS-global-write": "def f():\n    global Base\n    Base = P\nf()\n",
+    "REBINDS-if-assign": "if True:\n    Base = P\n",
+    "REBINDS-import-in-if": "if True:\n    from test_self import P as Base\n",
+    "REBINDS-later-star-import": "from other import *\n",
+    "REBINDS-match-as": "match P:\n    case object() as Base:\n        pass\n",
+    "REBINDS-match-capture": "match P:\n    case Base:\n        pass\n",
+    "REBINDS-match-mapping-rest": "match {}:\n    case {**Base}:\n        pass\n",
+    "REBINDS-match-star": "match [P]:\n    case [*Base]:\n        pass\n",
+    "REBINDS-module-dict": "__dict__['Base'] = P\n",
+    "REBINDS-namespace-dict": "globals()['Base'] = P\n",
+    "REBINDS-second-import": "from test_self import P as Base\n",
+    "REBINDS-setattr-module": "import sys\nsetattr(sys.modules[__name__], 'Base', P)\n",
+    "REBINDS-sys-modules-attribute": "import sys\nsys.modules[__name__].Base = P\n",
+    "REBINDS-walrus": "(Base := P)\n",
+    "REBINDS-with-as": "with ctx() as Base:\n    pass\n",
+    "decorator-writes-through-bases": _D
+    + "deco(cls):\n cls.__bases__[0].test_p = P.test_p\n return cls\n",
+    "init-subclass": "class Hook:\n def __init_subclass__(cls):\n  cls.__bases__[0].x = 1\n",
     "metaclass-new": (
         "class Meta(type):\n"
         "    def __new__(m, n, b, d):\n"
         "        b[0].test_p = P.test_p\n"
         "        return super().__new__(m, n, b, d)\n"
     ),
-    "mro-from-subclass": ("TestI = None\n"),
+    "mro-from-subclass": "TestI = None\n",
 }
 
 
@@ -200,40 +179,20 @@ def test_an_earlier_class_s_tests_stay_listed_under_the_imported_base_class(imp)
 # abstract base: its tests are run through the subclasses). A false id is a false
 # DEFERRED_TESTS_NOT_RUN for an honest commit that changes the shared test. Each shape must
 # read as main reads it.
-SHARED = {
-    "abc-base": (
-        "from abc import ABC\n\n\nclass Checks(ABC):\n    def test_x(self):\n        pass\n\n\n"
-        "class TestA(Checks):\n    pass\n"
-    ),
-    "imported-mixin-middle": (
-        "from helpers import Mixin\n\n\nclass CommonChecks(Mixin):\n    def test_x(self):\n"
-        "        pass\n\n\nclass TestA(CommonChecks):\n    pass\n"
-    ),
-    "base-name-not-test": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
-        "    def test_x(self):\n        pass\n\n\n"
-        "class TestA(Shared):\n    pass\n\n\nclass TestB(Shared):\n    pass\n"
-    ),
-    "base-through-alias": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
-        "    def test_x(self):\n        pass\n\n\n"
-        "Alias = Shared\n\n\nclass TestA(Alias):\n    pass\n"
-    ),
-    "dunder-test-false": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n    __test__ = False\n\n"
-        "    def test_x(self):\n        pass\n"
-    ),
-    "own-init": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
-        "    def __init__(self):\n        pass\n\n"
-        "    def test_x(self):\n        pass\n"
-    ),
-    "base-in-subscript-base": (
-        "from helpers import Mixin\n\n\nclass Shared(Mixin):\n"
-        "    def test_x(self):\n        pass\n\n\n"
-        "class TestA(Shared, object):\n    pass\n"
-    ),
+_IM = "from helpers import Mixin"
+_T = "    def test_x(self):\n        pass\n"
+_USE = "\n\nclass TestA({}):\n    pass\n"
+# name -> (import line, class header, its body before test_x, what follows)
+_SH = {
+    "abc-base": ("from abc import ABC", "Checks(ABC)", "", _USE.format("Checks")),
+    "imported-mixin-middle": (_IM, "CommonChecks(Mixin)", "", _USE.format("CommonChecks")),
+    "base-name-not-test": (_IM, "Shared(Mixin)", "", _USE.format("Shared") + _USE.format("Shared")),
+    "base-through-alias": (_IM, "Shared(Mixin)", "", "\n\nAlias = Shared" + _USE.format("Alias")),
+    "dunder-test-false": (_IM, "Shared(Mixin)", "    __test__ = False\n\n", ""),
+    "own-init": (_IM, "Shared(Mixin)", "    def __init__(self):\n        pass\n\n", ""),
+    "base-in-subscript-base": (_IM, "Shared(Mixin)", "", _USE.format("Shared, object")),
 }
+SHARED = {k: f"{i}\n\n\nclass {c}:\n{b}{_T}{t}" for k, (i, c, b, t) in _SH.items()}
 
 
 @pytest.mark.parametrize("shape", SHARED)
@@ -369,13 +328,6 @@ def test_a_class_defined_twice_lists_exactly_the_changed_ids(pair):
     assert _changed(old, new) == want
 
 
-@pytest.mark.parametrize("pair", [*PAIRS, *DUP_PAIRS])
-def test_changed_and_new_ids_are_never_fewer_than_main(pair):
-    old, new = (PAIRS | DUP_PAIRS)[pair][:2]
-    assert _main_changed(old, new) <= _changed(old, new)
-    assert _main_targets(old, new) <= _targets(old, new)
-
-
 # Named pins for a class defined twice (the review's conditions).
 REDEF_FILE = "tests/test_redef.py"
 REDEF_LATER = DUP.replace("assert 2", "assert {m}")
@@ -416,3 +368,31 @@ def test_redefined_class_later_definition_change_listed():
 def test_changed_tests_never_fewer_than_main_on_pairs(pair):
     old, new = (PAIRS | DUP_PAIRS)[pair][:2]
     assert _main_changed(old, new) <= _changed(old, new)
+    assert _main_targets(old, new) <= _targets(old, new)
+
+
+# #1860 round 4: a class with an imported base that the wider reading withholds (used by name
+# elsewhere, own __init__ or __test__) hides what main also cannot see, so the file stays as main
+# has it: no extra ids, and untargeted requires the whole file.
+_WITHHELD = (
+    "from unittest import TestCase as TC\n\n\nclass A(TC):\n{head}    def test_a(self):\n"
+    "        assert {n}\n\n\nclass B(TC):\n    def test_b(self):\n        assert {n}\n{tail}"
+)
+WITHHELD = {
+    "referenced": ("", "\n\nAlias = A\n"),
+    "own-init": ("    def __init__(self):\n        pass\n\n", ""),
+    "dunder-test": ("    __test__ = False\n\n", ""),
+}
+
+
+@pytest.mark.parametrize("why", WITHHELD)
+def test_a_file_with_a_withheld_imported_base_class_keeps_main_s_reading(why):
+    from cairnwork.deferred_tests import untargeted
+
+    head, tail = WITHHELD[why]
+    old, new = (_WITHHELD.format(head=head, tail=tail, n=n) for n in (1, 2))
+    assert _targets(old, new) == _main_targets(old, new)
+    nodes = [f"tests/test_w.py::{i}" for i in _targets(old, new)]
+    assert untargeted(("tests/test_w.py",), nodes, ["tests/test_w.py::B::test_b"]) == (
+        "tests/test_w.py",
+    )

@@ -121,11 +121,28 @@ def target_ids(old: ast.Module, new: ast.Module) -> tuple[set[str], frozenset[st
     and the wider one (#1833: a class with an imported base also counts as a test case). Each
     side of a comparison is read the same way, so a class defined twice under one name, which the
     wider reading resolves differently, cannot make an unchanged file list a test; and an unchanged
-    imported-base class is never listed as new (a comment, another test edited)."""
+    imported-base class is never listed as new (a comment, another test edited). A file with a
+    class the wider reading withholds (``_withheld``) gets main's set only, so it is named whole."""
     narrow = _diff(test_functions(old, imported=False)[0], test_functions(new, imported=False)[0],
                    both=False)  # fmt: skip
     wide_after, uncollected = test_functions(new)
+    if _withheld(old) or _withheld(new):  # main's set whole: untargeted then names the file
+        return narrow, uncollected
     return narrow | _diff(test_functions(old)[0], wide_after, both=False), uncollected
+
+
+def _withheld(tree: ast.Module) -> bool:
+    """A class with an imported base that the wider reading does not read as a test case (used by
+    name elsewhere, an own ``__init__``/``__new__``/``__test__``) and main does not either. Its
+    tests may change unseen, so a file with one keeps main's reading and is named whole."""
+    reach = _Reach(tree)
+    return any(
+        isinstance(n, ast.ClassDef)
+        and not n.name.startswith("Test")
+        and any(_root_name(b) in reach.imported for b in n.bases)
+        and not _may_collect(n, reach)
+        for n in tree.body
+    )
 
 
 def changed_ids(old: ast.Module, new: ast.Module) -> set[str]:
