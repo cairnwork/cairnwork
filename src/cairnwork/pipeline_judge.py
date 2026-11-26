@@ -24,6 +24,7 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
+from cairnwork.deferred_base_hint import base_hint
 from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
@@ -155,7 +156,8 @@ def tests_with_teeth(
     if comparison.kind == "UNCOMPARABLE":
         raise BaseUncomparable(comparison)
     if comparison.kind != "TEETH":
-        raise TestCommitRejected(comparison.code, comparison.detail)
+        hint = base_hint(task.repo, task.test_commit, paths, comparison.code)  # text only (#1833)
+        raise TestCommitRejected(comparison.code, comparison.detail + hint)
     _check_seed_replay(ctx, result, runs, targets, base, task.test_commit, is_test)
     return TestFiles(paths, deleted, nodes, base_skips)
 
