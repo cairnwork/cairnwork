@@ -85,9 +85,9 @@ def _assert_gone(pid: int) -> None:
 
 
 def _cleanup(proc: subprocess.Popen, *pids: int) -> None:
-    for pid in map(kill_guard.adopt, pids):
+    for pid in pids:
         try:
-            os.kill(pid, signal.SIGKILL)
+            kill_guard.REAL_KILL(pid, signal.SIGKILL)  # the test's own detached process
         except ProcessLookupError:
             pass
     if proc.poll() is None:
@@ -203,7 +203,7 @@ def test_runner_timeout_kills_setpgid_grandchild(tmp_path):
     finally:
         if pid:
             try:
-                os.kill(kill_guard.adopt(pid), signal.SIGKILL)
+                kill_guard.REAL_KILL(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
 

@@ -9,12 +9,15 @@ import uuid
 from typing import Any
 
 import pytest
+from adopt_helpers import adopt_on_kill
 
 from cairnwork import confined, reasons, survivor_argv
 from cairnwork.deferred_tests import base_comparison
 
-LEAK = (
-    "import os, pathlib, sys, time; os.setsid(); pathlib.Path(sys.argv[2]).touch(); time.sleep(60)"
+LEAK = (  # the pid goes into the flag file (written whole, then renamed) once it left the group
+    "import os, pathlib, sys, time; os.setsid(); f = pathlib.Path(sys.argv[2]);"
+    " t = f.with_name(f.name + '.t'); t.write_text(str(os.getpid())); os.replace(t, f);"
+    " time.sleep(60)"
 )
 
 
@@ -49,7 +52,7 @@ def _run(**over: Any) -> dict[str, Any]:
     return base | over
 
 
-def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
+def test_a_real_leaked_process_is_named_and_still_counted(tmp_path, monkeypatch):
     if not sys.platform.startswith(("linux", "darwin")):
         pytest.skip("needs /proc or ps")
     script = tmp_path / "leaky_server.py"
@@ -62,6 +65,7 @@ def test_a_real_leaked_process_is_named_and_still_counted(tmp_path):
         f"while not pathlib.Path({str(flag)!r}).exists():\n    time.sleep(0.05)\n"
     )
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
+    adopt_on_kill(monkeypatch, flag)  # the leak is this test's own: its flag file holds its pid
     _rc, _timed_out, survivors = confined.execute(
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
     )
@@ -85,13 +89,18 @@ def test_the_base_verdict_detail_lists_the_argv():
     assert "BASE_SURVIVORS (exit 0)" in got.detail and "(argv: sh --serve)" in got.detail
 
 
-def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path):
+def test_a_platform_shell_found_by_its_directory_is_named_too(tmp_path, monkeypatch):
     # macOS withholds /bin/sh's environment, so the sweep finds it by its working directory
     # (proc_cwd); its argv is still read before the kill. The #799 gunicorn-teardown pattern.
     script = tmp_path / "teardown.py"
-    script.write_text("import os, subprocess\nsubprocess.Popen(['/bin/sh', '-c', 'sleep 60; true'],"
-                      " preexec_fn=os.setsid)\n")  # fmt: skip
+    pid_file = tmp_path / "shell.pid"
+    script.write_text(
+        "import os, subprocess\n"
+        "p = subprocess.Popen(['/bin/sh', '-c', 'sleep 60; true'], preexec_fn=os.setsid)\n"
+        f"open({str(pid_file)!r}, 'w').write(str(p.pid))\n"
+    )
     env = {"PATH": os.environ["PATH"], confined.RUN_TOKEN_VAR: uuid.uuid4().hex}
+    adopt_on_kill(monkeypatch, pid_file)  # the shell is this test's own: its pid file names it
     *_, survivors = confined.execute(
         [sys.executable, str(script)], tmp_path, env, 30, tmp_path / "log"
     )

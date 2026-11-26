@@ -98,7 +98,7 @@ def test_a_detached_descendant_cannot_hold_settlement(tmp_path, monkeypatch):
         child = tmp_path / "child"
         if child.exists():
             with contextlib.suppress(ProcessLookupError, ValueError):
-                os.kill(kill_guard.adopt(int(child.read_text())), 9)
+                kill_guard.REAL_KILL(int(child.read_text()), 9)  # the test's own
 
 
 def test_output_that_is_not_utf8_is_still_recorded(tmp_path):
