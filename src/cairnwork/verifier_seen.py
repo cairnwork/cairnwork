@@ -5,6 +5,14 @@ One extra bounded ps, taken before the kill, gives each process's allow-listed n
 state and age. Every word comes from survivor_argv.prefix() (allow-list, delimiters replaced,
 cut) or from a strict pattern, so nothing a candidate chose is shown. A failure here yields
 no listing and never changes the count or the verdict.
+
+Limits, said so the reader is not misled: the listing and the count come from two separate reads,
+so when they disagree (more rows than the count and the cut, fewer rows, nothing left after
+filtering, or the 5-row cap hiding rows) the reasons carry ``listing=incomplete``; the count itself
+is never changed. The caller's main run is found by identity (a row whose parent is no pid in the
+account's ps output and not launchd). If main's own parent is a process of the account, or is
+launchd, it is not recognised: nothing is dropped and ``main=unresolved`` is said. The whole
+snapshot (ps, path lookup, signature checks) is held to BUDGET seconds.
 """
 
 from __future__ import annotations
@@ -12,6 +20,7 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable
 
@@ -19,6 +28,8 @@ from cairnwork import confined, survivor_argv, verifier_escape
 
 REASON = "account-escaped"
 UNRESOLVED, UNKNOWN = "main=unresolved", "exempt=unknown"
+INCOMPLETE = "listing=incomplete"
+BUDGET = 10.0  # seconds for the whole snapshot, however slow ps, the path lookup or codesign are
 _MAX = survivor_argv.MAX_LISTED
 _STAT = re.compile(r"[A-Za-z+<>]{1,5}")
 _PPID_DIGITS = 10
@@ -29,12 +40,29 @@ def _plain_ppid(text: str) -> bool:
     return text.isascii() and text.isdigit() and len(text) <= _PPID_DIGITS
 
 
-def _exempt(rows: list, real_paths: Callable) -> tuple[set[str], bool]:
-    """(pids of launchd children that reap()'s count exempts, whether some path was unknown)."""
+def _exempt(rows: list, real_paths: Callable, budget: float) -> tuple[set[str], bool]:
+    """(pids of launchd children that reap()'s count exempts, whether some path was unknown).
+    The lookup and every signature check together get ``budget`` seconds; past it the answer is
+    "unknown" (nothing exempted) and the work is left behind."""
     launchd = [int(row[0]) for row in rows if row[1] == "1"]
-    seen = real_paths(launchd) if launchd and sys.platform == "darwin" else None
-    found = {str(p) for p, rec in (seen or {}).items() if verifier_escape.is_exempt(rec[1], 1)}
-    return found, bool(launchd) and sys.platform == "darwin" and len(seen or {}) < len(launchd)
+    if not launchd or sys.platform != "darwin":
+        return set(), False
+    done: dict = {}
+
+    def work() -> None:
+        try:
+            seen = real_paths(launchd) or {}
+            found = {str(p) for p, rec in seen.items() if verifier_escape.is_exempt(rec[1], 1)}
+            done["n"], done["found"] = len(seen), found
+        except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
+            return
+
+    worker = threading.Thread(target=work, daemon=True)
+    worker.start()
+    worker.join(max(budget, 0.0))
+    if "found" not in done:
+        return set(), True
+    return done["found"], done["n"] < len(launchd)
 
 
 def _without_main(rows: list, drop: int, pids: set[str]) -> tuple[list, bool]:
@@ -59,7 +87,8 @@ def snapshot(
     caller's main run are left out (see _without_main); when that is uncertain or a path is
     unknown, nothing is guessed and the reasons say so."""
     try:
-        timeout = min(timeout / 4, confined.PS_TIMEOUT_SECONDS)
+        start = time.monotonic()
+        timeout = min(timeout / 4, confined.PS_TIMEOUT_SECONDS, BUDGET / 2)
         flag = ["-x"] if sys.platform == "darwin" else []
         done = subprocess.run(  # noqa: S603 - fixed argv
             ["/bin/ps", *flag, "-U", user, "-o", "pid=,ppid=,stat=,etime=,comm="],
@@ -73,13 +102,18 @@ def snapshot(
             if len(parts) == 5 and parts[0].isdigit() and _plain_ppid(parts[1]):
                 rows.append(parts)
         names = {row[0]: row[4] for row in rows}
-        skip, unknown = _exempt(rows, real_paths) if real_paths else (set(), False)
+        left = BUDGET - (time.monotonic() - start)
+        skip, unknown = _exempt(rows, real_paths, left) if real_paths else (set(), False)
         rows = [row for row in rows if row[0] not in skip]
         rows.sort(key=lambda row: row[1] == "1")  # launchd children last: likelier system daemons
         rows, certain = _without_main(rows, drop, set(names))
         entries = [_entry(r[2], r[3], r[4], r[1], names.get(r[1])) for r in rows[:_MAX]]
-        notes = (*(() if certain else (UNRESOLVED,)), *((UNKNOWN,) if unknown else ()))
-        return tuple(entries), ((REASON, *notes) if entries else ())
+        notes = (
+            *(() if certain else (UNRESOLVED,)),
+            *((UNKNOWN,) if unknown else ()),
+            *((INCOMPLETE,) if len(rows) > _MAX else ()),
+        )
+        return tuple(entries), (REASON, *notes)
     except Exception:  # noqa: BLE001 - the diagnostic must not change the verdict
         return (), ()
 
@@ -100,15 +134,19 @@ def before_kill(
         return ((), ()), deadline
     start = time.monotonic()
     seen = snapshot(user, max(deadline - start, 0.0), real_paths, main)
-    return seen, deadline + (time.monotonic() - start)
+    return seen, deadline + min(time.monotonic() - start, BUDGET)
 
 
 def result(count: int, seen: tuple, main: int) -> survivor_argv.Survivors:
     """``count`` with its listing and a fixed ``main=`` reason. The listing is cut to ``count``
-    only when every choice behind it was certain (no ``main=unresolved``, no ``exempt=unknown``)."""
-    if not count or not seen[0]:
+    only when every choice behind it was certain (no ``main=unresolved``, no ``exempt=unknown``).
+    Whenever the listing and the count disagree, in either direction, ``listing=incomplete`` says
+    so; a failed ps (no reasons at all) stays a plain count."""
+    argv, notes = seen
+    if not count or not notes:
         return survivor_argv.Survivors(count)
-    sure = UNRESOLVED not in seen[1] and UNKNOWN not in seen[1]
+    sure = UNRESOLVED not in notes and UNKNOWN not in notes
+    gap = () if INCOMPLETE in notes or len(argv) == count else (INCOMPLETE,)
     return survivor_argv.Survivors(
-        count, seen[0][:count] if sure else seen[0], (*seen[1], f"main={main}")
+        count, argv[:count] if sure else argv, (*notes, *gap, f"main={main}")
     )
