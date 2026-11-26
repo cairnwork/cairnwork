@@ -72,7 +72,10 @@ def resolve_record(record: CollectedRecord, checkout) -> CollectedRecord:
     real = {}
     for path in paths:
         try:
-            real[path] = _real(_full(root, path)) or UNRESOLVED
+            full = _full(root, path)
+            real[path] = _real(full) or UNRESOLVED
+            if real[path] == UNRESOLVED:  # where it leads as far as it can be followed
+                real[UNRESOLVED + path] = os.path.realpath(full)
         except ValueError:
             continue
     return replace(record, root=root, real=tuple(sorted(real.items())))
@@ -197,9 +200,11 @@ def _rels(root: str, path: str, real: dict[str, str]) -> tuple[str, ...]:
     try:
         full = _full(root, path)
         resolved = real.get(path) or _real(full) or UNRESOLVED
-        if resolved == UNRESOLVED and _within(root, os.path.normpath(full)):
-            _refuse("a sys.path or plugin entry of the base run cannot be resolved")
         found = {os.path.normpath(full), resolved}
+        if resolved == UNRESOLVED:  # inside by either spelling (an ancestor link leads in) refuses
+            found = {os.path.normpath(full), real.get(UNRESOLVED + path) or os.path.realpath(full)}
+            if any(_within(root, p) for p in found):
+                _refuse("a sys.path or plugin entry of the base run cannot be resolved")
         rels = (os.path.relpath(p, root) for p in found if _within(root, p))
         return tuple(sorted(r.replace(os.sep, "/") for r in rels if r != "."))
     except ValueError:

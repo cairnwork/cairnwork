@@ -2,34 +2,29 @@
 
 bytecode_roots.py runs this file's source with ``python -I -S -c <source> <spec json>``: as the
 owner in owner mode, as the verifier account under one, so that what it can open is what the
-run's Python could open. Standard library only; nothing from the checkout or the run is
-imported. It prints one JSON object and exits 0; any error it cannot place fails the run.
+run's Python could open. Standard library only; it prints one JSON object and exits 0. Directories
+are identified by (st_dev, st_ino), never by spelling (case, NFC/NFD on APFS, firmlinks, symlinks
+and ``..`` that no realpath canonicalizes; #289).
 
-Directories are identified by (st_dev, st_ino), never by spelling (case, NFC/NFD on APFS,
-firmlinks, symlinks and ``..`` that no string comparison or realpath canonicalizes; #289).
-
-1. **Listing.** Both write roots are listed without following a symlink; a directory closed to
-   its owner is opened (u+rwx) first, a closed regular file likewise (u+r, see bytecode), and a
-   directory still not listable and searchable (an ACL) is an error. Each directory becomes a
-   node with its entries as edges: subdirectories, and symlinks whose target (resolved by the
-   kernel relative to the link's own directory, after the whole listing has opened every closed
-   directory in the roots) is a directory. Every pyc-like name is reported, so is every other
-   regular file that starts with this Python's magic number (the run can rename bytecode; the
-   owner judges only those outside the checkout's committed files), so is every error, a
-   symlink's included unless its target is missing, closed (by then only outside the roots),
-   looping or through a file (link_target).
+1. **Listing.** Both write roots are listed without following a symlink; a closed directory is
+   opened (u+rwx) first, a closed regular file likewise (u+r), and a directory still not listable
+   and searchable (an ACL) is an error. Each directory becomes a node with its entries as edges:
+   subdirectories, and symlinks whose target (resolved by the kernel relative to the link's own
+   directory, after the listing has opened every closed directory) is a directory. Every pyc-like
+   name is reported, so is every other regular file that starts with this Python's magic number
+   (the run can rename bytecode; the owner judges only those outside the checkout's committed
+   files), so is every error (a symlink's: see link_target).
 2. **Graph.** When there is a pyc, the ancestors of the roots join as nodes (their entries are
-   edges too, so /var -> /private/var counts; the step down towards each root is an edge even
-   where an ancestor cannot be listed), and every node gets a ``..`` edge to the directory the
-   kernel gives for ``<node>/..``. Only nodes from which a pyc can be reached are walked.
-3. **Walk.** Python reads ``<P>/<D>/<name>`` as bytecode for a source in directory D, and the
-   lookup resolves P's part through these nodes. So the walk starts at every node P with D = /
-   and, for each edge, steps D by every entry of D whose name folds (NFD, case) to the edge's
-   name, or by ``..``; states are (node, D) by identity, so loops end. Where a node holding a pyc
-   is reached with D, each existing source in D the pyc's name can stand for (a stem cut at a dot
-   plus ``.py``, folded) is a hit, and when D was entered as ``__pycache__`` from the directory
-   P's side stood in (P = /), the sources of that directory too (the legacy layout). Only the
-   first spelling of D reached is kept, so one the kernel refuses as too long is an error.
+   edges too, so /var -> /private/var counts; the step down to each root is an edge even where an
+   ancestor cannot be listed), and every node gets a ``..`` edge to ``<node>/..``'s directory.
+   Only nodes from which a pyc can be reached are walked.
+3. **Walk.** Python reads ``<P>/<D>/<name>`` as bytecode for a source in directory D, resolving P
+   through these nodes. The walk starts at every node P with D = / and steps D, for each edge, by
+   every entry of D folding (NFD, case) to the edge's name, or by ``..``; states are (node, D) by
+   identity, so loops end. Where a node holding a pyc is reached with D, each existing source in
+   D its name can stand for (a stem cut at a dot plus ``.py``, folded) is a hit, as are the
+   sources of the directory P's side stood in when D was entered as ``__pycache__`` (P = /: the
+   legacy layout, read under no other prefix). A spelling of D too long to open is an error.
 
 Not modeled: a lookup leaving the run's directories and coming back by ``..`` or a system link."""
 
@@ -64,21 +59,33 @@ def ident(info):
 
 
 def bytecode(name, fd):
-    """Whether the regular file ``name`` in directory ``fd`` starts with this Python's magic
-    number. A regular file closed to its owner (an honest suite may leave one) is opened to it
-    (u+r, never through a link) first; one still unreadable raises: an error row, never "not
-    bytecode" (#1823). One removed before the run ended: the gap in bytecode_roots.py."""
+    """Whether regular file ``name`` in directory ``fd`` starts with this Python's magic number.
+    One closed to its owner (an honest suite may leave one) is opened first (open_file); one still
+    unreadable raises: an error row, never "not bytecode" (#1823)."""
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     try:
         handle = os.open(name, flags, dir_fd=fd)
     except PermissionError:
-        info = os.stat(name, dir_fd=fd, follow_symlinks=False)
-        if not NOFOLLOW or not stat.S_ISREG(info.st_mode):
-            raise
-        os.chmod(name, stat.S_IMODE(info.st_mode) | 0o400, dir_fd=fd, **NOFOLLOW)
+        open_file(name, fd, os.stat(name, dir_fd=fd, follow_symlinks=False))
         handle = os.open(name, flags, dir_fd=fd)
     try:
         return stat.S_ISREG(os.fstat(handle).st_mode) and os.read(handle, len(MAGIC)) == MAGIC
+    finally:
+        os.close(handle)
+
+
+def open_file(name, fd, info):
+    """u+r on regular ``name`` of ``fd`` (``info``'s inode, else an error), never via a link."""
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1 or not (HANDLE or NOFOLLOW):
+        raise PermissionError(errno.EACCES, "Permission denied")  # a hardlink's mode is not ours
+    want = stat.S_IMODE(info.st_mode) | 0o400
+    if not HANDLE:
+        return os.chmod(name, want, dir_fd=fd, **NOFOLLOW)  # macOS: the name, unfollowed
+    handle = os.open(name, HANDLE | os.O_NOFOLLOW, dir_fd=fd)
+    try:
+        if ident(os.fstat(handle)) != ident(info):
+            raise OSError(errno.ESTALE, "replaced while listed")
+        os.chmod(f"/proc/self/fd/{handle}", want)
     finally:
         os.close(handle)
 
@@ -108,11 +115,9 @@ def open_mode(path, want, info):
 def opened(path):
     """The identity of directory ``path`` (never a symlink), opened first if closed to its owner,
     and its entries as (name, kind, identity or None, error or None), kind "dir" (identity set),
-    "link", "bytecode" (a file starting as bytecode, not named like it) or "other". Listed
-    through a descriptor, so each entry is resolved relative to its own directory, not by the
-    listing's (possibly long) spelling. A directory that stays unlistable
-    or unsearchable after the mode fix (a macOS ACL survives it) is an error, so every directory
-    of the roots is both, or already a finding."""
+    "link", "bytecode" (a file starting as bytecode, not named like it) or "other". Listed through
+    a descriptor, so each entry is resolved relative to its own directory. A directory still
+    unlistable or unsearchable after the mode fix (a macOS ACL) is an error."""
     info = os.lstat(path)
     if not stat.S_ISDIR(info.st_mode):
         raise NotADirectoryError(errno.ENOTDIR, "not a directory")
@@ -145,12 +150,11 @@ def opened(path):
 
 def link_target(name, fd):
     """The identity of the directory the symlink ``name`` in directory ``fd`` resolves to, or None.
-    Resolved relative to its own directory, so no lookup reaching the link resolves with fewer
-    steps, and only after the whole listing (resolve_links), when every closed directory in the
-    roots has been opened and found searchable (opened). ENOENT (dangling), ENOTDIR (through a
-    file), ELOOP (a loop: any longer lookup through it loops too) and EACCES (now only a directory
-    outside the roots, which the run cannot change, closed to this user and so to the run's
-    Python) mean the run's Python cannot use it either; any other error is raised and reported."""
+    Resolved relative to its own directory (no lookup reaching the link resolves with fewer
+    steps), after the whole listing has opened every closed directory in the roots. ENOENT
+    (dangling), ENOTDIR (through a file), ELOOP (any longer lookup loops too) and EACCES (now
+    only outside the roots, closed to the run's Python too) mean it cannot use the link either;
+    any other error is raised and reported."""
     try:
         info = os.stat(name, dir_fd=fd)
     except OSError as exc:
@@ -171,9 +175,7 @@ def resolve_links(links, edges, out):
             continue
         try:
             if ident(os.fstat(fd)) != here:
-                out["errors"].extend(
-                    [index, rel, "replaced while listed"] for index, rel, _ in names
-                )
+                out["errors"].extend([i, rel, "replaced while listed"] for i, rel, _ in names)
                 continue
             for index, rel, name in names:
                 try:
@@ -370,8 +372,6 @@ def walk(nodes, edges, pycs, listed, max_states, out):
                 out["errors"].append([*where, exc.strerror or str(exc)])
                 continue
             for entry, step, target in matched:
-                # the legacy layout is read only without a prefix: where P's side and D are one
-                # directory (P = /), not at <P>/<D>/__pycache__ under any other prefix
                 pycache = fold(entry) == fold("__pycache__") and node == here
                 legacy = (path, here) if pycache else None
                 if (child, target, legacy) in seen:
