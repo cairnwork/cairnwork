@@ -65,11 +65,14 @@ def _with_agys_sweep(tmp_path, monkeypatch, dispatch, looks):
     worker = AgyWorker(dispatch=dispatch)
     reader = None if dispatch is None else _DoneReader()
     attempt_ = ("attempt-1", "", ("/clone",))
-    ended = _Ended(0, False)
-    ended.pid = 4_000_000  # a group the guard lets through (-1 is refused by safe_killpg)
+    ended = _ended()
     return copier, lambda: worker._await(
         ended, copier, reader, attempt_, io.BytesIO(), tmp_path / "log"
     )
+
+
+def _ended() -> _Ended:
+    return _Ended(0, False)
 
 
 @pytest.mark.parametrize("dispatch", WORKERS, ids=["raw-agy", "owner-dispatch", "worker-account"])
@@ -93,7 +96,7 @@ def test_a_clean_sweep_with_nothing_in_the_clone_completes(tmp_path, monkeypatch
     """The control: nothing tied by its working directory, two clean looks, a clean exit: agy's
     stop reports none in the clone and the run completes as before."""
     copier, run = _with_agys_sweep(tmp_path, monkeypatch, dispatch, [Sweep(listed=True)])
-    held, swept, by_cwd = agy_module._stop(_Ended(0, False), copier, "attempt-1", None, "", ("/c",))
+    held, swept, by_cwd = agy_module._stop(_ended(), copier, "attempt-1", None, "", ("/c",))
     assert (held, swept.gone, by_cwd) == (False, True, 0)
     run()
 
@@ -118,5 +121,5 @@ def test_a_process_tied_by_cwd_at_two_looks_counts_once(tmp_path, monkeypatch):
     copier, run = _with_agys_sweep(
         tmp_path, monkeypatch, None, [TIED_BY_CWD, TIED_BY_CWD, Sweep(listed=True)]
     )
-    held, swept, by_cwd = agy_module._stop(_Ended(0, False), copier, "attempt-1", None, "", ("/c",))
+    held, swept, by_cwd = agy_module._stop(_ended(), copier, "attempt-1", None, "", ("/c",))
     assert (held, swept.gone, by_cwd) == (False, True, 1)

@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from local_worker_fakes import WRAPPER, make_runs
+from local_worker_fakes import WRAPPER
 
 from cairnwork import confined, deny_channel, post_verified, safe_kill
 from cairnwork.workers import agy, agy_dispatch
@@ -175,9 +175,10 @@ def test_local_worker_wrapper_already_refuses_slash_as_run_root(tmp_path):
     """Audit item 1 did not hold: "/" is not a run root (no tag name, not directly in RUNS).
     Pinned with `status`, which never signals anything: require_run_root runs before every action
     (sweep included), so a regressed guard cannot make this test kill a process. cwd is tmp_path."""
+    (tmp_path / "runs").mkdir()  # an empty runs dir: "/" is refused before anything is read
     env = dict(
         os.environ,
-        CAIRNWORK_LOCAL_WORKER_RUNS=str(make_runs(tmp_path)),
+        CAIRNWORK_LOCAL_WORKER_RUNS=str(tmp_path / "runs"),
         CAIRNWORK_LOCAL_WORKER_PYROOT=sys.base_prefix,
     )
     args: list[Any] = ["/bin/sh", str(WRAPPER), "status", "/"]
