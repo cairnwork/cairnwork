@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import cairnwork.survivor_argv as sa
 import cairnwork.verifier_account as va
+import cairnwork.verifier_escape as ve
 import cairnwork.verifier_seen as vs
 
 PS = "  10     1 S      01:02 /usr/bin/python3.13\n  11    10 Z+     00:03 sleep\n"
@@ -247,7 +248,7 @@ def _acct_rows(monkeypatch, before, main, rows):
         va.VerifierAccount, "_real_paths", lambda s, pids: {p: (1.0, EXEMPT) for p in pids}
     )
     monkeypatch.setattr(vs.sys, "platform", "darwin")
-    monkeypatch.setattr(vs.verifier_escape, "is_exempt", lambda path, ppid: path == EXEMPT)
+    monkeypatch.setattr(ve, "is_exempt", lambda path, ppid: path == EXEMPT)
     return va.VerifierAccount(user="x", root=Path("/tmp/none")).reap(main)
 
 
