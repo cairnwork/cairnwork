@@ -53,6 +53,7 @@ from collections.abc import Container
 from pathlib import Path
 
 from cairnwork.deferred_aliases import class_aliases
+from cairnwork.deferred_imports import imported_names
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
@@ -111,7 +112,9 @@ def _members(
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
     subclass (a base named ``*TestCase``, or an earlier class that is one); and its marks: the
     class less its ``test*`` methods, with what it reads in turn, so each base class defined
-    earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979)."""
+    earlier in the file too (pytest applies their marks along the MRO, #925, #968, #979).
+    #1833: a base bound only by one top-level import (``reach.imported``) is read as a possible
+    test-case base and pulls in no earlier class; any other unresolved base may be any of them."""
     methods = {
         item.name: ast.dump(item) + reach(item.decorator_list)
         for item in node.body
@@ -185,21 +188,14 @@ class _Reach:
         self._dumps: dict[int, str] = {}
         self._found: dict[frozenset[str], str] = {}
         self._read: dict[int, list[str]] = {}
-        rest, rebound = [], set()
-        self.imported: set[str] = set()  # #1833: bound by an import and by nothing else
+        rest = []
+        self.imported = imported_names(tree)  # #1833
         for stmt in tree.body:
             names = _binds(stmt)
-            if isinstance(stmt, (ast.Import, ast.ImportFrom)):
-                self.imported |= names
-            else:
-                rebound |= names | {
-                    n.id for n in ast.walk(stmt) if isinstance(n, ast.Name) and n.ctx is ast.Store
-                }
             for name in names:
                 self._by_name.setdefault(name, []).append(stmt)
             if not names or _for_every_test(stmt):
                 rest.append(stmt)
-        self.imported -= rebound
         self.module = self(rest)
 
     def __call__(self, nodes: list) -> str:
