@@ -10,6 +10,7 @@ construction is tested in test_seatbelt_profile.py and test_bwrap_probe.py.
 import sys
 
 import pytest
+from adopt_helpers import adopt_started_in_test
 from conftest import commit_change, git
 from fixture_tree import reach_env, world_base
 
@@ -172,7 +173,7 @@ def test_child_cannot_rewrite_its_log_through_stdout(project, tmp_path):
 
 
 @pytest.mark.sandbox
-def test_a_process_that_leaves_the_group_is_contained(project, tmp_path):
+def test_a_process_that_leaves_the_group_is_contained(project, tmp_path, monkeypatch):
     """A child that escapes the run's process group (start_new_session) must not outlive
     the run and do work. The backends reach that end differently: Seatbelt cannot reap an
     escaped session, so it sweeps the survivor by its run token and fails the run (so a
@@ -192,6 +193,7 @@ def test_a_process_that_leaves_the_group_is_contained(project, tmp_path):
         "def test_spawn():\n"
         f"    subprocess.Popen([sys.executable, '-c', {child!r}], start_new_session=True)\n"
     )
+    adopt_started_in_test(monkeypatch, tmp_path)  # Seatbelt: swept child
     result = verify(project, tmp_path, {"tests/test_daemon.py": code}, "tests/test_daemon.py")
     backend = cairnwork_sandbox.platform_backend()
     if backend is not None and backend.name == "seatbelt":

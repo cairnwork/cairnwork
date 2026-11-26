@@ -173,7 +173,8 @@ def _racing_account(monkeypatch, survives_kills=1):
     monkeypatch.setattr(va.VerifierAccount, "_list", listed)
     monkeypatch.setattr(va.VerifierAccount, "_real_paths", real_paths)
     monkeypatch.setattr(ve, "apple_signed", lambda path: path == DAEMON)
-    monkeypatch.setattr(va.subprocess, "run", run)
+    monkeypatch.setattr(va.subprocess, "run", run)  # no signal is sent: kill is this fake
+    monkeypatch.setattr(ve, "kill_target_ok", lambda user: True)  # "x" is no real account (#1849)
     return va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter")), table, kills
 
 
