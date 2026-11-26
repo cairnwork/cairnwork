@@ -240,3 +240,40 @@ def test_a_path_helper_that_hits_the_cap_is_unknown_so_refused(monkeypatch):
 
     acct = _helper_account(monkeypatch, run)
     assert acct._escaped_count(time.monotonic() + 0.5, attempts=1) == -1
+
+
+class _Honest:
+    """Like the real ``_list``: -1 once the budget it is given is spent; each recount costs a bit
+    of the fake clock; ``leave_at`` (seconds after the start) is when the child is gone."""
+
+    def __init__(self, clock, residents, leave_at=None, main=1):
+        self.clock, self.residents, self.main = clock, residents, main
+        self.start, self.leave_at, self.calls = clock["now"], leave_at, 0
+
+    def _escaped_count(self, deadline, attempts=1):
+        self.calls += 1
+        self.clock["now"] += 0.01
+        if deadline - self.clock["now"] <= 0:
+            return -1
+        gone = self.leave_at is not None and self.clock["now"] - self.start >= self.leave_at
+        return self.main if gone else self.main + self.residents
+
+
+@pytest.mark.parametrize(("main_alive", "residents"), [(True, 2), (True, 1), (False, 1)])
+def test_a_resident_that_never_leaves_keeps_its_real_count_at_the_cap(
+    monkeypatch, main_alive, residents
+):
+    clock = _fake_clock(monkeypatch)
+    account = _Honest(clock, residents, main=1 if main_alive else 0)
+    main = vg.Main(1, lambda: main_alive)
+    before, taken, _ = vg.settle(account, 1 + residents, main, clock["now"] + 120.0)
+    assert before - taken == residents  # the true count, not an "unknown" that replaced it
+    assert clock["now"] - account.start <= vg.GRACE_SECONDS + 0.1
+
+
+@pytest.mark.parametrize("leave_at", [0.1, 1.0, 1.8, 1.95])
+def test_a_child_that_leaves_before_the_cap_is_not_refused(monkeypatch, leave_at):
+    clock = _fake_clock(monkeypatch)
+    account = _Honest(clock, 1, leave_at=leave_at)
+    before, taken, _ = vg.settle(account, 2, vg.Main(1, lambda: True), clock["now"] + 120.0)
+    assert before - taken == 0
