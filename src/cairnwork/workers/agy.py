@@ -87,7 +87,7 @@ HIDDEN_TESTS = """- The tests that will judge your fix are not in this repositor
 """
 
 
-Attempt = tuple[str, str, tuple[str, ...], tuple]  # name, boot mark, run dirs, (roots, since)
+Attempt = tuple  # name, boot mark, run dirs[, (roots, since)]
 
 
 class AgyWorkerError(Exception):
@@ -188,9 +188,7 @@ class AgyWorker:
         try:  # nothing between fdopen and a started process may leak the log
             mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
             roots = (os.path.realpath(workdir.parent),)  # the clone root the run declares (#1849)
-            dirs = proc_cwd.scope(
-                [workdir], roots, resolve=True
-            )  # now (#578); ValueError: no start
+            dirs = proc_cwd.entry_dirs(workdir, roots)  # now (#578); ValueError: no start
             scope = (roots, proc_cwd.run_mark())  # the mark is taken before the start (#1849)
             process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
                 argv,
@@ -253,7 +251,8 @@ class AgyWorker:
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
-            name, mark, dirs, scope = attempt
+            name, mark, dirs, *rest = attempt
+            scope = rest[0] if rest else ((), None)  # no scope: the cwd sweep stays off
             active = sys.exception()  # e.g. ask_to_stop failing: it must stay the error raised
             try:
                 held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs, scope)
@@ -361,7 +360,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
 
 
 def _stop(
-    process, copier, attempt: str, reader=None, mark: str = "", dirs=(), scope=((), None)
+    process, copier, attempt: str, reader=None, mark: str = "", dirs=(), scope: tuple = ((), None)
 ) -> tuple[bool, Sweep, int]:
     """Kill agy's group and anything it started outside it that still carries the attempt
     marker; return three values: whether something still holds agy's output pipe, the sweep,

@@ -71,9 +71,10 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
     guard.mkdir()
     report_guard.install_plugin(guard)
     guard.chmod(0o750)
+    ini = supervisor / "pytest.ini"
     settings = pytest_config.verifier_settings(inp.repo, inp.base, inp.pythonpath)
     plugins = pytest_config.installed_plugins(inp.interpreter)
-    (ini := supervisor / "pytest.ini").write_bytes(settings.ini_text(checkout, plugins))
+    ini.write_bytes(settings.ini_text(checkout, plugins))
     bootstrap = supervisor / "audit_bootstrap.py"
     shutil.copyfile(audit_bootstrap.__file__, bootstrap)
     bootstrap.chmod(0o444)
@@ -119,8 +120,7 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
     )
     profile_path = supervisor / "profile.sb"
     profile_path.write_bytes(profile.text.encode())
-    log = run_dir / "pytest.log"
-    code = None
+    log, code = run_dir / "pytest.log", None
     try:
         with mask_recheck.guard(backend, profile):  # #353, #1681: a run whose masks moved is void
             code, timed_out, _survivors = confined.execute(

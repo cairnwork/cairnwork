@@ -39,8 +39,9 @@ def recorder(monkeypatch, tmp_path):  # tmp_path first: it is made before gettem
     monkeypatch.setattr(subprocess, "run", record("run"))
     monkeypatch.setattr(subprocess, "Popen", record("Popen"))
     monkeypatch.setattr(proc_cwd, "_MACOS", True)
+    monkeypatch.setattr(proc_cwd, "_DARWIN", True)  # the temp-dir shape is enforced as on macOS
     monkeypatch.setattr(tempfile, "gettempdir", lambda: TEMP)
-    monkeypatch.setenv("HOME", HOME)
+    monkeypatch.setattr(proc_cwd, "_home", lambda: HOME)
 
 
 def _no_signal():

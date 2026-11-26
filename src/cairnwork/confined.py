@@ -38,13 +38,13 @@ def execute(
     """Run in a new process group; the parent copies output into log_path (the child
     never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671, a
     callable polled with the wait, collect_stop.py) ends the wait early: the run is then killed
-    like any other and the early end is not a timeout. ``cwd`` must be inside the user's private
-    temp dir or a ``scope_roots`` entry (the caller's run root), else ValueError (#1849)."""
+    like any other and the early end is not a timeout. On macOS ``cwd`` must be inside the private
+    temp dir or a ``scope_roots`` entry (the run root), else ValueError (#1849)."""
     token = env.get(RUN_TOKEN_VAR)
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
-    dirs = proc_cwd.scope([cwd], scope_roots, resolve=True) if cwd is not None else ()  # now (#578)
-    since = proc_cwd.run_mark()  # a process that began before this is not the run's (#1849)
+    dirs = proc_cwd.entry_dirs(cwd, scope_roots) if cwd is not None else ()  # now (#578)
+    since = proc_cwd.run_mark()  # a process older than this is not the run's (#1849)
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
     with os.fdopen(fd, "wb") as log:
@@ -221,7 +221,8 @@ def sweep_marked(
     ``cwd_dirs`` (macOS): an attempt's run directories or a run's checkout, as realpaths taken
     before the run could swap one for a symlink (#578); an owner process whose environment macOS
     withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working directory is inside one;
-    one that left them is not found (proc_cwd). Empty: no extra reads."""
+    one that left them is not found (proc_cwd). Empty: no extra reads.
+    """
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
     processes = _processes_with_environment()
@@ -236,11 +237,9 @@ def sweep_marked(
     seen: dict[int, str] = {}
     killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker, seen)
     plain = [r for r in ours if r[3] is not None and marker not in r[3]] if cwd_dirs else []
-    by_cwd = (
-        proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen, cwd_roots, cwd_since)
-        if cwd_dirs
-        else ([], [], 0)
-    )
+    by_cwd: tuple = ([], [], 0)
+    if cwd_dirs:
+        by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen, cwd_roots, cwd_since)
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
     late = _kill_marked([r for r in hidden if r[3] is not None], marker, seen)
     killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2] + by_cwd[2]
