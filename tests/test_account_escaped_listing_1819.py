@@ -127,7 +127,10 @@ def test_merged_listing_is_bounded_and_reasons_not_repeated():
     one = sa.Survivors(1, ("sleep",) * 5, ("account-escaped",))
     two = sa.Survivors(1, ("sh",) * 5, ("account-escaped",))
     both = one + two
-    assert len(both.argv) == sa.MAX_LISTED and both.reasons == ("account-escaped",)
+    assert len(both.argv) == sa.MAX_LISTED and both.reasons == (
+        "account-escaped",
+        "listing=incomplete",  # #1851: the cut is now said; the reason is still not repeated
+    )
 
 
 def test_a_three_digit_day_age_is_shown(monkeypatch):

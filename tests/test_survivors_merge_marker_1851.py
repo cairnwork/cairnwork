@@ -46,3 +46,9 @@ def test_the_marker_survives_a_later_merge():
     full = Survivors(MAX_LISTED, _rows(MAX_LISTED)) + Survivors(1, _rows(1, "q"))
     assert MARK in (full + Survivors(0)).reasons
     assert (full + Survivors(0)).reasons.count(MARK) == 1
+
+
+def test_a_marked_full_list_merged_with_a_non_empty_one_keeps_one_marker():
+    full = Survivors(MAX_LISTED, _rows(MAX_LISTED)) + Survivors(1, _rows(1, "q"))
+    again = full + Survivors(2, _rows(2, "r"))
+    assert again.reasons.count(MARK) == 1
