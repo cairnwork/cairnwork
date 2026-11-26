@@ -73,7 +73,7 @@ owner_uid_guard() {   # $1 = worker uid
       # A name the caller gave us (OWNER argument, SUDO_USER) that does not resolve means we cannot
       # compare its uid: fail closed. Only the stat-derived candidate (the last, taken from $RUNS,
       # which may be missing or unreadable) is skipped when its owner cannot be resolved.
-      [[ "$cand" == "$OWNER" || "$cand" == "${SUDO_USER:-}" ]] && die "cannot resolve the owner '$cand' to a uid; not killing by uid"
+      [[ "$cand" == "$OWNER" || "$cand" == "${SUDO_USER:-}" ]] && die "cannot resolve the owner '${cand//$'\n'/ }' to a uid; not killing by uid"
       continue
     fi
     seen=1
@@ -81,8 +81,12 @@ owner_uid_guard() {   # $1 = worker uid
   done
   (( seen )) || die "cannot tell who the owner is (pass the owner username); not killing by uid"
 }
-if dscl . -read "/Users/$WORKER" UniqueID >/dev/null 2>&1; then
-  WUID=$(dscl . -read "/Users/$WORKER" UniqueID | awk '{print $2}')
+# Gate on the ACCOUNT, not on its UniqueID: a missing account has nothing to stop and the script goes
+# on; an account that exists but whose UniqueID cannot be read must die here, before any later step
+# (the account delete in step 4 would otherwise still run).
+if dscl . -read "/Users/$WORKER" >/dev/null 2>&1; then
+  WUID_RAW=$(dscl . -read "/Users/$WORKER" UniqueID 2>/dev/null) || die "worker account exists but its uid cannot be read"
+  WUID=$(print -r -- "$WUID_RAW" | awk '{print $2}')
   [[ "$WUID" == <-> ]] || die "cannot read the worker uid"
   (( WUID > 0 )) || die "worker uid is 0"
   owner_uid_guard "$WUID"
