@@ -15,6 +15,7 @@ import stat
 from pathlib import Path
 from typing import Any
 
+from cairnwork import present
 from cairnwork.issue_task import RequestUnreadable
 from cairnwork.ownership import OWNER, BindResult, OwnershipError, OwnershipLedger, new_task_id
 from cairnwork.pipeline import TaskSpec
@@ -185,8 +186,16 @@ def check_requests(state: Path) -> None:
     (#466): those tasks' requests are gone, which prepare() must not hide by making it anew. With
     no ledger or an empty one nothing is lost, so prepare() creates it. Read-only."""
     requests, ledger = state / "requests", state / "ownership.sqlite"
-    if (requests.is_dir() and not requests.is_symlink()) or not ledger.exists():
-        return
+    asked = "the requests directory"
+    try:  # only "not found" is absent: any other error may hide a bound task (#1823)
+        if present.is_dir(requests, follow=False):
+            return
+        asked = "the ownership ledger"
+        if not present.exists(ledger):
+            return
+    except OSError as exc:
+        why = exc.strerror or (os.strerror(exc.errno) if exc.errno else type(exc).__name__)
+        raise IntakeRefused("BAD_STATE", f"cannot check {asked} in {state}: {why}") from exc
     try:
         uri = f"{ledger.absolute().as_uri()}?mode=ro"
         with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:

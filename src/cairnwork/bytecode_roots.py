@@ -55,6 +55,9 @@ the verifier account are the boundary. The same goes for the magic number: the r
 change it in-process too, and bytecode with neither a pyc-like name nor this magic number is not
 identified. An honest file outside the checkout that starts with this magic number under
 another name (a temporary ``x.pyc.<n>`` left by a killed write) fails the run.
+
+A regular file closed to its owner (mode 0, left by an honest suite) is opened first (u+r), as a
+closed directory is, and read; only a file that stays unopenable is an error row (#1823).
 """
 
 from __future__ import annotations
