@@ -68,13 +68,17 @@ _XUNIT = frozenset({"setup_module", "teardown_module", "setup_function", "teardo
                     "setUpModule", "tearDownModule", "setup", "teardown"})  # fmt: skip
 
 
-def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
+def test_functions(
+    tree: ast.Module, *, imported: bool = True
+) -> tuple[dict[str, str], frozenset[str]]:
     """(node id -> ``ast.dump`` of its function, the ``Test*`` classes pytest does not collect);
-    a node id is ``name`` or ``Class::name``, without the file."""
+    a node id is ``name`` or ``Class::name``, without the file. ``imported=False`` reads a base
+    bound by an import as main did (#1833: no own ids for the class): the reading of the base
+    commit, so an id only the wider reading gives never cancels a new id of the test commit."""
     functions: dict[str, str] = {}
     classes: dict[str, _Class] = {}
     uncollected: set[str] = set()
-    reach = _Reach(tree)
+    reach = _Reach(tree, imported)
     aliases = class_aliases(tree.body)
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
@@ -215,12 +219,12 @@ class _Reach:
     dumped once and each set of names followed once, so a file costs about its size, not its
     size times its tests (#979 r1)."""
 
-    def __init__(self, tree: ast.Module) -> None:
+    def __init__(self, tree: ast.Module, imported: bool = True) -> None:
         self._by_name: dict[str, list[ast.stmt]] = {}
         self._dumps: dict[int, str] = {}
         self._found: dict[frozenset[str], str] = {}
         self._read: dict[int, list[str]] = {}
-        self.imported = imported_names(tree)  # #1833
+        self.imported = imported_names(tree) if imported else frozenset()  # #1833
         self.referenced = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
         rest = []
         for stmt in tree.body:

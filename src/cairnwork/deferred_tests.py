@@ -191,7 +191,7 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     for path in paths:
         if not path.endswith(".py"):
             continue
-        before = _test_functions(repo, f"{base}:{path}")
+        before = _test_functions(repo, f"{base}:{path}", imported=False)  # #1833: main's reading
         tree = _tree(repo, f"{test_commit}:{path}") or _EMPTY
         after, uncollected = test_functions(tree)
         old = _tree(repo, f"{base}:{path}") or _EMPTY
@@ -247,10 +247,13 @@ def _named(node: str, targets: frozenset[str]) -> bool:
     return any("::".join(parts[:i]) in targets for i in range(2, len(parts) + 1))
 
 
-def _test_functions(repo: Path, blob: str, *, present: bool = False) -> dict[str, str]:
-    """``present``: the file is known to exist, so a failed read is a refusal, not a new file."""
+def _test_functions(
+    repo: Path, blob: str, *, present: bool = False, imported: bool = True
+) -> dict[str, str]:
+    """``present``: the file is known to exist, so a failed read is a refusal, not a new file.
+    ``imported=False``: read an imported base as main did (see ``test_functions``)."""
     tree = _tree(repo, blob, present=present)
-    return test_functions(tree)[0] if tree is not None else {}
+    return test_functions(tree, imported=imported)[0] if tree is not None else {}
 
 
 def _tree(repo: Path, blob: str, *, present: bool = False) -> ast.Module | None:
