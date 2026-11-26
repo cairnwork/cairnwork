@@ -6,12 +6,18 @@ import ast
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
 from cairnwork import deferred_base_hint, pipeline_judge
 from cairnwork import deferred_tests as dt
 from cairnwork.deferred_base_hint import base_hint, unread_classes
+
+
+def cast_any(value: Any) -> Any:
+    return value
+
 
 TOP = "class I(Base):\n    def test_x(self):\n        assert 1\n"
 IMPORTS = [
@@ -161,7 +167,7 @@ def _judge(monkeypatch, repos, comparison, source, *, with_hint=True):
     if not with_hint:  # main's text
         monkeypatch.setattr(pj, "base_hint", lambda *_: "")
     try:
-        got = pj.tests_with_teeth(task, (), result, ctx)
+        got = pj.tests_with_teeth(task, (), result, cast_any(ctx))
     except (dt.TestCommitRejected, dt.BaseUncomparable) as exc:
         comp = getattr(exc, "comparison", None)
         return type(exc).__name__, getattr(exc, "code", comp and comp.code), str(exc)
