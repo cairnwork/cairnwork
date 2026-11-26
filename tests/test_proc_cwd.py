@@ -1,7 +1,6 @@
 """#301: proc_cwd ties an owner process whose environment macOS withholds to an attempt by its
 working directory. ``attempt_dirs`` and the KERN_PROCARGS2 parser are platform-neutral; the
-process readers answer None off macOS. No environment or argument of a real process is read
-here beyond a count."""
+process readers answer None off macOS. No environment of a real process is read beyond a count."""
 
 import os
 import subprocess
@@ -206,7 +205,8 @@ def test_an_empty_argv0_platform_binary_is_tied_by_its_cwd(tmp_path):
         assert proc_cwd._platform_binary(child.pid) is True
         assert proc_cwd.environment_withheld(child.pid) is True
         row = (child.pid, child.pid, os.getuid(), set())
-        assert proc_cwd.kill_withheld_in([row], (where,), os.getuid()) == ([child.pid], [], 0)
+        found = proc_cwd.kill_withheld_in([row], (where,), os.getuid(), since=0.0)
+        assert found == ([child.pid], [], 0)
         assert child.wait(timeout=10) == -9
     finally:
         if child.poll() is None:
@@ -266,7 +266,7 @@ def test_kill_withheld_in_keeps_its_own_guards(tmp_path, monkeypatch, why):
         else:
             monkeypatch.setattr(proc_cwd, "_MACOS", False)
             row = (child.pid, child.pid, uid, set())
-        assert proc_cwd.kill_withheld_in([row], (str(tmp_path),), uid) == ([], [], 0)
+        assert proc_cwd.kill_withheld_in([row], (str(tmp_path),), uid, since=0.0) == ([], [], 0)
         assert child.poll() is None
     finally:
         child.kill()
@@ -291,7 +291,7 @@ def test_a_pid_whose_start_time_changed_is_not_killed(
     monkeypatch.setattr(proc_cwd, "_started", lambda pid: next(answers))
     try:
         row = (child.pid, child.pid, os.getuid(), set())
-        found = proc_cwd.kill_withheld_in([row], (str(tmp_path),), os.getuid())
+        found = proc_cwd.kill_withheld_in([row], (str(tmp_path),), os.getuid(), since=0.0)
         assert found == ([], [], vanished)
         assert child.poll() is None
     finally:
@@ -392,7 +392,8 @@ def test_a_crashed_blackbox_runs_cwd_only_leftover_is_killed(tmp_path):
             pytest.skip(f"/bin/sleep's environment is not withheld here ({withheld!r})")
         dirs = proc_cwd.attempt_dirs([root], ATTEMPT)
         row = (child.pid, child.pid, os.getuid(), set())
-        assert proc_cwd.kill_withheld_in([row], dirs, os.getuid()) == ([child.pid], [], 0)
+        found = proc_cwd.kill_withheld_in([row], dirs, os.getuid(), since=0.0)
+        assert found == ([child.pid], [], 0)
         assert child.wait(timeout=10) == -9
     finally:
         child.kill()

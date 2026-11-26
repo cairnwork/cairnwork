@@ -28,7 +28,10 @@ import os
 import re
 import signal
 import stat
+import struct
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 from cairnwork import survivor_argv
@@ -209,6 +212,89 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(found))
 
 
+_TEMP_SHAPE = re.compile(r"^/private/var/folders/[^/]+/[^/]+/T$", re.IGNORECASE)
+_VERIFIER_BASE = "/users/shared/cairnwork"  # verifier_account's macOS base (casefolded)
+
+
+class OutOfScope(ValueError):
+    """A well-formed path (or root) outside what a sweep may touch; kill_withheld_in then
+    sweeps nothing, confined.execute and agy refuse to start (a malformed one is a plain
+    ValueError in all of them)."""
+
+
+def run_mark() -> float:
+    """The wall clock now, taken before a run starts: a process that began after it is the run's."""
+    return time.time()
+
+
+def _epoch(raw: bytes | None) -> float | None:
+    """``_started``'s bytes (pbi_start_tvsec, pbi_start_tvusec) as seconds; None if unreadable."""
+    if raw is None or len(raw) != 16:
+        return None
+    sec, usec = struct.unpack("<QQ", raw)
+    return sec + usec / 1e6
+
+
+def _temps() -> list[str]:
+    """The user's private temp dir. macOS: only ``/private/var/folders/<b>/<id>/T``, never the
+    shared ``/tmp`` or ``/var/tmp``; elsewhere (nothing is swept there) the temp dir as set."""
+    real = os.path.realpath(tempfile.gettempdir())
+    return [real] if not _MACOS or _TEMP_SHAPE.match(real) else []
+
+
+def _canon(item) -> str:
+    """One path as an absolute spelling without "." or ".." parts, or ValueError. str, bytes and
+    PathLike alike; the sweep is scoped by what this returns, never by a second reading."""
+    text = os.fsdecode(os.fspath(item))
+    parts = text.split("/")
+    if not text.startswith("/") or any(p in (".", "..") for p in parts):
+        raise ValueError(f"sweep directory must be absolute without . or ..: {text!r}")
+    return "/" + "/".join(p for p in parts if p)
+
+
+def _below(path: str, top: str, depth: int = 1) -> bool:
+    """Whether ``path`` is at least ``depth`` levels below ``top`` (case-insensitive: APFS)."""
+    low, base = path.casefold(), top.casefold().rstrip("/")
+    return low.startswith(base + "/") and len(low[len(base) :].split("/")) > depth
+
+
+def _root_ok(root: str) -> bool:
+    """A declared root is itself narrow: inside the private temp dir, three levels below the
+    user's home (so never home, ``~/workspace`` or ``~/workspace/<repo>``), or inside the verifier
+    account's base."""
+    home = os.path.realpath(os.path.expanduser("~"))
+    return (
+        any(_below(root, t) for t in _temps())
+        or (home not in ("", "/") and _below(root, home, 3))
+        or _below(root, _VERIFIER_BASE)
+    )
+
+
+def _collection(value, what: str) -> tuple:
+    if isinstance(value, (str, bytes, bytearray)) or not hasattr(value, "__iter__"):
+        raise ValueError(f"sweep {what} must be a collection of paths, not one path")
+    return tuple(value)  # a one-shot iterable is read once
+
+
+def scope(dirs, roots=(), resolve: bool = False) -> tuple[str, ...]:
+    """The sweep directories, checked and returned as ONE tuple the caller then uses (a check on
+    one value and a kill on another was the gap): each must be strictly inside the user's
+    private temp dir or inside a ``roots`` entry the caller declared (itself narrow, see
+    ``_root_ok``); anything else (a lone str or bytes, a relative path, "..", a path that
+    resolves elsewhere) raises ValueError (OutOfScope when only the place is wrong). The spelling
+    and the realpath must both be inside. ``resolve``: return the realpaths (before the run)."""
+    given = tuple(_canon(d) for d in _collection(dirs, "directories"))
+    tops = tuple(os.path.realpath(_canon(r)) for r in _collection(roots, "roots"))
+    if any(not _root_ok(r) for r in tops):
+        raise OutOfScope("sweep root is not a narrow run root")
+    real = tuple(os.path.realpath(d) for d in given)  # a link out of a root is judged by its target
+    temps = _temps()
+    for path in {*real, *given}:
+        if not (any(_below(path, t) for t in temps) or any(_below(path, r) for r in tops)):
+            raise OutOfScope(f"sweep directory is not inside a declared run root: {path!r}")
+    return real if resolve else given
+
+
 def _inside(cwd: str | None, dirs: list[str]) -> bool:
     """Whether the working directory the process reports, or its realpath now, is inside one of
     ``dirs`` (#599): a leftover may since have made the reported path resolve elsewhere. The
@@ -229,7 +315,9 @@ def _inside(cwd: str | None, dirs: list[str]) -> bool:
     return False
 
 
-def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[int], int]:
+def kill_withheld_in(
+    rows, dirs, mine: int, seen=None, roots=(), since: float | None = None
+) -> tuple[list[int], list[int], int]:
     """SIGKILL each of the owner's (``mine``) readable rows whose environment is withheld and
     whose working directory is inside one of ``dirs``; (killed pids, refused pids, how many had
     exited before the kill). ``dirs`` must be realpaths taken before the run started, while its
@@ -244,18 +332,28 @@ def kill_withheld_in(rows, dirs, mine: int, seen=None) -> tuple[list[int], list[
     ``confirm_gone`` needs another clean look (#546). A start time unreadable at the first read is
     not counted: any process of the owner that ended after the listing reads so, and counting
     those kept a busy host from ever showing the attempt gone. ``seen``: gets each killed process's
-    allow-listed argv prefix, read just before the kill (#814, survivor_argv)."""
+    allow-listed argv prefix, read just before the kill (#814, survivor_argv). ``roots``: the run
+    roots the caller declares; ``dirs`` must be inside the user's private temp dir or one of
+    them (``scope``): anything else sweeps nothing, a malformed ``dirs`` raises ValueError, both
+    before any signal (#1849). ``since`` (``run_mark``, taken before the run started): only a
+    process that started after it is killed; without it nothing is swept (fail closed)."""
     killed: list[int] = []
     denied: list[int] = []
     vanished = 0
-    if not dirs or not _MACOS:
+    if not _MACOS:
         return killed, denied, vanished
-    tops = [os.fspath(d) for d in dirs]  # realpaths taken earlier: not followed again (#578)
+    try:
+        tops = list(scope(dirs, roots))  # one value for check and use; never followed again (#578)
+    except OutOfScope:
+        return killed, denied, vanished
+    if not tops or since is None:
+        return killed, denied, vanished
     for pid, _pgid, uid, environment in rows:
         if uid != mine or environment is None:
             continue
         started = _started(pid)
-        if started is None:  # gone since the listing (or unreadable): nothing ties it to them
+        began = _epoch(started)
+        if began is None or began <= since:  # gone, unreadable, or older than the run: not its own
             continue
         withheld = environment_withheld(pid)
         if withheld is False:

@@ -159,11 +159,12 @@ def _settle(
     dispatched = [e.detail for e in phases if e.phase == "DISPATCHED" and e.detail]
     roots, other = _owner_roots(run_root, dispatched)
     dirs = _cwd_dirs(roots, account, attempt_id)  # before the cleanup below removes them
+    cwd_roots = [*roots, *([account.run_root] if account is not None else [])]  # #1849
 
     def look():  # the worker account it ran as (pipeline.py journals it) and the verifier's
         return cleanup_sweep.look_at(
             sweep_marked, (ATTEMPT_ENV, attempt_id), (worker, cleanup_sweep.user_of(account)),
-            dispatched=mark, cwd_dirs=dirs)  # fmt: skip
+            dispatched=mark, cwd_dirs=dirs, cwd_roots=cwd_roots)  # fmt: skip
 
     first = look()
     swept = confirm_gone(first, look)

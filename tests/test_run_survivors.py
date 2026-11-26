@@ -119,7 +119,7 @@ def test_the_real_process_table_shows_a_fresh_token_gone(tmp_path):
     hidden processes that predate the mark, as execute takes it, or withheld ones outside the
     fresh checkout do not count)."""
     token, mark = f"{TOKEN}-{os.getpid()}", proc_start.boot_mark()
-    assert confined._sweep_survivors(token, -1, (os.path.realpath(tmp_path),), mark) == 0
+    assert confined._sweep_survivors(token, -1, (os.path.realpath(tmp_path),), mark, since=0.0) == 0
 
 
 def test_execute_sweeps_with_the_checkout_and_the_start_mark(monkeypatch, tmp_path):
@@ -164,7 +164,7 @@ def test_a_marked_platform_binary_in_the_checkout_counts(own_platform_sleep, mon
     child, checkout = own_platform_sleep
     rows = _only(child.pid, monkeypatch)
     assert MARKER not in (rows[0][3] or ())
-    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),)) == 1
+    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),), since=0.0) == 1
     assert child.wait(timeout=10) == -9  # the sweep ended it
 
 
@@ -226,7 +226,7 @@ def test_a_platform_binary_in_the_checkout_counts_where_its_environment_reads_wi
     withheld_here(child.pid)
     rows = [(child.pid, child.pid, ME, set(child.args))]  # as ps shows it: no environment
     monkeypatch.setattr(confined, "_processes_with_environment", lambda: list(rows))
-    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),)) == 1
+    assert confined._sweep_survivors(TOKEN, -1, (os.path.realpath(checkout),), since=0.0) == 1
     assert child.wait(timeout=10) == -9  # the sweep ended it
 
 
@@ -278,7 +278,7 @@ def test_a_reported_directory_that_now_resolves_elsewhere_counts(tmp_path, cwd_c
     outside.mkdir()
     os.symlink(outside, os.path.join(top, "sub"))
     where(os.path.join(top, "sub"))
-    found = proc_cwd.kill_withheld_in([(child.pid, child.pid, ME, set())], (top,), ME)
+    found = proc_cwd.kill_withheld_in([(child.pid, child.pid, ME, set())], (top,), ME, since=0.0)
     assert found == ([child.pid], [], 0)
     assert child.wait(timeout=10) == -9
 
@@ -294,6 +294,6 @@ def test_a_reported_directory_inside_only_by_its_spelling_is_left_alone(
     os.mkdir(top)
     (tmp_path / "outside").mkdir()
     where(spelling.format(top=top))
-    found = proc_cwd.kill_withheld_in([(child.pid, child.pid, ME, set())], (top,), ME)
+    found = proc_cwd.kill_withheld_in([(child.pid, child.pid, ME, set())], (top,), ME, since=0.0)
     assert found == ([], [], 0)
     assert child.poll() is None

@@ -75,5 +75,6 @@ def look_for(sweep: Callable[..., Sweep], intake, attempt_id: str, mark: str):
     except Exception:  # noqa: BLE001 - refused account: the leftover step reports it
         account = None
     dirs = run_dirs(attempt_id, intake.run_root, account)
+    extra = [account.run_root] if account is not None and hasattr(account, "run_root") else []
     return partial(sweep, ATTEMPT_ENV, attempt_id, dispatched=mark, cwd_dirs=dirs,
-                   account=user_of(account))  # fmt: skip
+                   cwd_roots=[intake.run_root, *extra], account=user_of(account))  # fmt: skip

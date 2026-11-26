@@ -71,10 +71,9 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
     guard.mkdir()
     report_guard.install_plugin(guard)
     guard.chmod(0o750)
-    ini = supervisor / "pytest.ini"
     settings = pytest_config.verifier_settings(inp.repo, inp.base, inp.pythonpath)
     plugins = pytest_config.installed_plugins(inp.interpreter)
-    ini.write_bytes(settings.ini_text(checkout, plugins))
+    (ini := supervisor / "pytest.ini").write_bytes(settings.ini_text(checkout, plugins))
     bootstrap = supervisor / "audit_bootstrap.py"
     shutil.copyfile(audit_bootstrap.__file__, bootstrap)
     bootstrap.chmod(0o444)
@@ -131,6 +130,7 @@ def run_pytest(inp: ShadowInput, checkout: Path, out: Path, timeout: int = 120) 
                 timeout,
                 log,
                 pass_fds=(*channel.pass_fds, write_fd),
+                scope_roots=(checkout.parent.parent,),
             )
         if timed_out:
             code = None

@@ -32,7 +32,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import proc_start, provenance
+from cairnwork import proc_cwd, proc_start, provenance
 from cairnwork.confined import ATTEMPT_ENV, Sweep, confirm_gone, copy_capped, sweep_marked
 from cairnwork.unswept import WorkerMayLive
 from cairnwork.workers import agy_dispatch, agy_receipts
@@ -87,7 +87,7 @@ HIDDEN_TESTS = """- The tests that will judge your fix are not in this repositor
 """
 
 
-Attempt = tuple[str, str, tuple[str, ...]]  # (attempt name, boot mark, run dirs for the sweep)
+Attempt = tuple[str, str, tuple[str, ...], tuple]  # name, boot mark, run dirs, (roots, since)
 
 
 class AgyWorkerError(Exception):
@@ -187,7 +187,11 @@ class AgyWorker:
             raise
         try:  # nothing between fdopen and a started process may leak the log
             mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-            dirs = (os.path.realpath(workdir),)  # now: the run may swap it (#578, #537)
+            roots = (os.path.realpath(workdir.parent),)  # the clone root the run declares (#1849)
+            dirs = proc_cwd.scope(
+                [workdir], roots, resolve=True
+            )  # now (#578); ValueError: no start
+            scope = (roots, proc_cwd.run_mark())  # the mark is taken before the start (#1849)
             process = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
                 argv,
                 cwd=workdir,
@@ -211,13 +215,13 @@ class AgyWorker:
             copier.start()
         except BaseException as start_error:  # noqa: BLE001 - cleanup keeps it
             try:
-                held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs)
+                held, _, _ = _stop(process, None, workdir.name, reader, mark, dirs, scope)
             except BaseException as stop_error:  # noqa: BLE001 - cleanup keeps start_error
                 fail_cleanup(start_error, stop_error, process, log, (reader,))
             if not held:
                 close_streams(process, log)
             raise
-        self._await(process, copier, reader, (workdir.name, mark, dirs), log, log_path)
+        self._await(process, copier, reader, (workdir.name, mark, dirs, scope), log, log_path)
         return self.provenance(reader)
 
     def provenance(self, reader) -> dict[str, str]:
@@ -249,10 +253,10 @@ class AgyWorker:
             if dispatch is not None:
                 agy_dispatch.ask_to_stop(process)  # lets it release its lease and sweep itself
         finally:
-            name, mark, dirs = attempt
+            name, mark, dirs, scope = attempt
             active = sys.exception()  # e.g. ask_to_stop failing: it must stay the error raised
             try:
-                held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs)
+                held, swept, by_cwd = _stop(process, copier, name, reader, mark, dirs, scope)
                 if not held:  # else the copier still reads: leave both open rather than hang
                     close_streams(process, log)
             except BaseException as cleanup_error:  # noqa: BLE001 - the in-flight error leaves
@@ -357,7 +361,7 @@ def _settle_worker_run(dispatch, reader, process, held, timed_out, log_path) -> 
 
 
 def _stop(
-    process, copier, attempt: str, reader=None, mark: str = "", dirs: tuple[str, ...] = ()
+    process, copier, attempt: str, reader=None, mark: str = "", dirs=(), scope=((), None)
 ) -> tuple[bool, Sweep, int]:
     """Kill agy's group and anything it started outside it that still carries the attempt
     marker; return three values: whether something still holds agy's output pipe, the sweep,
@@ -366,7 +370,8 @@ def _stop(
     takeover.py): else the run may live and is fenced (#63 (a)). ``mark``: the
     boot mark taken before agy started; a hidden process older than it is not the run's, as in
     takeover.py (Linux; "" elsewhere, where none is hidden for good). ``dirs``: the clone's
-    realpath taken before agy started; on macOS a process whose environment is withheld is tied
+    realpath taken before agy started; ``scope``: its (roots, start mark). On macOS a process whose
+    environment is withheld is tied
     to the attempt when its working directory is inside it, as in confined.execute (#537); those
     count once each, at any look (the run is then fenced, even once they are gone)."""
     try:
@@ -378,9 +383,8 @@ def _stop(
     by_cwd: set[int] = set()
 
     def look() -> Sweep:  # each process tied by its cwd counts once, as confined._sweep_survivors
-        one = sweep_marked(
-            ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark, cwd_dirs=dirs
-        )
+        cwd = {"cwd_dirs": dirs, "cwd_roots": scope[0], "cwd_since": scope[1]}
+        one = sweep_marked(ATTEMPT_ENV, attempt, skip_group=process.pid, dispatched=mark, **cwd)
         by_cwd.update(pid for pid, why in one.held_by if why == "cwd")
         return one
 

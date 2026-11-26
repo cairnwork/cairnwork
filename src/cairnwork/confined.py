@@ -33,18 +33,20 @@ PS_TIMEOUT_SECONDS = 60
 
 
 def execute(
-    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None
+    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None, scope_roots=()
 ) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
     never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671, a
     callable polled with the wait, collect_stop.py) ends the wait early: the run is then killed
-    like any other and the early end is not a timeout."""
+    like any other and the early end is not a timeout. ``cwd`` must be inside the user's private
+    temp dir or a ``scope_roots`` entry (the caller's run root), else ValueError (#1849)."""
     token = env.get(RUN_TOKEN_VAR)
     if not token:
         raise ValueError(f"{RUN_TOKEN_VAR} must be set so escaped processes can be found")
+    dirs = proc_cwd.scope([cwd], scope_roots, resolve=True) if cwd is not None else ()  # now (#578)
+    since = proc_cwd.run_mark()  # a process that began before this is not the run's (#1849)
     fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     mark = proc_start.boot_mark()  # before the start: what predates it is not the run's
-    dirs = (os.path.realpath(cwd),) if cwd is not None else ()  # now: the run may swap it (#578)
     with os.fdopen(fd, "wb") as log:
         process = subprocess.Popen(  # noqa: S603 - argv built from an allow-listed spec, no shell
             argv,
@@ -75,7 +77,7 @@ def execute(
                     reap()
             with suppress(subprocess.TimeoutExpired):  # bounded only after an interrupt
                 process.wait(timeout=None if finished else 10)
-        survivors = _sweep_survivors(token, process.pid, dirs, mark) + escaped
+        survivors = _sweep_survivors(token, process.pid, dirs, mark, scope_roots, since) + escaped
         copier.join(timeout=10)  # a descendant that escaped the group may hold the pipe
         if copier.is_alive():
             survivors = survivor_argv.Survivors(
@@ -108,14 +110,15 @@ def _wait_unreaped(pid: int, timeout: float | None, stop=None) -> bool:
 
 
 def _sweep_survivors(
-    token: str, group: int, dirs: tuple[str, ...] = (), mark: str = ""
+    token: str, group: int, dirs: tuple[str, ...] = (), mark: str = "", roots=(), since=None
 ) -> survivor_argv.Survivors:
     """Each process found at any look counts once; none only after two clean looks (#578, #599)."""
     found: set[int] = set()
     argv: dict[int, str] = {}  # #814: what each found process ran, read before its kill
 
     def look() -> Sweep:  # confirm_gone, as recovery: one exited, a child it left is seen next
-        one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, cwd_dirs=dirs)
+        cwd = {"cwd_dirs": dirs, "cwd_roots": roots, "cwd_since": since}
+        one = sweep_marked(RUN_TOKEN_VAR, token, skip_group=group, dispatched=mark, **cwd)
         found.update(pid for pid, why in one.held_by if why in ("marked", "cwd"))
         argv.update(one.argv)
         return one
@@ -201,6 +204,8 @@ def sweep_marked(
     account: str | None = None,
     dispatched: str = "",
     cwd_dirs: tuple[str, ...] = (),
+    cwd_roots=(),
+    cwd_since: float | None = None,
 ) -> Sweep:
     """SIGKILL the owner's processes whose environment holds var=value, and say what was seen.
 
@@ -216,8 +221,7 @@ def sweep_marked(
     ``cwd_dirs`` (macOS): an attempt's run directories or a run's checkout, as realpaths taken
     before the run could swap one for a symlink (#578); an owner process whose environment macOS
     withholds (/bin/sh, /bin/sleep) is killed ("cwd") when its working directory is inside one;
-    one that left them is not found (proc_cwd). Empty: no extra reads.
-    """
+    one that left them is not found (proc_cwd). Empty: no extra reads."""
     marker = f"{var}={value}"
     theirs = _account_uid(account) if account else None
     processes = _processes_with_environment()
@@ -232,7 +236,11 @@ def sweep_marked(
     seen: dict[int, str] = {}
     killed, denied, vanished = _kill_marked([r for r in ours if r[3] is not None], marker, seen)
     plain = [r for r in ours if r[3] is not None and marker not in r[3]] if cwd_dirs else []
-    by_cwd = proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen) if cwd_dirs else ([], [], 0)
+    by_cwd = (
+        proc_cwd.kill_withheld_in(plain, cwd_dirs, mine, seen, cwd_roots, cwd_since)
+        if cwd_dirs
+        else ([], [], 0)
+    )
     hidden = _resolve_hidden([r for r in ours if r[3] is None], mine)
     late = _kill_marked([r for r in hidden if r[3] is not None], marker, seen)
     killed, denied, vanished = killed + late[0], denied + late[1], vanished + late[2] + by_cwd[2]
