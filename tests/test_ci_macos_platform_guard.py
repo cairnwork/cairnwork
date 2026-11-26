@@ -43,6 +43,7 @@ SRC_PLATFORM_MODULES = {
     "src/cairnwork/survivor_argv.py",
     "src/cairnwork/verifier_account.py",
     "src/cairnwork/verifier_escape.py",
+    "src/cairnwork/verifier_seen.py",
     "src/cairnwork/verifier_select.py",
     "src/cairnwork_sandbox/__init__.py",
 }
