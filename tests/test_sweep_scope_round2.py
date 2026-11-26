@@ -187,7 +187,7 @@ def test_an_undeclared_temp_subtree_is_refused(monkeypatch, tmp_path):
 
 
 def test_a_tmpdir_below_the_private_temp_dir_still_names_that_temp_dir(monkeypatch):
-    """A sealed run sets TMPDIR to a directory inside T (tests/pra1353_consume.py): T is the root."""
+    """A sealed run sets TMPDIR to a directory inside T: T is the root."""
     t = "/private/var/folders/ab/cdef12/T"
     monkeypatch.setattr(proc_cwd, "_MACOS", True)
     monkeypatch.setattr(proc_cwd, "_DARWIN", True)
