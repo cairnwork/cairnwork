@@ -11,6 +11,7 @@ import re
 import subprocess
 from pathlib import Path
 
+from cairnwork import present
 from cairnwork.gitcmd import GitCommandError, run_git
 
 ORIGIN = re.compile(r"https://github\.com/([^/:@\s]+/[^/:@\s]+)")
@@ -65,7 +66,7 @@ def require_on_main(clone: Path, base: str, *, fetch: bool = True) -> None:
 
 def refuse_grafts(clone: Path) -> None:
     grafts = Path(clone, run_git(clone, "rev-parse", "--git-path", "info/grafts").strip())
-    if grafts.exists():
+    if present.exists(grafts):  # an unreadable path is raised, never read as absent (#1823)
         raise RuntimeError("LINEAGE_GRAFTS_REFUSED: .git/info/grafts rewrites history")
 
 

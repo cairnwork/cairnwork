@@ -18,6 +18,7 @@ import os
 import stat
 from pathlib import Path
 
+from cairnwork import present
 from cairnwork.gitcmd import GitCommandError, hash_blob, run_git
 from cairnwork.provenance import trailers
 from cairnwork.textclean import shown
@@ -46,7 +47,7 @@ def snapshot_candidate(
     """Commit the clone's allowed files on top of the base, then check the result."""
     require_refs_unchanged(repo, attempt)
     index = attempt.path.parent / f"{attempt.attempt_id}.index"
-    if index.exists() or index.is_symlink():
+    if present.exists(index, follow=False):  # the link itself; unreadable is raised (#1823)
         raise CandidateRejected("UNREADABLE_WORKTREE", f"{shown(index)} already exists")
     try:
         run_git(repo, "read-tree", attempt.base_commit, index_file=index)

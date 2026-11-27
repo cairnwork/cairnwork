@@ -75,6 +75,15 @@ def _build_envelope(
     )
 
 
+def _is_there(path: Path) -> bool:
+    """Only "not found" means absent: pathlib's exists() hides every OSError on 3.14 (#1823)."""
+    try:
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def _write_private(path: Path, envelope: dict[str, Any]) -> None:
     """Create the bundle exclusively with mode 0600."""
     data = canonical_json(envelope).encode("utf-8")
@@ -158,7 +167,7 @@ def _statement_step(args: argparse.Namespace, bundle: Path, pubkey: _Key) -> _St
         pubkey.path.write_text(public_key_pem(pubkey.public))
         if bundle.is_symlink():
             raise BundleError(f"bundle path is a symlink: {bundle}", code="BUNDLE_EXISTS")
-        if bundle.exists():
+        if _is_there(bundle):
             if _existing_is_ours(bundle, args, pubkey, verified):
                 return _Step("statement", "OK", "reused existing bundle")
             raise BundleError(_exists_message(bundle), code="BUNDLE_EXISTS")
