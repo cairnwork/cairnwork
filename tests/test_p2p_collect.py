@@ -68,6 +68,7 @@ def test_a_test_the_ast_loses_but_pytest_collects_still_guards(repo, tmp_path, g
         assert result.status == "COMPLETED" and result.verified, result.reason
     else:  # main: verified (the AST said "removed"), the regression in test_sub unseen
         assert result.status == "FAILED" and not result.verified
+        assert "tests/test_calc.py::Checks::test_sub" in result.p2p["rerun"]["failed"]
 
 
 @pytest.mark.parametrize("good", [True, False], ids=["fix", "breaks-sub"])
