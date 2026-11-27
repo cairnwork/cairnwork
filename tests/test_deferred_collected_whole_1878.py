@@ -10,6 +10,7 @@ from conftest import commit_change
 from test_deferred_opaque_changed_1878 import HEAD, TEST, VISIBLE, _argv
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
+from cairnwork import pipeline_judge
 from cairnwork.collect_reader import Collected
 from cairnwork.deferred_collected import NONE
 from cairnwork.deferred_opaque import unlisted
@@ -120,7 +121,7 @@ def test_readable_class_node_target_fails_a_failing_changed_test(project, tmp_pa
     targets = _argv(NODE) + (("named", ("python3", "-m", "pytest", "-q", READABLE_NODES[name])),)
     result = run(project, tmp_path, base, commit, SeeingWorker(FIX), verifiers=targets)
     assert result.status == "FAILED"
-    assert not result.reason.startswith("DEFERRED_TESTS_"), result.reason
+    assert result.reason.startswith("CORE_FAILED_VERIFICATION"), result.reason
 
 
 def test_unlisted_names_files_whose_ids_are_unknown():
@@ -129,5 +130,36 @@ def test_unlisted_names_files_whose_ids_are_unknown():
     assert unlisted(Path("/no-repo"), "x", paths, got) == {"tests/a.py", "tests/b.py"}
 
 
-def test_unlisted_without_a_record_leaves_the_static_rule():
-    assert unlisted(Path("/no-repo"), "x", ("tests/a.py",), NONE) == frozenset()
+NO_ID = {  # review 2026-11-27 (round 3): no usable collected id for the changed file
+    "collect_failed": NONE,  # test commit and base probe both unreadable (_check returns NONE)
+    "zero_ids": Collected(("tests/test_other.py::test_x",)),  # a record, none for this file
+}
+
+
+@sandbox
+@pytest.mark.parametrize("record", NO_ID)
+def test_no_collected_id_for_a_changed_file_needs_whole(project, tmp_path, monkeypatch, record):
+    monkeypatch.setattr(
+        pipeline_judge.deferred_collected, "check_with_base", lambda *a, **k: NO_ID[record]
+    )
+    base, commit = _commits(project, ROUND2["builder_by_name"], 99)
+    result = run(project, tmp_path, base, commit, SeeingWorker(FIX), verifiers=_argv(NODE))
+    assert result.status == "FAILED"
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_TARGETED"), result.reason
+
+
+@sandbox
+@pytest.mark.parametrize("record", NO_ID)
+def test_no_collected_id_whole_file_verifier_still_decides(project, tmp_path, monkeypatch, record):
+    monkeypatch.setattr(
+        pipeline_judge.deferred_collected, "check_with_base", lambda *a, **k: NO_ID[record]
+    )
+    base, commit = _commits(project, ROUND2["builder_by_name"], 2)
+    result = run(project, tmp_path, base, commit, SeeingWorker(FIX), verifiers=_argv(TEST))
+    assert result.status == "COMPLETED", result.reason
+
+
+def test_unlisted_names_a_changed_file_without_a_collected_id():
+    got = Collected(("tests/b.py::test_x",))
+    assert unlisted(Path("/no-repo"), "x", ("tests/a.py",), got) == {"tests/a.py"}
+    assert unlisted(Path("/no-repo"), "x", ("tests/a.py",), NONE) == {"tests/a.py"}
