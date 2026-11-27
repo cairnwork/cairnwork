@@ -70,3 +70,68 @@ def test_a_harmless_mapping_is_not_refused_by_the_joined_scan() -> None:
 def test_a_value_that_starts_with_punctuation_is_refused(lead: str, sep: str) -> None:
     assert Scanner().scan(f"password{sep}{lead}Abcdefgh12345")
     assert Scanner().scan(f"--password {lead}Abcdefgh12345")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'headers["Authorization"] = "Basic {_B64}"',
+        f"headers['Authorization'] = 'Basic {_B64}'",
+        f"'Authorization' => 'Basic {_B64}'",
+        f'req.Header.Set("Authorization", "Basic {_B64}")',
+        f"xhr.setRequestHeader('Authorization', 'Basic {_B64}')",
+        f"('Authorization', 'Basic {_B64}')",
+    ],
+)
+def test_basic_authorization_in_header_api_shapes_is_refused(text: str) -> None:
+    assert Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Authorization: Basic <base64 of user:pass>",
+        'req.Header.Set("Content-Type", "application/json")',
+    ],
+)
+def test_header_api_prose_is_not_refused(text: str) -> None:
+    assert not Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"password": "hunter22"},
+        {"api_key": "Abc12345"},
+        {"password": {"value": "Qwertyuiop12345x"}},
+        {"password": ["Qwertyuiop12345x"]},
+        {"headers": {"Authorization": [f"Basic {_B64}"]}},
+        ["Authorization", f"Basic {_B64}"],
+    ],
+)
+def test_nested_and_short_credential_mappings_are_refused(item: object) -> None:
+    assert _blocked([{"role": "user", "content": [item]}])
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "Please plan the next step",
+        [{"key": "next"}],
+        [{"max_tokens": "4096"}],
+        [{"type": "text", "text": "ordinary words"}],
+    ],
+)
+def test_ordinary_content_is_not_refused(content: object) -> None:
+    assert not _blocked([{"role": "user", "content": content}])
+
+
+def test_a_cyclic_message_fails_closed_as_scanner_error() -> None:
+    message: dict = {"role": "user"}
+    message["content"] = message
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=1)
+    )
+    outcome = _Client(_Transport(), Scanner())._send(request, [message], planner=True)  # type: ignore[arg-type]
+    assert outcome[3] == Reason.PAUSE_SECRET_BLOCKED
+    assert outcome[4] == ("scanner_error",)
