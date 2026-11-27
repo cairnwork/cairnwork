@@ -18,10 +18,14 @@ _SAFE_NAMES = frozenset(
     "idempotencykey nexttoken pagetoken".split()
 )
 _SUFFIX = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$"
+)  # the words before #1886: their behaviour is frozen
+_SUFFIX_NEW = re.compile(
     r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)$"
 )
 _QUALIFIER = re.compile(r"(?:value|hash|old|new|prod|dev|test|base|pem|v\d+)$")
-_WORD = re.compile(
+_WORD = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)")
+_WORD_NEW = re.compile(
     r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)"
 )
 _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
@@ -62,7 +66,9 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "scheme_auth",
         re.compile(
             r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?"
-            r"(?:digest|token|api-?key)\s+[A-Za-z0-9+/._~=\"-]{6,}"
+            r"(?:[\"'`]?(?:token|api[-_]?key)[\"'`]?\s+[A-Za-z0-9+/._~=\"-]{6,}"
+            r"|[\"'`]?digest[\"'`]?\s+(?:[A-Za-z][A-Za-z0-9_-]*\s*=\s*[\"'`]?[A-Za-z0-9+/._~=-]+"
+            r"|[A-Za-z0-9+/._~=\"-]{6,}))"
         ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
@@ -124,6 +130,8 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
         variants = tuple(dict.fromkeys((text, cleaned, normalized, legacy)))  # equal ones once
         if name in {"api_key", "bearer_token"}:
             variants += (compact, wrapped)
+        elif name == "scheme_auth":
+            variants += (wrapped,)  # a header name split over lines (#1886)
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
     low_compact = _PEM_BLANKS.sub("", normalized.lower())
@@ -139,14 +147,21 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
             (text, joined, cleaned, cleaned_joined, legacy, legacy_joined, spaced)
         ):
             for match in pattern.finditer(candidate):
-                word = _secret_word(match.group("name"))
-                value = match.group("value")
+                name, value = match.group("name"), match.group("value")
+                word = _secret_word(name)  # exactly the pre-#1886 judgement
+                if word is None:
+                    word = _secret_word(name, new=True)  # a #1886 word, only when no old one hits
+                    if (
+                        word is not None
+                        and _is_placeholder(value)
+                        and not _has_fallback(candidate, match)
+                    ):
+                        continue
                 if (
                     word is None
                     or (word == "pwd" and _is_path(value))
                     or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
                     or _is_short_word_with_trailing_punctuation(value)
-                    or (_NEW_WORD.fullmatch(word) and _is_placeholder(value))  # #1886, #1239
                 ):
                     continue
                 hits.append(category)
@@ -171,7 +186,7 @@ def _forms(word: str) -> tuple[str, ...]:
     return word, word.removesuffix("s"), word.removesuffix("es")
 
 
-def _secret_word(name: str) -> str | None:
+def _secret_word(name: str, new: bool = False) -> str | None:
     """The credential word a name carries, or None. Plural and trailing digits are ignored. The
     glued name must end in the word; a separator or camelCase piece may be the word anywhere
     (token_value, DB_PASSWORD_PROD). The closed ordinary-word list exempts whole names."""
@@ -180,13 +195,13 @@ def _secret_word(name: str) -> str | None:
     if any(f in _SAFE_NAMES for f in forms):
         return None
     for form in (glued, *forms):
-        found = _SUFFIX.search(_QUALIFIER.sub("", form, count=1))
+        found = (_SUFFIX_NEW if new else _SUFFIX).search(_QUALIFIER.sub("", form, count=1))
         if found:
             return found.group()
     for part in re.split(r"[-_]", name):
         for piece in _PIECE.findall(part):
             for form in _forms(piece.lower()):
-                if _WORD.fullmatch(form):
+                if (_WORD_NEW if new else _WORD).fullmatch(form):
                     return form
     return None
 
@@ -212,16 +227,38 @@ class Scanner:
         return scan(text, self.names)
 
 
-# words added in #1886; their placeholder values are exempt so #1239 is not repeated for them
-_NEW_WORD = re.compile(r"auth|credentials?|creds?|bearer|userinfo|session|cookie")
+# the #1886 words alone (no pre-#1886 word in the name) exempt placeholder values (#1239)
+
+
+def _has_fallback(text: str, match: re.Match[str]) -> bool:
+    """A literal fallback follows the value: ``or "..."``, ``|| "..."``, ``?? "..."``."""
+    return re.match(r"[ \t]*(?:or\b|\|\||\?\?|\|(?!\|))", text[match.end("value") :]) is not None
+
+
+def _is_plain_name(v: str) -> bool:
+    """<name>, ${NAME} or $NAME with a short identifier that does not look like a real value."""
+    found = re.fullmatch(
+        r"<([A-Za-z0-9_-]{1,32})>|\$\{([A-Za-z_]\w{0,31})\}|\$([A-Za-z_]\w{0,31})", v
+    )
+    if found is None:
+        return False
+    inner = next(g for g in found.groups() if g)
+    # 16+ characters mixing digits into one unbroken run read as a value, not a name
+    return not (
+        len(inner) >= 16 and any(c.isdigit() for c in inner) and not re.search(r"[_-]", inner)
+    )
 
 
 def _is_placeholder(value: str) -> bool:
     """<name>, ${NAME}, os.environ[...] / getenv(...) or a call such as load_credentials()."""
     v = value.strip("\"'`").rstrip(",;")
+    if value[:1] in "\"'`":  # a quoted string is a literal, never code
+        return _is_plain_name(v)
     return bool(
-        re.fullmatch(r"<[^<>\s]+>|\$\{[A-Za-z_]\w*\}|\$[A-Za-z_]\w*", v)
-        or re.fullmatch(r"(?:os\.environ\[.*\]|[\w.]*getenv\(.*\)|[A-Za-z_][\w.]*\(\))", v)
+        _is_plain_name(v)
+        or re.fullmatch(r"os\.environ(?:\.get)?[\[(]\s*[\"'][A-Za-z_]\w*[\"']\s*[\])]", v)
+        or re.fullmatch(r"(?:os\.)?getenv\(\s*[\"'][A-Za-z_]\w*[\"']\s*\)", v)
+        or re.fullmatch(r"[A-Za-z_][\w.]*\(\)", v)
     )
 
 
