@@ -279,6 +279,30 @@ def test_newer_pytest_config_forms_make_package_dir_a_root_1829(tmp_path, cfg_na
     assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""
 
 
+# Claude review at 89f276ea: pytest reads ini-style ``pythonpath`` and ``addopts`` with shlex, so
+# quotes and backslashes change the value the gate would see
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg"),
+    [
+        ("pytest.ini", '[pytest]\npythonpath = "pkg"\n'),
+        ("pytest.ini", "[pytest]\npythonpath = 'pkg'\n"),
+        ("pytest.ini", "[pytest]\npythonpath = p\\kg\n"),
+        ("pytest.ini", '[pytest]\npythonpath = "p"kg\n'),
+        ("pytest.ini", "[pytest]\npythonpath = './pkg'\n"),
+        ("tox.ini", '[pytest]\npythonpath = "pkg"\n'),
+        ("setup.cfg", "[tool:pytest]\npythonpath = 'pkg'\n"),
+        ("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = \"'pkg'\"\n"),
+        ("pytest.ini", "[pytest]\naddopts = '-'o pyth''onpath=pkg\n"),
+        ("pytest.ini", "[pytest]\naddopts = -qo pyth''onpath=pkg\n"),
+        ("pytest.ini", '[pytest]\naddopts = "--override-ini" pyth""onpath=pkg\n'),
+        ("pyproject.toml", "[tool.pytest.ini_options]\naddopts = \"-q'o' pyth''onpath=pkg\"\n"),
+    ],
+)
+def test_shell_quoted_config_values_are_untrusted_1829(tmp_path, cfg_name, cfg):
+    base = {**_PKG, cfg_name: cfg}
+    assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""
+
+
 @pytest.mark.parametrize(
     "marker",
     ["__init__.pyc", "__init__.so", "__init__.abi3.so", "__init__.cpython-314-darwin.so"],

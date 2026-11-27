@@ -204,6 +204,8 @@ def _toml_values(text: str) -> list[str]:
                 raise TypeError("pythonpath has a non-string item")
             if not isinstance(value, (str, list)):
                 raise TypeError("pythonpath has the wrong shape")
+            if isinstance(value, str):
+                _refuse_shell_quoting(value)
             out.extend(value.split() if isinstance(value, str) else value)
     return out
 
@@ -216,15 +218,27 @@ def _ini_values(text: str) -> list[str]:
         if parser.has_section(section):
             _refuse_override(parser.get(section, "addopts", fallback=None))
             for key in _PATH_KEYS:
-                out.extend(parser.get(section, key, fallback="").split())
+                value = parser.get(section, key, fallback="")
+                _refuse_shell_quoting(value)
+                out.extend(value.split())
     return out
 
 
 def _refuse_override(addopts: object) -> None:
     """An ``addopts`` that can override ``pythonpath`` (``-o``, ``--override-ini``) may name any
     directory: treated like an untrusted config."""
-    if addopts is not None and _OVERRIDE.search(str(addopts)):
-        raise ValueError("addopts may override pythonpath")
+    if addopts is not None:
+        _refuse_shell_quoting(str(addopts))
+        if _OVERRIDE.search(str(addopts)):
+            raise ValueError("addopts may override pythonpath")
+
+
+def _refuse_shell_quoting(value: str) -> None:
+    """pytest reads ini-style ``pythonpath`` and ``addopts`` with shlex, so quotes and
+    backslashes change what a word means; the gate reads plain words, so such a value is
+    untrusted rather than guessed."""
+    if any(c in value for c in "'\"\\"):
+        raise ValueError("config value uses shell quoting")
 
 
 def _startup_or_path_signal(repo, tree: dict[str, str]) -> bool:
