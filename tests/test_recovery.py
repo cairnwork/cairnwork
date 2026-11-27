@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from conftest import commit_change
+from recovery_wait import wait_for_sandboxed_pytest
 
 from cairnwork import runlock
 from cairnwork.journal import Journal
@@ -322,7 +323,7 @@ def test_sigkill_during_verification_kills_the_verifier_and_cleans_up(repo, tmp_
         if flight and any(e.phase == "VERIFYING" for e in journal.entries(flight[0].task_id)):
             break
         time.sleep(0.2)
-    time.sleep(3)  # let the sandboxed pytest start
+    wait_for_sandboxed_pytest(proc.pid)
     os.kill(proc.pid, signal.SIGKILL)
     proc.wait()
     decisions, _ = settle(tmp_path)
