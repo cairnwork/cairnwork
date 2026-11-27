@@ -127,7 +127,7 @@ def test_readable_class_node_target_fails_a_failing_changed_test(project, tmp_pa
 def test_unlisted_names_files_whose_ids_are_unknown():
     got = Collected((), ("tests/a.py",), ("tests/b.py",))
     paths = ("tests/a.py", "tests/b.py", "tests/c.py")
-    assert unlisted(Path("/no-repo"), "x", paths, got) == {"tests/a.py", "tests/b.py"}
+    assert unlisted(Path("/no-repo"), "x", paths, got) == set(paths)  # c.py: no id, unknown too
 
 
 NO_ID = {  # review 2026-11-27 (round 3): no usable collected id for the changed file

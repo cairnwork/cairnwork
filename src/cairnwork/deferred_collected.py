@@ -24,7 +24,7 @@ collects is not seen by ids: the AST comparison still decides it.
 #1878: the test commit's record is returned; the judge compares it with the static reader
 (deferred_opaque.unlisted) and wants each changed file where pytest collects an id the reader does
 not list, old or new, or whose ids are unknown, named whole (DEFERRED_TESTS_NOT_TARGETED). NONE
-(no record: nothing to compare) leaves the static rule (whole_file_required).
+(no record) leaves every changed file's ids unknown: each must be named whole (fail closed).
 """
 
 from __future__ import annotations

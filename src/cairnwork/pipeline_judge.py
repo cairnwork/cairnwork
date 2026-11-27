@@ -130,8 +130,8 @@ def tests_with_teeth(
         hint = (
             "name each such file, or each of its new or changed tests, as a verifier target; "
             "改了模組層或類別本體，請點名整個檔案; "
-            "a file holding a test Cairnwork cannot read must be named whole; "
-            "檔內有讀不到的測試時請點名整個檔案"
+            "a file holding a test Cairnwork cannot read, or where pytest listed none, must be"
+            " named whole; 檔內有讀不到的測試、或收集不到測試時，請點名整個檔案"
         )
         raise TestCommitRejected(
             "DEFERRED_TESTS_NOT_TARGETED", f"{len(missing)} test file(s); {hint}"

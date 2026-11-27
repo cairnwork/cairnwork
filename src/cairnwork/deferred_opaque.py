@@ -82,15 +82,18 @@ def unlisted(
 ) -> frozenset[str]:
     """#1878: the ``paths`` where pytest's collect-only run on the test commit (``collected``,
     deferred_collected) holds an id, parametrisation stripped, that ``test_functions`` of the test
-    commit's file does not list, or whose ids are unknown (a collector error or a skip). A test
+    commit's file does not list, or whose ids are unknown (a collector error or a skip, no id for
+    the file, no record at all: NONE). A test
     there may change through code the reader does not count as a test (a helper, a builder, a
     decorator), so no node target can be known to run it. pytest decides, not a list of shapes."""
     found = {*collected.error_files, *collected.skipped_files} & set(paths)
     ids = {_without_case(n) for n in collected.ids}
     for path in (p for p in paths if p.endswith(".py") and p not in found):
         mine = {n for n in ids if file_part(n) == path}
-        if mine:
-            listed, _ = test_functions(_tree(repo, f"{test_commit}:{path}") or _EMPTY)
-            if mine - {f"{path}::{name}" for name in listed}:
-                found.add(path)
+        if not mine:  # no usable id here (collection failed, or none for this file): unknown
+            found.add(path)
+            continue
+        listed, _ = test_functions(_tree(repo, f"{test_commit}:{path}") or _EMPTY)
+        if mine - {f"{path}::{name}" for name in listed}:
+            found.add(path)
     return frozenset(found)
