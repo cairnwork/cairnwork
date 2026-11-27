@@ -297,7 +297,7 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
             task.repo, attempt, candidate, task.allowed_files, python=verifier_interpreter(ctx)
         )
         env = None if task.test_commit else _base_env(task, result, ctx, source)
-        judged, test_files, binding = candidate, (), None
+        judged, test_files, binding, late = candidate, (), None, []
         if task.test_commit:
             _burn(intake, task.test_commit, record=True)  # before the tests are fetched
             mode = "bundle" if task.test_store and task.test_store.required else "auto"
@@ -305,12 +305,14 @@ def _judge_in(intake, task, specs, candidate, notary, result, ctx, *, source) ->
             intake.journal.record(result.task_id, result.attempt_id, "TEST_SOURCE", mode)
             # base runs: an account failure is no evidence (#234)
             with base_stage(ctx.account, ctx.python):
-                test_files = tests_with_teeth(task, specs, result, ctx, candidate)
+                test_files = tests_with_teeth(task, specs, result, ctx, candidate, late)
             judged = lay_tests_over(
                 task.repo, judged, task.test_commit, test_files, result.attempt_id, run_root
             )
         with base_stage(ctx.account, ctx.python):
             plan = p2p_for(task, specs, test_files, result, ctx)
+        if late:  # #1878: after P2P, whose refusals are more specific
+            raise late[0]
         binding = _binding(task, candidate, test_files, judged, plan) if task.test_commit else None
         result.candidate_commit = judged
         digest = request_digest(task.request() | {"candidate": candidate})

@@ -366,7 +366,8 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
                 # an account failure here: no evidence (#234)
                 with base_stage(ctx.account, ctx.python):
-                    test_files = tests_with_teeth(task, specs, result, ctx, judged)
+                    late: list[TestCommitRejected] = []
+                    test_files = tests_with_teeth(task, specs, result, ctx, judged, late)
                     judged = lay_tests_over(
                         task.repo,
                         judged,
@@ -377,6 +378,8 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                         provenance,
                     )
                     plan = p2p_for(task, specs, test_files, result, ctx)
+                    if late:  # #1878: after P2P, whose refusals are more specific
+                        raise late[0]
             except TestCommitRejected as exc:
                 result.reason = author_reason(exc, True)
                 return

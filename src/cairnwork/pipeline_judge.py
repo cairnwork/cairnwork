@@ -103,15 +103,26 @@ def _sealing_with_tests(task, ctx: VerifyContext, candidate: str) -> None:
         raise TestCommitRejected("TEST_COMMIT_UNSEALS_CANDIDATE", ", ".join(protected))
 
 
+def _not_targeted(missing) -> TestCommitRejected:
+    hint = (
+        "name each such file, or each of its new or changed tests, as a verifier target; "
+        "改了模組層或類別本體，請點名整個檔案; "
+        "a file holding a test Cairnwork cannot read, or where pytest listed none, must be"
+        " named whole; 檔內有讀不到的測試、或收集不到測試時，請點名整個檔案"
+    )
+    return TestCommitRejected("DEFERRED_TESTS_NOT_TARGETED", f"{len(missing)} test file(s); {hint}")
+
+
 def tests_with_teeth(
-    task, specs, result, ctx: VerifyContext, candidate: str | None = None
+    task, specs, result, ctx: VerifyContext, candidate: str | None = None, late=None
 ) -> tuple[str, ...]:
     """Check a task's deferred tests once the worker is done: plain test files on the
     base whose test cases really fail there. Returns their paths; raises TestCommitRejected
     when they do not (NO_TEETH), leave a test file's changes out of every verifier target
     (DEFERRED_TESTS_NOT_TARGETED) or were not all collected and run by the base run
     (DEFERRED_TESTS_NOT_RUN, #660), and BaseUncomparable when the base cannot tell (#234).
-    Callers judging a candidate pass it, so its paths meet the fetched tests (#386)."""
+    Callers judging a candidate pass it, so its paths meet the fetched tests (#386). A caller
+    passing a list as ``late`` gets #1878's whole-file refusal there, to raise after P2P plans."""
     check_roots_on_base(task.repo, task.base_commit, task.test_roots)  # before any base run
     ensure_test_commit(task.repo, task.test_commit, task.test_store, origin_url=task.origin_url)
     if candidate is not None:
@@ -126,16 +137,14 @@ def tests_with_teeth(
     whole = unlisted(task.repo, task.test_commit, judged, collected) | whole_file_required(
         task.repo, task.base_commit, task.test_commit, judged
     )  # #1878
+    named = tuple(named)
+    if missing := untargeted(judged, targets, named):
+        raise _not_targeted(missing)
     if missing := untargeted(judged, targets, named, whole):
-        hint = (
-            "name each such file, or each of its new or changed tests, as a verifier target; "
-            "改了模組層或類別本體，請點名整個檔案; "
-            "a file holding a test Cairnwork cannot read, or where pytest listed none, must be"
-            " named whole; 檔內有讀不到的測試、或收集不到測試時，請點名整個檔案"
-        )
-        raise TestCommitRejected(
-            "DEFERRED_TESTS_NOT_TARGETED", f"{len(missing)} test file(s); {hint}"
-        )
+        refusal = _not_targeted(missing)
+        if late is None:
+            raise refusal
+        late.append(refusal)  # #1878: P2P's more specific refusals (base tests dropped) go first
     # #796: a base run goes on after a collect error (never a collect-only spec): the other files
     # still run, and a module-level import of a name the fix adds can be told from other errors
     base = tuple(
