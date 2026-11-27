@@ -293,17 +293,15 @@ def _collection(value, what: str) -> tuple:  # one str or bytes is not a collect
 
 def scope(dirs, roots=(), resolve: bool = False) -> tuple[str, ...]:
     """The sweep directories, checked and returned as ONE tuple the caller then uses (a check on
-    one value and a kill on another was the gap): each, by spelling and by realpath, must be
-    strictly inside a ``roots`` entry the caller declared (itself narrow, ``_root_ok``); else
-    ValueError (OutOfScope when only the place is wrong; a lone str or bytes, a relative path or
-    ".." is plain). ``resolve``: return the realpaths (before the run)."""
+    one value and a kill on another was the gap): each, by realpath (and by spelling unless
+    ``resolve``), must be strictly inside a ``roots`` entry the caller declared (narrow,
+    ``_root_ok``); else ValueError (OutOfScope when only the place is wrong; a lone str or bytes,
+    a relative path or ".." is plain). ``resolve``: return the realpaths (before the run)."""
     given = tuple(_canon(d) for d in _collection(dirs, "directories"))
     tops = tuple(os.path.realpath(_canon(r)) for r in _collection(roots, "roots"))
     if any(not _root_ok(r) for r in tops):
         raise OutOfScope("sweep root is not a narrow run root")
     real = tuple(os.path.realpath(d) for d in given)  # a link out of a root is judged by its target
-    # #1876: ``resolve`` returns the realpaths, so only they are used and only they are judged; the
-    # given spelling is returned (and used) otherwise, so then both spellings must fit.
     for path in set(real) if resolve else {*real, *given}:
         if not any(_below(path, r) for r in tops):
             raise OutOfScope(f"sweep directory is not inside a declared run root: {path!r}")
