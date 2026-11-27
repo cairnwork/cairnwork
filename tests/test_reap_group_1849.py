@@ -40,16 +40,19 @@ class World:
         self.now += seconds
 
     def run(self, cmd, **kwargs):
-        if (
-            "pid=,ppid=,pgid=" not in cmd and "pid=,pgid=" not in cmd
-        ):  # the diagnostic's own ps (vs.before_kill): nothing to list
+        if not any(
+            f in cmd for f in ("pid=,ppid=", "pid=,ppid=,pgid=", "pid=,pgid=")
+        ):  # the diagnostic's own ps
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        self.group_calls += 1
+        wide = "pid=,ppid=,pgid=" in cmd
+        plain = "pid=,ppid=" in cmd and not wide  # the account's own (pid, ppid) listing
+        self.group_calls += 0 if plain else 1
         if self.rc == "raise":
             raise subprocess.TimeoutExpired("ps", 1)
-        wide = "pid=,ppid=,pgid=" in cmd
-        text = "".join(f"{r[0]} {1 if r[3:] else 0} {r[1]}\n" if wide else f"{r[0]} {r[1]}\n"
-                       for r in self.table())  # fmt: skip
+        text = "".join(
+            f"{r[0]} {1 if r[3:] else 0} {r[1]}\n" if wide
+            else f"{r[0]} {1 if r[3:] else 0}\n" if plain else f"{r[0]} {r[1]}\n"
+            for r in self.table())  # fmt: skip
         self.event()
         return SimpleNamespace(returncode=self.rc, stdout=text, stderr="")
 
@@ -59,14 +62,17 @@ def _acct(monkeypatch, rows, hook=None, first_count=None, **kw):
     world.rc, world.hook = kw.get("rc", 0), hook
     calls = []
 
+    real_count = va.VerifierAccount._escaped_count  # the real count, over the fake clock's table
+
     def escaped(self, d=None, attempts=1):
         calls.append(1)
-        out = first_count if first_count is not None and len(calls) == 1 else None
-        seen = len(world.counted())
-        world.event()
-        return seen if out is None else out
+        if first_count is not None and len(calls) == 1:
+            world.event()
+            return first_count
+        return real_count(self, d, attempts)
 
     monkeypatch.setattr(vg, "sys", SimpleNamespace(platform="darwin"))  # exemptions are on
+    monkeypatch.setattr(va, "sys", SimpleNamespace(platform="darwin"))  # ... in the real count too
     monkeypatch.setattr(va.VerifierAccount, "_real_paths", lambda self, pids: {
         p: ("1.000000", "/usr/sbin/distnoted") for p in pids})  # fmt: skip
     monkeypatch.setattr(ve_escape, "apple_signed", lambda path: True)
@@ -126,14 +132,15 @@ def test_one_bounded_ps_per_poll(monkeypatch):
     real = world.run
 
     def spy(cmd, **kwargs):
-        seen.append(kwargs.get("timeout"))
+        if "pid=,ppid=,pgid=" in cmd:  # the group's polls; the account's own count has its cap
+            seen.append(kwargs.get("timeout"))
         return real(cmd, **kwargs)
 
     monkeypatch.setattr(vg.subprocess, "run", spy)
     acct.reap(1, group=MAIN)
     group_polls = world.group_calls
     assert group_polls == len(world.sleeps) + 1
-    assert all(t is not None and 0 < t <= vg.PS_TIMEOUT_SECONDS for t in seen)
+    assert seen and all(t is not None and 0 < t <= vg.PS_TIMEOUT_SECONDS for t in seen)
 
 
 def test_the_wait_shares_the_probe_deadline(monkeypatch):
