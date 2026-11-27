@@ -17,9 +17,17 @@ _SAFE_NAMES = frozenset(
     "surpass keynote publickey primarykey sortkey partitionkey foreignkey cachekey "
     "idempotencykey nexttoken pagetoken".split()
 )
-_SUFFIX = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$")
+_SUFFIX = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$"
+)  # the words before #1886: their behaviour is frozen
+_SUFFIX_NEW = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)$"
+)
 _QUALIFIER = re.compile(r"(?:value|hash|old|new|prod|dev|test|base|pem|v\d+)$")
 _WORD = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)")
+_WORD_NEW = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)"
+)
 _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 # NAME_KEY=..., GITHUB_TOKEN: "...", "client_secret": "...", key => "...", TOKEN := ...
 # (separator = : => :=, optional quotes or backticks around name and value); the name must
@@ -51,6 +59,16 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "basic_auth",
         re.compile(
             r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?basic\s+[A-Za-z0-9+/]{8,}={0,2}"
+        ),
+    ),
+    # Digest, Token and ApiKey schemes (#1886): a value of 6+ characters, so <placeholder> passes
+    (
+        "scheme_auth",
+        re.compile(
+            r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?"
+            r"(?:[\"'`]?(?:token|api[-_]?key)[\"'`]?\s+[A-Za-z0-9+/._~=:\"-]{6,}"
+            r"|[\"'`]?digest[\"'`]?\s+(?:[A-Za-z][A-Za-z0-9_-]*\s*=\s*[\"'`]?[A-Za-z0-9+/._~=-]+"
+            r"|[A-Za-z0-9+/._~=\"-]{6,}))"
         ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
@@ -112,6 +130,9 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
         variants = tuple(dict.fromkeys((text, cleaned, normalized, legacy)))  # equal ones once
         if name in {"api_key", "bearer_token"}:
             variants += (compact, wrapped)
+        elif name == "scheme_auth":
+            # a header name split by any line break, also a lone CR, VT, FF, NEL, LS or PS (#1886)
+            variants += (wrapped, re.sub(r"[\r\n\v\f\x85\u2028\u2029][ \t]*", "", normalized))
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
     low_compact = _PEM_BLANKS.sub("", normalized.lower())
@@ -127,12 +148,22 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
             (text, joined, cleaned, cleaned_joined, legacy, legacy_joined, spaced)
         ):
             for match in pattern.finditer(candidate):
-                word = _secret_word(match.group("name"))
-                value = match.group("value")
+                name, value = match.group("name"), match.group("value")
+                word = _secret_word(name)  # exactly the pre-#1886 judgement
+                is_old = word is not None
+                if word is None:
+                    word = _secret_word(name, new=True)  # a #1886 word, only when no old one hits
+                    if (
+                        word is not None
+                        and _is_placeholder(value)
+                        and _only_closers_follow(candidate, match)
+                    ):
+                        continue
                 if (
                     word is None
                     or (word == "pwd" and _is_path(value))
-                    or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
+                    # old 16-char floor kept, for the pre-#1886 words only
+                    or (is_old and re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value))
                     or _is_short_word_with_trailing_punctuation(value)
                 ):
                     continue
@@ -158,7 +189,7 @@ def _forms(word: str) -> tuple[str, ...]:
     return word, word.removesuffix("s"), word.removesuffix("es")
 
 
-def _secret_word(name: str) -> str | None:
+def _secret_word(name: str, new: bool = False) -> str | None:
     """The credential word a name carries, or None. Plural and trailing digits are ignored. The
     glued name must end in the word; a separator or camelCase piece may be the word anywhere
     (token_value, DB_PASSWORD_PROD). The closed ordinary-word list exempts whole names."""
@@ -167,13 +198,13 @@ def _secret_word(name: str) -> str | None:
     if any(f in _SAFE_NAMES for f in forms):
         return None
     for form in (glued, *forms):
-        found = _SUFFIX.search(_QUALIFIER.sub("", form, count=1))
+        found = (_SUFFIX_NEW if new else _SUFFIX).search(_QUALIFIER.sub("", form, count=1))
         if found:
             return found.group()
     for part in re.split(r"[-_]", name):
         for piece in _PIECE.findall(part):
             for form in _forms(piece.lower()):
-                if _WORD.fullmatch(form):
+                if (_WORD_NEW if new else _WORD).fullmatch(form):
                     return form
     return None
 
@@ -197,6 +228,55 @@ class Scanner:
 
     def scan(self, text: str) -> list[str]:
         return scan(text, self.names)
+
+
+# the #1886 words alone (no pre-#1886 word in the name) exempt placeholder values (#1239)
+
+
+def _only_closers_follow(text: str, match: re.Match[str]) -> bool:
+    """Allow-list: after the value only blanks, closing ``,;)]}``, a ``#`` comment or the line
+    end may follow; any other code (operator, ``if``, ``\\`` continuation) voids the exemption."""
+    rest = re.split(r"[\r\n\v\f\x85\u2028\u2029]", text[match.end("value") :], maxsplit=1)[0]
+    return re.fullmatch(r"[ \t,;)\]}]*(?:#.*)?", rest) is not None
+
+
+def _is_plain_name(v: str) -> bool:
+    """<name>, ${NAME} or $NAME with a short identifier that does not look like a real value."""
+    found = re.fullmatch(
+        r"<([A-Za-z0-9_-]{1,32})>|\$\{([A-Za-z_]\w{0,31})\}|\$([A-Za-z_]\w{0,31})", v
+    )
+    if found is None:
+        return False
+    inner = next(g for g in found.groups() if g)
+    # 16+ characters mixing digits into one unbroken run read as a value, not a name
+    if len(inner) >= 16 and any(c.isdigit() for c in inner) and not re.search(r"[_-]", inner):
+        return False
+    # a segment of 8+ characters that mixes letters and digits, or is all digits, is a value
+    return not any(
+        len(seg) >= 8
+        and (seg.isdigit() or (any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)))
+        for seg in re.split(r"[_-]", inner)
+    )
+
+
+def _is_placeholder(value: str) -> bool:
+    """<name>, ${NAME}, os.environ[...] / getenv(...) or a call such as load_credentials()."""
+    v = value.strip("\"'`").rstrip(",;")
+    if value[:1] in "\"'`":  # a quoted string is a literal, never code
+        return _is_plain_name(v)
+    # closers glued to the value belong to the enclosing call or dict: f(cookie=os.getenv("C"))
+    return any(
+        _is_code_placeholder(v[: len(v) - n]) for n in range(len(v) - len(v.rstrip(")]}")) + 1)
+    )
+
+
+def _is_code_placeholder(v: str) -> bool:
+    return bool(
+        _is_plain_name(v)
+        or re.fullmatch(r"os\.environ(?:\.get)?[\[(]\s*[\"'][A-Za-z_]\w*[\"']\s*[\])]", v)
+        or re.fullmatch(r"(?:os\.)?getenv\(\s*[\"'][A-Za-z_]\w*[\"']\s*\)", v)
+        or re.fullmatch(r"[A-Za-z_][A-Za-z_.]{0,39}\(\)", v)
+    )
 
 
 def _is_short_word_with_trailing_punctuation(value: str) -> bool:
