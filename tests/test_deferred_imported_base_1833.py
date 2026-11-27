@@ -50,3 +50,10 @@ def test_an_imported_base_keeps_the_test_case_flag_of_an_earlier_class() -> None
         f"{_P}class UserApi(BaseTest):\n    def test_b(self):\n        pass\n"
     )
     assert "UserApi::test_b" in _ids(source)
+
+
+def test_a_conditional_star_import_keeps_the_conservative_reading() -> None:
+    source = (
+        f"import unittest\nfrom helpers import Base\nif FLAG:\n    from more import *\n{_P}{_I}"
+    )
+    assert {"P::test_a", "I::test_a", "I::test_b"} <= _ids(source)
