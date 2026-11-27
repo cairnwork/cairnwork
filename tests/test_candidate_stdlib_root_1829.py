@@ -252,3 +252,55 @@ def test_known_residual_root_made_outside_repo_with_init_passes_1829(tmp_path, h
     decision; the planned run-time module-origin check is the real answer."""
     cand = {"pkgdir/__init__.py": "", "pkgdir/colorsys.py": BODY}
     assert _gate(tmp_path, {"README.md": "x\n"}, cand) == "", how
+
+
+# review conditions at dd9514fb (#1829): newer pytest config forms, addopts overrides, other
+# package-marker suffixes, a repo-root package marker, and wrong-shaped config
+_PKG = {"tests/test_a.py": TEST, "pkg/__init__.py": ""}
+
+
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg"),
+    [
+        ("pytest.toml", '[pytest]\npythonpath = ["pkg"]\n'),
+        (".pytest.toml", '[pytest]\npythonpath = ["pkg"]\n'),
+        (".pytest.ini", "[pytest]\npythonpath = pkg\n"),
+        ("pyproject.toml", '[tool.pytest]\npythonpath = ["pkg"]\n'),
+        ("pytest.ini", "[pytest]\naddopts = -o pythonpath=pkg\n"),
+        ("pytest.ini", "[pytest]\naddopts = --override-ini=pythonpath=pkg\n"),
+        ("pytest.ini", "[pytest]\naddopts = -opythonpath=pkg\n"),
+        ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = "-o pythonpath=pkg"\n'),
+        ("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = 5\n"),
+        ("pyproject.toml", "tool = 1\n"),
+    ],
+)
+def test_newer_pytest_config_forms_make_package_dir_a_root_1829(tmp_path, cfg_name, cfg):
+    base = {**_PKG, cfg_name: cfg}
+    assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""
+
+
+@pytest.mark.parametrize(
+    "marker",
+    ["__init__.pyc", "__init__.so", "__init__.abi3.so", "__init__.cpython-314-darwin.so"],
+)
+def test_package_marker_other_suffixes_are_judged_1829(tmp_path, marker):
+    base = {"tests/test_a.py": TEST, "pkgdir/m.py": BODY}
+    assert _gate(tmp_path, base, {f"pkgdir/colorsys/{marker}": b"\0"}) != ""
+
+
+def test_repo_root_package_marker_does_not_exempt_depth_zero_1829(tmp_path):
+    assert (
+        _gate(tmp_path, {"__init__.py": "", "tests/test_a.py": TEST}, {"colorsys.py": BODY}) != ""
+    )
+
+
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg"),
+    [
+        ("pytest.toml", '[pytest]\npythonpath = ["src"]\n'),
+        ("pyproject.toml", '[tool.pytest]\npythonpath = ["src"]\n'),
+    ],
+)
+def test_newer_config_naming_other_dir_keeps_package_exempt_1829(tmp_path, cfg_name, cfg):
+    base = {"tests/test_a.py": TEST, "src/pkg/__init__.py": "", cfg_name: cfg}
+    assert _gate(tmp_path, base, {"src/pkg/colorsys.py": BODY}) == ""

@@ -26,12 +26,14 @@ from __future__ import annotations
 
 import configparser
 import posixpath
+import re
 import tomllib
 from collections.abc import Iterable
 
 from cairnwork.candidate_shadow import _ALWAYS_SHADOW, _read_source_blobs, _source_batches
 from cairnwork.git_read_cap import read_git_bytes
 from cairnwork.gitcmd import GitCommandError
+from cairnwork.pytest_config_files import _CANDIDATES
 from cairnwork.sys_path_scan import scan_sys_path_blob
 from cairnwork.workspace import CandidateRejected
 
@@ -80,7 +82,8 @@ _STDLIB = frozenset(
 # conftest is not a real module: adding one replaces nothing, so it is judged by the old rules
 _NAMES = frozenset(n.casefold() for n in _STDLIB | (_ALWAYS_SHADOW - {"conftest"}))
 _MODULE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")
-_CONFIGS = frozenset({"pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml"})
+_CONFIGS = frozenset({n for n, _, _ in _CANDIDATES})
+_OVERRIDE = re.compile(r"(^|\s)(-o|--override-ini)|pythonpath|python_paths", re.IGNORECASE)
 _PATH_KEYS = frozenset({"pythonpath", "python_paths"})
 _STARTUP = frozenset({"sitecustomize.py", "usercustomize.py"})
 
@@ -132,12 +135,12 @@ def _import_dir(path: str) -> str | None:
     standard-library module. A ``name/__init__.py`` package is judged in the directory above it."""
     parts = path.split("/")
     leaf = parts[-1]
-    if leaf.casefold() == "__init__.py":
+    if not leaf.casefold().endswith(_MODULE_SUFFIXES):
+        return None
+    if leaf.split(".")[0].casefold() == "__init__":  # package marker, any loadable suffix
         if len(parts) < 2 or parts[-2].casefold() not in _NAMES:
             return None
         return "/".join(parts[:-2])
-    if not leaf.casefold().endswith(_MODULE_SUFFIXES):
-        return None
     return "/".join(parts[:-1]) if leaf.split(".")[0].casefold() in _NAMES else None
 
 
@@ -159,6 +162,7 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
         leaf = path.rsplit("/", 1)[-1]
         if leaf not in _CONFIGS:
             continue
+        # a config the parser cannot read the shape of, or an addopts override, may name any dir
         try:
             text = read_git_bytes(repo, "cat-file", "blob", f"{commit}:{path}").decode("utf-8")
             values = _toml_values(text) if leaf.endswith(".toml") else _ini_values(text)
@@ -168,6 +172,8 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
             ValueError,
             configparser.Error,
             tomllib.TOMLDecodeError,
+            TypeError,
+            AttributeError,
         ):
             return None
         base = path.rpartition("/")[0]
@@ -177,11 +183,20 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
 
 
 def _toml_values(text: str) -> list[str]:
-    table = tomllib.loads(text).get("tool", {}).get("pytest", {}).get("ini_options", {})
+    doc = tomllib.loads(text)
+    tool = doc.get("tool", {})
+    pytest_table = tool.get("pytest", {})
+    tables = [doc.get("pytest", {}), pytest_table, pytest_table.get("ini_options", {})]
     out: list[str] = []
-    for key in _PATH_KEYS:
-        value = table.get(key, [])
-        out.extend(value.split() if isinstance(value, str) else [str(v) for v in value])
+    for table in tables:
+        if not isinstance(table, dict):
+            raise TypeError("pytest table has the wrong shape")
+        _refuse_override(table.get("addopts"))
+        for key in _PATH_KEYS:
+            value = table.get(key, [])
+            if not isinstance(value, (str, list)):
+                raise TypeError("pythonpath has the wrong shape")
+            out.extend(value.split() if isinstance(value, str) else [str(v) for v in value])
     return out
 
 
@@ -191,9 +206,17 @@ def _ini_values(text: str) -> list[str]:
     out: list[str] = []
     for section in ("pytest", "tool:pytest"):
         if parser.has_section(section):
+            _refuse_override(parser.get(section, "addopts", fallback=None))
             for key in _PATH_KEYS:
                 out.extend(parser.get(section, key, fallback="").split())
     return out
+
+
+def _refuse_override(addopts: object) -> None:
+    """An ``addopts`` that can override ``pythonpath`` (``-o``, ``--override-ini``) may name any
+    directory: treated like an untrusted config."""
+    if addopts is not None and _OVERRIDE.search(str(addopts)):
+        raise ValueError("addopts may override pythonpath")
 
 
 def _startup_or_path_signal(repo, tree: dict[str, str]) -> bool:

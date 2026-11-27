@@ -283,8 +283,7 @@ guarantee: candidate code imported by the test can change what the test reads or
 in that process can rule it out.
 
 A new file named like a standard-library module is refused on its own, without a path signal in
-the changed files, unless its directory has an `__init__.py` and no configuration, startup file or
-source edit can make that directory a search root (Issue #1829). A directory made a root only by the
+the changed files, unless its directory has an `__init__.py` (or a compiled package marker) and no configuration (including `pytest.toml`, `.pytest.toml`, `.pytest.ini`, `[tool.pytest]` and an `addopts` that overrides `pythonpath`; an unreadable or wrongly shaped config counts as naming any directory), startup file or source edit can make that directory a search root (Issue #1829). A repo-root `__init__.py` does not exempt a depth-0 file. A directory made a root only by the
 verifier command or the environment outside the repository remains a residual for a run-time
 module-origin check.
 
