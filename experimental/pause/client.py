@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -177,10 +178,18 @@ def _joined_items(value: object) -> Iterator[str]:
             yield from _joined_items(item)
     elif isinstance(value, (list, tuple)):
         first = next((item for item in value if isinstance(item, str)), None)
-        if first is not None and names_credential(first) and _holds_value(value):
+        if first is not None and _header_name(first) and names_credential(first) and _holds_value(value):
             yield json.dumps(list(value), default=str)
         for item in value:
             yield from _joined_items(item)
+
+
+_HEADER_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def _header_name(text: str) -> bool:
+    """A list's first string must look like a header name, not a line of code (#1204)."""
+    return _HEADER_NAME.fullmatch(text) is not None
 
 
 _MIN_JOINED = 6  # the scanner's own floor for a quoted value; "next" or "4096" is not a secret
