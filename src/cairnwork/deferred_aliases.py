@@ -40,3 +40,32 @@ def class_aliases(body: list[ast.stmt]) -> dict[int, dict[str, str]]:
 
 def _target_names(target: ast.AST) -> set[str]:
     return {node.id for node in ast.walk(target) if isinstance(node, ast.Name)}
+
+
+def imported_only(tree: ast.Module) -> frozenset[str]:
+    """Top-level names bound by an import and by nothing else in the file (#1833).
+
+    Such a base is taken to be an external class, not an earlier class of this file (a circular
+    self-import or a runtime rebind is the residual). A star import hides which names it binds,
+    so then nothing is claimed."""
+    imported: set[str] = set()
+    rebound: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.Import, ast.ImportFrom)):
+            imported.update((a.asname or a.name).split(".")[0] for a in stmt.names)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            return frozenset()  # at any depth: an ``if`` or ``try`` around it binds as well
+        if isinstance(node, _DEFS):
+            rebound.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            rebound.add(node.id)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            rebound.update(node.names)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            rebound.add(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name:
+            rebound.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            rebound.add(node.rest)
+    return frozenset(imported - rebound)
