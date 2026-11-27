@@ -17,9 +17,13 @@ _SAFE_NAMES = frozenset(
     "surpass keynote publickey primarykey sortkey partitionkey foreignkey cachekey "
     "idempotencykey nexttoken pagetoken".split()
 )
-_SUFFIX = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)$")
+_SUFFIX = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)$"
+)
 _QUALIFIER = re.compile(r"(?:value|hash|old|new|prod|dev|test|base|pem|v\d+)$")
-_WORD = re.compile(r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd)")
+_WORD = re.compile(
+    r"(?:key|token|secret|pass(?:word|wd|phrase)?|pwd|auth|credentials?|creds?|bearer|userinfo|session|cookie)"
+)
 _PIECE = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+")
 # NAME_KEY=..., GITHUB_TOKEN: "...", "client_secret": "...", key => "...", TOKEN := ...
 # (separator = : => :=, optional quotes or backticks around name and value); the name must
@@ -51,6 +55,14 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "basic_auth",
         re.compile(
             r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?basic\s+[A-Za-z0-9+/]{8,}={0,2}"
+        ),
+    ),
+    # Digest, Token and ApiKey schemes (#1886): a value of 6+ characters, so <placeholder> passes
+    (
+        "scheme_auth",
+        re.compile(
+            r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?"
+            r"(?:digest|token|api-?key)\s+[A-Za-z0-9+/._~=\"-]{6,}"
         ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
@@ -134,6 +146,7 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
                     or (word == "pwd" and _is_path(value))
                     or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
                     or _is_short_word_with_trailing_punctuation(value)
+                    or (_NEW_WORD.fullmatch(word) and _is_placeholder(value))  # #1886, #1239
                 ):
                     continue
                 hits.append(category)
@@ -197,6 +210,19 @@ class Scanner:
 
     def scan(self, text: str) -> list[str]:
         return scan(text, self.names)
+
+
+# words added in #1886; their placeholder values are exempt so #1239 is not repeated for them
+_NEW_WORD = re.compile(r"auth|credentials?|creds?|bearer|userinfo|session|cookie")
+
+
+def _is_placeholder(value: str) -> bool:
+    """<name>, ${NAME}, os.environ[...] / getenv(...) or a call such as load_credentials()."""
+    v = value.strip("\"'`").rstrip(",;")
+    return bool(
+        re.fullmatch(r"<[^<>\s]+>|\$\{[A-Za-z_]\w*\}|\$[A-Za-z_]\w*", v)
+        or re.fullmatch(r"(?:os\.environ\[.*\]|[\w.]*getenv\(.*\)|[A-Za-z_][\w.]*\(\))", v)
+    )
 
 
 def _is_short_word_with_trailing_punctuation(value: str) -> bool:
