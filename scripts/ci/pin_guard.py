@@ -44,6 +44,15 @@ def _literal(node: ast.expr) -> object:
     raise ValueError("unsupported pin table expression")
 
 
+def _present(path: Path) -> bool:
+    """True if path exists; False only when it is truly absent. Other stat errors propagate."""
+    try:
+        path.stat()
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
+
+
 def _pin_table(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     value: ast.expr | None = None
@@ -185,14 +194,14 @@ def evaluate(args: argparse.Namespace) -> tuple[int, str, list[str]]:
         return 3, "BYTECODE_TRACKED", [json.dumps(name) for name in bytecode]
     pin_file = trusted / "tests/_w1353_allow_pins.py"
     guarded = set(FIXED_PATHS)
-    if pin_file.exists():
+    if _present(pin_file):
         guarded.update(_pin_table(pin_file))
     hits = sorted(guarded & _changed(Path(args.head), args.base_sha, args.head_sha))
     if not hits:
         return 0, "PIN_GUARD_OK", hits
     approver_file = trusted / "scripts/ci/pin_guard_approvers.txt"
     approvers = set()
-    if approver_file.exists():
+    if _present(approver_file):
         approvers = {
             line.strip().lower()
             for line in approver_file.read_text(encoding="utf-8").splitlines()
