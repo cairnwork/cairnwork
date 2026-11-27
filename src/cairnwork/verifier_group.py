@@ -23,7 +23,7 @@ _now = time.monotonic  # hooks for the tests' fake clock
 _sleep = time.sleep
 
 
-Row = tuple[int, int, int]  # (pid, ppid, pgid)
+Row = tuple[int, int, int, str]  # (pid, ppid, pgid, stat)
 
 
 def _rows(user: str, timeout: float) -> list[Row] | None:
@@ -31,7 +31,7 @@ def _rows(user: str, timeout: float) -> list[Row] | None:
     flag = ["-x"] if sys.platform == "darwin" else []
     try:
         done = subprocess.run(  # noqa: S603 - fixed argv
-            ["/bin/ps", *flag, "-U", user, "-o", "pid=,ppid=,pgid="],
+            ["/bin/ps", *flag, "-U", user, "-o", "pid=,ppid=,pgid=,stat="],
             capture_output=True, text=True, timeout=timeout, check=False,
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError):
@@ -41,15 +41,15 @@ def _rows(user: str, timeout: float) -> list[Row] | None:
     rows: list[Row] = []
     for line in done.stdout.split("\n"):
         parts = line.split()
-        if len(parts) == 3 and all(p.isdigit() for p in parts):
-            rows.append((int(parts[0]), int(parts[1]), int(parts[2])))
+        if len(parts) == 4 and all(p.isdigit() for p in parts[:3]):
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), parts[3]))
     return rows
 
 
 def _members(rows: list[Row] | None, group: int) -> set[int]:
     """Pids in the collector's group other than the collector itself. The collector is told by
     its pid (the group id), not counted: a leftover must never take its place in a count."""
-    return {p for p, _, g in rows or () if g == group and p != group}
+    return {p for p, _, g, _s in rows or () if g == group and p != group}
 
 
 def wait_clear(
@@ -82,6 +82,28 @@ def wait_clear(
         _sleep(min(POLL_SECONDS, left))
 
 
+def _live(rows: list[Row] | None, group: int) -> bool:
+    """The collector is listed and is not a zombie: it still runs, so the rest of its group is
+    its own in-flight children, which the group kill that follows reap() ends (not escapes)."""
+    return any(p == group and "Z" not in st for p, _, _, st in rows or ())
+
+
+def count_escaped(account, group: int, deadline: float) -> int:
+    """The account's escaped count (-1: cannot tell) from one listing per look, with the members
+    of a live collector's group left out (the collector itself stays, ``main`` comes off it). The
+    same listing decides both, so a child that comes and goes can never tip the count."""
+
+    def procs():
+        left = deadline - time.monotonic()
+        rows = _rows(account.user, min(left, PS_TIMEOUT_SECONDS)) if left > 0 else None
+        if rows is None:
+            return None
+        skip = _live(rows, group)
+        return [(p, pp) for p, pp, g, _s in rows if not (skip and g == group and p != group)]
+
+    return verifier_escape.escaped_count(procs, account._real_paths, sys.platform == "darwin")
+
+
 def _not_exempt(account, user: str, first: list[Row], keep) -> int:
     """Rows of the first listing that ``keep(pid, pgid)`` selects and are not an exempt daemon (-1:
     cannot tell). The exemption check reads the same rows, then re-lists as escaped_count does."""
@@ -89,7 +111,7 @@ def _not_exempt(account, user: str, first: list[Row], keep) -> int:
 
     def procs():
         rows = next(fresh, None) or _rows(user, PS_TIMEOUT_SECONDS)
-        return None if rows is None else [(p, pp) for p, pp, g in rows if keep(p, g)]
+        return None if rows is None else [(p, pp) for p, pp, g, _s in rows if keep(p, g)]
 
     return verifier_escape.escaped_count(procs, account._real_paths, sys.platform == "darwin")
 
@@ -123,4 +145,6 @@ def settle(account, group: int, main: int, deadline: float) -> int:
     if outside[0] < 0 or lead[0] < 0:
         return 1
     base = max(outside[0] + max(lead[0], 0) - main, 0)  # main's own count, less ``main``
+    if _live(last, group):  # a live collector: its group is its own, not a leftover
+        return base
     return base + len(live if last is None else live & _members(last, group))

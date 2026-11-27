@@ -23,11 +23,15 @@ class World:
     def __init__(self, rows):
         self.now, self.rows, self.sleeps, self.group_calls, self.rc = 0.0, rows, [], 0, 0
         self.hook, self.first_count = None, True
+        self.zombies: set[int] = set()
 
     def event(self):  # the first look of any kind: apply the case's change right after it
         if self.hook and self.first_count:
             self.hook(self)
         self.first_count = False
+
+    def stat(self, pid):  # R, or Z for a pid the case marked as a zombie
+        return "Z" if pid in self.zombies else "R"
 
     def table(self):
         return [r for r in self.rows if r[2] is None or self.now < r[2]]
@@ -41,16 +45,16 @@ class World:
 
     def run(self, cmd, **kwargs):
         if not any(
-            f in cmd for f in ("pid=,ppid=", "pid=,ppid=,pgid=", "pid=,pgid=")
+            f in cmd for f in ("pid=,ppid=", "pid=,ppid=,pgid=,stat=", "pid=,pgid=")
         ):  # the diagnostic's own ps
             return SimpleNamespace(returncode=0, stdout="", stderr="")
-        wide = "pid=,ppid=,pgid=" in cmd
+        wide = "pid=,ppid=,pgid=,stat=" in cmd
         plain = "pid=,ppid=" in cmd and not wide  # the account's own (pid, ppid) listing
         self.group_calls += 0 if plain else 1
         if self.rc == "raise":
             raise subprocess.TimeoutExpired("ps", 1)
         text = "".join(
-            f"{r[0]} {1 if r[3:] else 0} {r[1]}\n" if wide
+            f"{r[0]} {1 if r[3:] else 0} {r[1]} {self.stat(r[0])}\n" if wide
             else f"{r[0]} {1 if r[3:] else 0}\n" if plain else f"{r[0]} {r[1]}\n"
             for r in self.table())  # fmt: skip
         self.event()
@@ -103,6 +107,7 @@ def test_a_child_outside_the_group_stays_counted_and_nothing_is_waited(monkeypat
 
 def test_a_child_past_the_cap_is_still_counted_within_cap_plus_one_poll(monkeypatch):
     world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (101, MAIN, 99.0)])
+    world.zombies = {MAIN}  # the collector has exited: what stays in its group is a leftover
     assert acct.reap(1, group=MAIN) == 1
     assert vg.CAP_SECONDS <= world.now <= vg.CAP_SECONDS + vg.POLL_SECONDS
 
@@ -110,7 +115,9 @@ def test_a_child_past_the_cap_is_still_counted_within_cap_plus_one_poll(monkeypa
 @pytest.mark.parametrize("rc", [2, "raise"])
 def test_a_failed_group_lookup_means_no_wait_and_the_count_of_today(monkeypatch, rc):
     world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (101, MAIN, 0.5)], rc=rc)
-    assert acct.reap(1, group=MAIN) == 1 and world.sleeps == [] and world.group_calls == 1
+    assert (
+        acct.reap(1, group=MAIN) == 1 and world.sleeps == [] and world.group_calls == 2
+    )  # the wait, then the count
 
 
 def test_a_lookup_that_fails_while_waiting_ends_the_wait(monkeypatch):
@@ -132,14 +139,16 @@ def test_one_bounded_ps_per_poll(monkeypatch):
     real = world.run
 
     def spy(cmd, **kwargs):
-        if "pid=,ppid=,pgid=" in cmd:  # the group's polls; the account's own count has its cap
+        if (
+            "pid=,ppid=,pgid=,stat=" in cmd
+        ):  # the group's polls; the account's own count has its cap
             seen.append(kwargs.get("timeout"))
         return real(cmd, **kwargs)
 
     monkeypatch.setattr(vg.subprocess, "run", spy)
     acct.reap(1, group=MAIN)
     group_polls = world.group_calls
-    assert group_polls == len(world.sleeps) + 1
+    assert group_polls == len(world.sleeps) + 2  # the polls of the wait, then the count
     assert seen and all(t is not None and 0 < t <= vg.PS_TIMEOUT_SECONDS for t in seen)
 
 
@@ -164,10 +173,10 @@ def test_count_and_verdict_equal_mains_formula_when_the_group_is_clear(monkeypat
 def test_an_unknown_count_and_a_left_over_kill_stay_as_they_were(monkeypatch):
     _, acct = _acct(monkeypatch, [(101, MAIN, None)])
     monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: -1)
-    assert acct.reap(0, group=MAIN) == 1
+    assert acct.reap(0) == 1
     monkeypatch.setattr(va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: 2)
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, n, d: 1)
-    assert acct.reap(0, group=MAIN) == 3
+    assert acct.reap(0) == 3
 
 
 OUT = 200  # a process outside the collector's group
@@ -343,8 +352,30 @@ def test_must_block_a_group_leftover_does_not_take_the_collectors_slot(
     monkeypatch, rows, main, since, least
 ):
     world, acct = _acct(monkeypatch, rows)
+    world.zombies = {MAIN}  # a collector that has exited: only then is a leftover a leftover
     _paths_from(monkeypatch, world, since)
     assert int(acct.reap(main, group=MAIN)) >= least
+
+
+# Option A (t-b022 shape): a live collector's group is its own, the group kill ends it.
+def test_must_pass_a_live_collector_with_overlapping_children_counts_zero(monkeypatch):
+    rows = [(MAIN, MAIN, None)] + [(200 + i, MAIN, 0.1 * i + 0.15) for i in range(30)]
+    world, acct = _acct(monkeypatch, rows)
+    assert int(acct.reap(1, group=MAIN)) == 0
+
+
+def test_must_pass_a_process_outside_the_group_is_still_counted_with_a_live_collector(
+    monkeypatch,
+):
+    rows = [(MAIN, MAIN, None), (OUT, OUT, None), (101, MAIN, None)]
+    world, acct = _acct(monkeypatch, rows)
+    assert int(acct.reap(1, group=MAIN)) >= 1
+
+
+def test_must_pass_a_zombie_collector_with_a_leftover_is_still_counted(monkeypatch):
+    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (101, MAIN, None)])
+    world.zombies = {MAIN}
+    assert int(acct.reap(1, group=MAIN)) >= 1
 
 
 def test_must_block_unreadable_real_paths_of_a_group_member_is_at_least_one(monkeypatch):
