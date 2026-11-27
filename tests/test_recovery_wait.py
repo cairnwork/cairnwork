@@ -4,7 +4,8 @@ import pytest
 from recovery_wait import is_pytest_command
 
 BLOCK = [
-    "/Library/Developer/CommandLineTools/usr/bin/git --no-replace-objects -c core.hooksPath=/dev/null "
+    "/Library/Developer/CommandLineTools/usr/bin/git --no-replace-objects "
+    "-c core.hooksPath=/dev/null "
     "-C /private/var/folders/qy/x/T/pytest-of-james/pytest-1164/test_x0/runs/a9cc-x-v07.work "
     "clone --quiet --no-local",
     "/usr/bin/git -C /tmp/pytest-of-u/pytest-1/repo rev-parse HEAD",
