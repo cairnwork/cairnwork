@@ -78,11 +78,7 @@ class _Client:
 
     def _send(self, request: PlanRequest | GateRequest, messages: Sequence[dict], planner: bool):
         model, effort, timeout, attempts = self._settings(request)
-        pieces = list(_strings(messages))
-        try:
-            categories = tuple(dict.fromkeys(c for v in pieces for c in self.scanner.scan(v)))
-        except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
-            categories = ("scanner_error",)
+        categories = _secret_categories(self.scanner, messages)
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if categories:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED, categories
@@ -156,6 +152,27 @@ class HaikuGate(_Client):
             reason=reason,
             diagnostics=diagnostics,
         )
+
+
+def _secret_categories(scanner: Scanner, messages: object) -> tuple[str, ...]:
+    """Scan every piece alone and every mapping item joined as 'key: value' (#1204)."""
+    try:
+        texts = [*_strings(messages), *_joined_items(messages)]
+        return tuple(dict.fromkeys(c for text in texts for c in scanner.scan(text)))
+    except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
+        return ("scanner_error",)
+
+
+def _joined_items(value: object) -> Iterator[str]:
+    """'key: value' for each mapping item whose key and value are strings, at any depth."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and isinstance(item, str):
+                yield f"{key}: {item}"
+            yield from _joined_items(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _joined_items(item)
 
 
 def _strings(value: object) -> Iterator[str]:
