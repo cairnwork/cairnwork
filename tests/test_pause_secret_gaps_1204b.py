@@ -43,6 +43,11 @@ class _Transport:
         raise AssertionError("a refused request must never reach the transport")
 
 
+class _QuotaTransport:
+    def send(self, *args: object, **kwargs: object) -> object:
+        return SimpleNamespace(quota_blocked=True)
+
+
 def _blocked(messages: list[dict]) -> bool:
     request = SimpleNamespace(
         settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=1)
@@ -123,7 +128,12 @@ def test_nested_and_short_credential_mappings_are_refused(item: object) -> None:
     ],
 )
 def test_ordinary_content_is_not_refused(content: object) -> None:
-    assert not _blocked([{"role": "user", "content": content}])
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=1)
+    )
+    messages = [{"role": "user", "content": content}]
+    outcome = _Client(_QuotaTransport(), Scanner())._send(request, messages, planner=True)  # type: ignore[arg-type]
+    assert outcome[3] != Reason.PAUSE_SECRET_BLOCKED
 
 
 def test_a_cyclic_message_fails_closed_as_scanner_error() -> None:
