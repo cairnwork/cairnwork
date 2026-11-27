@@ -30,7 +30,12 @@ from __future__ import annotations
 from typing import Any
 
 from cairnwork import protection
-from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
+from cairnwork.deferred_tests import (
+    TestCommitRejected,
+    new_tests,
+    untargeted,
+    whole_file_required,
+)
 from cairnwork.issue_task import test_target
 from cairnwork.node_file import file_part
 from cairnwork_attest.binding_extras import conftest_problem, data_problem, required_ids
@@ -82,18 +87,24 @@ def coverage_problem(ctx: Any) -> VerifyResult | None:
     folded = {path.casefold() for path in data}  # a case variant names the same file on macOS
     if clash := sorted(t for t in named if file_part(t).casefold() in folded):
         return _fail("DATA_PATHS_INVALID", f"a verifier names a data path: {clash}")
+    whole: frozenset[str] = frozenset()
     try:
         nodes = (
             new_tests(ctx.repo, binding["base"], binding["test_commit"], _tests(paths, data))
             if ctx.full
             else [t for t in named if "::" in t]
         )
+        if ctx.full:  # #1878: a changed file with an unreadable class shape needs a whole target
+            whole = whole_file_required(
+                ctx.repo, binding["base"], binding["test_commit"], _tests(paths, data)
+            )
     except TestCommitRejected as exc:  # the producer refuses such a test commit
         return _fail("TEST_PATH_NOT_TARGETED", f"cannot read the bound tests: {exc}")
     if (problem := conftest_problem(ctx)) is not None:  # #798: a failed result is falsy
         return problem
     exempt = frozenset(binding.get("conftest_paths", [])) | data  # validated subsets of test_paths
-    if missing := untargeted(tuple(p for p in paths if p not in exempt), nodes, named):
+    left = tuple(p for p in paths if p not in exempt)
+    if missing := untargeted(left, nodes, named, whole):
         return _fail("TEST_PATH_NOT_TARGETED", f"no bound verifier runs these: {list(missing)}")
     required = required_ids(ctx.request)
     extra = sorted({vid for vid, _ in verifiers if vid not in (required or [])})

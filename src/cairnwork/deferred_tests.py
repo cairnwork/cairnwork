@@ -19,13 +19,14 @@ is on no remote, though a public branch could expose it to a worker.
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
+from collections.abc import Container, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
 from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
+from cairnwork.deferred_opaque import whole_file_required  # noqa: F401  (#1878, re-exported)
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -183,9 +184,10 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    classes inherited from another module, custom python_functions/python_classes. Such a test
-    commit is refused (no teeth found, or the base run's DEFERRED_TESTS_NOT_RUN) when the file has
-    no other new test; one beside a visible new test is not. A changed test inside a module-level
+    classes inherited from another module (whole_file_required, #1878), custom
+    python_functions/python_classes. Such a test commit is refused (no teeth found, or the base
+    run's DEFERRED_TESTS_NOT_RUN) when the file has no other new test; one beside a visible new
+    test is not. A changed test inside a module-level
     block or a nested test class is refused, DEFERRED_TESTS_UNREADABLE (#925)."""
     found, local = set(), local_names(repo, test_commit)  # #925
     for path in paths:
@@ -217,21 +219,19 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
 
 
 def untargeted(
-    paths: tuple[str, ...], nodes: Iterable[str], targets: Iterable[str]
+    paths: tuple[str, ...], nodes: Iterable[str], targets: Iterable[str], whole: Container = ()
 ) -> tuple[str, ...]:
-    """The test commit's Python files (``paths``) that the verifiers' ``targets`` do not cover. A
-    file is covered when a target names it whole, or when it has new or changed tests (``nodes``,
-    from new_tests) and a target names each of them or a class holding it. A file with no such test
-    (a helper, ``__init__.py``, a fixture-only change) must be named whole. Other files (data)
-    cannot be pytest targets and are not required. A receipt binds every test path, so each one's
-    changes must have run (DEFERRED_TESTS_NOT_TARGETED; the receiver applies the same rule,
-    cairnwork_attest.verify_coverage). Tests a file keeps unchanged are P2P's (p2p.py). A target
-    naming one parametrized case (``::test_y[case]``) names its test ``test_y`` (#714)."""
+    """The test commit's Python files (``paths``) that the verifiers' ``targets`` do not cover:
+    one is covered when a target names it whole, or when a target names each of its new or changed
+    tests (``nodes``, from new_tests) or a class holding it. A file with no such test (a helper,
+    ``__init__.py``, a fixture-only change), or in ``whole`` (#1878), must be named whole. Data
+    files are not required. The receiver applies the same rule (cairnwork_attest.verify_coverage),
+    DEFERRED_TESTS_NOT_TARGETED. A case target (``::test_y[case]``) names ``test_y`` (#714)."""
     named, missing = frozenset(map(_without_case, targets)), []  # a case names its test
     nodes = list(map(_without_case, nodes))  # the same on both sides (the receiver too)
     for path in (path for path in paths if path.endswith(".py") and path not in named):
         mine = [node for node in nodes if file_part(node) == path]
-        if not mine or not all(_named(node, named) for node in mine):
+        if path in whole or not mine or not all(_named(node, named) for node in mine):
             missing.append(path)
     return tuple(missing)
 

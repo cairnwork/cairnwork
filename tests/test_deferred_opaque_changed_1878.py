@@ -8,8 +8,8 @@ import pytest
 from conftest import commit_change, git
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
-from cairnwork.deferred_tests import ensure_test_commit, untargeted
 import cairnwork.deferred_tests as dt
+from cairnwork.deferred_tests import ensure_test_commit, untargeted
 from cairnwork_attest import verify_coverage as vc
 
 sandbox = pytest.mark.sandbox
