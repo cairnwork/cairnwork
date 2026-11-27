@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-_PYTEST_RUN = re.compile(r"(?:^|/)python[\d.]*\s(?:\S+\s)*?-m\s+pytest(?:\s|$)")
+_PYTEST_RUN = re.compile(r"(?:^|/)python[\d.]*t?\s(?:\S+\s)*?-m\s+pytest(?:\s|$)", re.IGNORECASE)
 
 
 def is_pytest_command(command: str) -> bool:
