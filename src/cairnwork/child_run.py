@@ -152,6 +152,8 @@ def _write_input(stream, payload):
 
 
 def _kill_child_group(group):
+    if group <= 1 or group == os.getpgrp():  # 0, 1, negatives and our own group are never sent
+        return
     try:
         os.killpg(group, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):

@@ -27,7 +27,7 @@ from __future__ import annotations
 import fcntl
 import math
 import os
-import pwd
+import pwd  # noqa: F401 - tests patch verifier_account.pwd (the shared module)
 import subprocess
 import sys
 import tempfile
@@ -131,12 +131,8 @@ class VerifierAccount:
         """
         from cairnwork import pytest_config  # local import keeps the module import-cycle free
 
-        try:
-            uid = pwd.getpwnam(self.user).pw_uid
-        except KeyError:
-            return False
-        if uid in (0, os.getuid()):
-            return False  # kill -9 -1 as root or as the owner would be destructive
+        if not verifier_escape.kill_target_ok(self.user):
+            return False  # kill -9 -1 as root, the owner or an unknown uid is destructive
         py = python or self.python
         policy_file: Path | None = None
         try:
@@ -279,6 +275,8 @@ class VerifierAccount:
         Repeated a few times: a process that forks while the signal is delivered can leave a
         child behind. Everything shares ``deadline``; when it passes the answer is unknown.
         """
+        if not verifier_escape.kill_target_ok(self.user):
+            return -1  # fail closed: ``kill -9 -1`` as the owner or root ends the desktop (#1849)
         left = -1
         for _ in range(attempts):
             budget = _remaining(deadline)
