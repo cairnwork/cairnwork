@@ -1,9 +1,17 @@
 """Wait helper for the crash drills in test_recovery.py."""
 
+import re
 import subprocess
 import time
 
 import pytest
+
+_PYTEST_RUN = re.compile(r"(?:^|/)python[\d.]*\s(?:\S+\s)*?-m\s+pytest(?:\s|$)")
+
+
+def is_pytest_command(command: str) -> bool:
+    """True for ``python ... -m pytest ...``; a path that merely contains "pytest" is not one."""
+    return _PYTEST_RUN.search(command) is not None
 
 
 def wait_for_sandboxed_pytest(root_pid: int, timeout: float = 90.0) -> None:
@@ -26,7 +34,7 @@ def wait_for_sandboxed_pytest(root_pid: int, timeout: float = 90.0) -> None:
                 if ppid in found and pid not in found:
                     found.add(pid)
                     grew = True
-        if any("pytest" in table[pid][1] for pid in found - {root_pid}):
+        if any(is_pytest_command(table[pid][1]) for pid in found - {root_pid}):
             return
         time.sleep(0.2)
     pytest.fail(f"no sandboxed pytest process appeared under driver {root_pid} in {timeout}s")
