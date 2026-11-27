@@ -221,3 +221,16 @@ def test_ordinary_code_and_words_in_a_user_message_are_not_refused(content: obje
 def test_ordinary_code_in_a_tool_message_is_not_refused() -> None:
     content = "def f():\n    token = next_token()\n    return token"
     assert _passes({"role": "tool", "tool_call_id": "c1", "content": content})
+
+
+@pytest.mark.parametrize(
+    "line",
+    ["token = parse(line)", "password_hash = digest(value)", "if token is None: return"],
+)
+def test_a_list_of_code_lines_is_not_refused(line: str) -> None:
+    assert not _blocked([{"role": "user", "content": [line, "return value_of_something"]}])
+
+
+@pytest.mark.parametrize("name", ["Authorization", "x-api-key", "password", "X_Auth_Token"])
+def test_a_header_pair_list_is_still_refused(name: str) -> None:
+    assert _blocked([{"role": "user", "content": [[name, "Qwertyuiop12345x"]]}])
