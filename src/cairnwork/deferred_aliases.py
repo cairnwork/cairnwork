@@ -51,11 +51,11 @@ def imported_only(tree: ast.Module) -> frozenset[str]:
     imported: set[str] = set()
     rebound: set[str] = set()
     for stmt in tree.body:
-        if isinstance(stmt, ast.ImportFrom) and any(a.name == "*" for a in stmt.names):
-            return frozenset()
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             imported.update((a.asname or a.name).split(".")[0] for a in stmt.names)
     for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(a.name == "*" for a in node.names):
+            return frozenset()  # at any depth: an ``if`` or ``try`` around it binds as well
         if isinstance(node, _DEFS):
             rebound.add(node.name)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
