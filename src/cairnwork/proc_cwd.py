@@ -214,8 +214,7 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
 
 
 _TEMP_SHAPE = re.compile(r"^(/private/var/folders/[^/]+/[^/]+/T)(?:/|$)", re.IGNORECASE)
-# macOS bases of verifier_select.VERIFIER_ACCOUNTS, casefolded, each named: no "cairnwork-*" prefix
-_VERIFIER_BASES = ("/users/shared/cairnwork", "/users/shared/cairnwork-v2")
+_VERIFIER_BASES = ("/users/shared/cairnwork", "/users/shared/cairnwork-v2")  # casefolded; no prefix
 _DARWIN = sys.platform == "darwin"  # the real platform: tests flip _MACOS alone to fake macOS
 
 
