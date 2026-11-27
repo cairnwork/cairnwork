@@ -46,6 +46,13 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ),
     ("private_key", re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
     ("bearer_token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")),
+    # the header name carries no credential word, so the Basic form is keyed on "authorization"
+    (
+        "basic_auth",
+        re.compile(
+            r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?basic\s+[A-Za-z0-9+/]{8,}={0,2}"
+        ),
+    ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
     (
         "host_path",
@@ -169,6 +176,11 @@ def _secret_word(name: str) -> str | None:
                 if _WORD.fullmatch(form):
                     return form
     return None
+
+
+def names_credential(name: str) -> bool:
+    """A key that names a credential: a credential word, or the Authorization header (#1204)."""
+    return _secret_word(name) is not None or "authorization" in name.lower()
 
 
 def _is_path(value: str) -> bool:

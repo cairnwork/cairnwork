@@ -17,9 +17,34 @@ def test_oversized_raw_output_is_cut_and_says_incomplete():
 
 
 def test_oversized_raw_output_is_cut_by_size_even_without_many_lines():
-    raw = "10 1 S 00:09 " + "x" * (vs.MAX_RAW_CHARS * 2) + "\n"
-    got = vs.result(1, raw, None, 0, 1)
-    assert got == 1 and vs.INCOMPLETE in got.reasons
+    # three long rows: few lines, and the count equals the rows shown, so only the cut can say it
+    raw = "".join(f"{10 + i} 1 S 00:09 " + "x" * 400_000 + "\n" for i in range(3))
+    got = vs.result(3, raw, None, 0, 3)
+    assert got == 3 and len(got.argv) == 3 and vs.INCOMPLETE in got.reasons
+
+
+def _padded(total_chars):
+    head = "10 1 S 00:09 "
+    return head + "x" * (total_chars - len(head))
+
+
+def test_the_line_limit_boundary_5000_is_not_a_cut_and_5001_is():
+    assert vs._cap(_rows(vs.MAX_RAW_LINES))[1] is False
+    assert vs._cap(_rows(vs.MAX_RAW_LINES + 1))[1] is True
+
+
+def test_the_char_limit_boundary_is_not_a_cut_at_the_limit_and_is_one_over():
+    assert vs._cap(_padded(vs.MAX_RAW_CHARS))[1] is False
+    assert vs._cap(_padded(vs.MAX_RAW_CHARS + 1))[1] is True
+    assert vs.INCOMPLETE not in vs.result(1, _padded(vs.MAX_RAW_CHARS), None, 0, 1).reasons
+    assert vs.INCOMPLETE in vs.result(1, _padded(vs.MAX_RAW_CHARS + 1), None, 0, 1).reasons
+
+
+def test_a_malformed_row_alone_says_incomplete():
+    # one good row, count 1, nothing cut: only the bad row can raise the flag
+    got = vs.result(1, "garbage\n20 1 S 00:09 e\n", None, 0, 1)
+    assert len(got.argv) == 1 and vs.INCOMPLETE in got.reasons
+    assert vs.INCOMPLETE not in vs.result(1, "20 1 S 00:09 e\n", None, 0, 1).reasons
 
 
 def test_a_normal_sized_listing_is_full_and_has_no_marker():
