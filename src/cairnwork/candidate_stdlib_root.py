@@ -28,6 +28,7 @@ import configparser
 import posixpath
 import re
 import tomllib
+import unicodedata
 from collections.abc import Iterable
 
 from cairnwork.candidate_shadow import _ALWAYS_SHADOW, _read_source_blobs, _source_batches
@@ -110,7 +111,7 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
         if (
             directory == ""
             or loose
-            or directory.casefold() in (roots or ())
+            or _fold(directory) in (roots or ())
             or (posixpath.join(directory, "__init__.py") not in tree)
         ):
             raise CandidateRejected(
@@ -118,6 +119,11 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
                 f"{path!r}: adds a file named like a standard-library module where it can be an "
                 "import root, so it could replace the real module at run time",
             )
+
+
+def _fold(name: str) -> str:
+    """Compare directory names as the file system does: without case or Unicode form."""
+    return unicodedata.normalize("NFC", name).casefold()
 
 
 def _is_new(entry) -> bool:
@@ -179,7 +185,7 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
         base = path.rpartition("/")[0]
         found.update(posixpath.normpath(posixpath.join(base, v)) if v else base for v in values)
         found.update(v.rstrip("/") for v in values)  # also as written, from any rootdir
-    return frozenset(d.casefold() for d in found if d != ".") | ({""} if "." in found else set())
+    return frozenset(_fold(d) for d in found if d != ".") | ({""} if "." in found else set())
 
 
 def _toml_values(text: str) -> list[str]:

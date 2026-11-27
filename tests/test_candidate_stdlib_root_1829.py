@@ -320,3 +320,10 @@ def test_newer_config_naming_other_dir_keeps_package_exempt_1829(tmp_path, cfg_n
 def test_case_variants_and_non_string_items_are_not_skipped_1829(tmp_path, cfg_name, cfg):
     base = {**_PKG, cfg_name: cfg}
     assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""
+
+
+def test_unicode_equivalent_directory_names_match_1829(tmp_path):
+    """APFS treats a precomposed and a decomposed name as one directory."""
+    cfg = '[tool.pytest.ini_options]\npythonpath = ["cafe\\u0301"]\n'
+    base = {"tests/test_a.py": TEST, "café/__init__.py": "", "pyproject.toml": cfg}
+    assert _gate(tmp_path, base, {"café/colorsys.py": BODY}) != ""
