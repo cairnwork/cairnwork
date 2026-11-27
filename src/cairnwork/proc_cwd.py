@@ -214,7 +214,8 @@ def attempt_dirs(roots, attempt_id: str) -> tuple[Path, ...]:
 
 
 _TEMP_SHAPE = re.compile(r"^(/private/var/folders/[^/]+/[^/]+/T)(?:/|$)", re.IGNORECASE)
-_VERIFIER_BASE = "/users/shared/cairnwork"  # verifier_account's macOS base (casefolded)
+# macOS bases of verifier_select.VERIFIER_ACCOUNTS, casefolded, each named: no "cairnwork-*" prefix
+_VERIFIER_BASES = ("/users/shared/cairnwork", "/users/shared/cairnwork-v2")
 _DARWIN = sys.platform == "darwin"  # the real platform: tests flip _MACOS alone to fake macOS
 
 
@@ -276,12 +277,12 @@ def _below(path: str, top: str, depth: int = 1) -> bool:
 
 def _root_ok(root: str) -> bool:
     """A declared root is narrow: inside the private temp dir, three levels below home (never
-    home, ``~/workspace`` or ``~/workspace/<repo>``), or inside the verifier account's base."""
+    home, ``~/workspace`` or ``~/workspace/<repo>``), or inside a verifier account's base."""
     home = _home()
     return (
         any(_below(root, t) for t in _temps())
         or (home not in ("", "/") and _below(root, home, 3))
-        or _below(root, _VERIFIER_BASE)
+        or any(_below(root, b) for b in _VERIFIER_BASES)
     )
 
 
