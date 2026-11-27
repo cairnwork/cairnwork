@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from typing import Protocol
 
 from experimental.pause.interfaces import GateReply, GateRequest, PlanReply, PlanRequest
 from experimental.pause.schema import GATE_VERDICTS, Reason
-from experimental.pause.secrets_scan import Scanner
+from experimental.pause.secrets_scan import Scanner, names_credential
 
 
 @dataclass(frozen=True)
@@ -78,11 +79,7 @@ class _Client:
 
     def _send(self, request: PlanRequest | GateRequest, messages: Sequence[dict], planner: bool):
         model, effort, timeout, attempts = self._settings(request)
-        pieces = list(_strings(messages))
-        try:
-            categories = tuple(dict.fromkeys(c for v in pieces for c in self.scanner.scan(v)))
-        except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
-            categories = ("scanner_error",)
+        categories = _secret_categories(self.scanner, messages)
         prefix = "PAUSE_PLANNER" if planner else "PAUSE_GATE"
         if categories:
             return None, model, effort, Reason.PAUSE_SECRET_BLOCKED, categories
@@ -156,6 +153,64 @@ class HaikuGate(_Client):
             reason=reason,
             diagnostics=diagnostics,
         )
+
+
+def _secret_categories(scanner: Scanner, messages: object) -> tuple[str, ...]:
+    """Scan every piece alone and every mapping item joined as 'key: value' (#1204)."""
+    try:
+        texts = [*_strings(messages), *_joined_items(messages)]
+        return tuple(dict.fromkeys(c for text in texts for c in scanner.scan(text)))
+    except Exception:  # noqa: BLE001  fail closed; never echo what broke the scanner
+        return ("scanner_error",)
+
+
+def _joined_items(value: object) -> Iterator[str]:
+    """Each item whose key names a credential, as a JSON '{"key": value}' piece (#1204).
+
+    Only credential keys are joined (a message's own "content" or "text" is not), so ordinary code
+    in a transcript is scanned as written. The piece is quoted JSON: the scanner's rules for quoted
+    values apply, nested values are carried, and a header pair ["Authorization", "Basic x"] too.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and names_credential(key) and _holds_value(item):
+                yield json.dumps({key: item}, default=str)
+            yield from _joined_items(item)
+    elif isinstance(value, (list, tuple)):
+        first = next((item for item in value if isinstance(item, str)), None)
+        if (
+            first is not None
+            and _header_name(first)
+            and names_credential(first)
+            and _holds_value(value)
+        ):
+            yield json.dumps(list(value), default=str)
+        for item in value:
+            yield from _joined_items(item)
+
+
+_HEADER_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+
+
+def _header_name(text: str) -> bool:
+    """A list's first string must look like a header name, not a line of code (#1204)."""
+    return _HEADER_NAME.fullmatch(text) is not None
+
+
+_MIN_JOINED = 6  # the scanner's own floor for a quoted value; "next" or "4096" is not a secret
+
+
+def _holds_value(value: object) -> bool:
+    """A string of at least _MIN_JOINED characters or a number, at any depth."""
+    if isinstance(value, str):
+        return len(value) >= _MIN_JOINED
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return True
+    if isinstance(value, dict):
+        return any(_holds_value(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_value(item) for item in value)
+    return False
 
 
 def _strings(value: object) -> Iterator[str]:
