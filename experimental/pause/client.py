@@ -10,7 +10,7 @@ from typing import Protocol
 
 from experimental.pause.interfaces import GateReply, GateRequest, PlanReply, PlanRequest
 from experimental.pause.schema import GATE_VERDICTS, Reason
-from experimental.pause.secrets_scan import Scanner
+from experimental.pause.secrets_scan import Scanner, names_credential
 
 
 @dataclass(frozen=True)
@@ -164,38 +164,38 @@ def _secret_categories(scanner: Scanner, messages: object) -> tuple[str, ...]:
 
 
 def _joined_items(value: object) -> Iterator[str]:
-    """Each string-keyed item as a JSON '{"key": value}' piece, and each list with a string in it.
+    """Each item whose key names a credential, as a JSON '{"key": value}' piece (#1204).
 
-    Quoted JSON keeps the scanner's rules for quoted values and carries nested values (#1204).
+    Only credential keys are joined (a message's own "content" or "text" is not), so ordinary code
+    in a transcript is scanned as written. The piece is quoted JSON: the scanner's rules for quoted
+    values apply, nested values are carried, and a header pair ["Authorization", "Basic x"] too.
     """
     if isinstance(value, dict):
         for key, item in value.items():
-            if isinstance(key, str) and _holds_long_string(item):
-                piece = json.dumps({key: item}, default=str)
-                # a string value is left unterminated: a closing quote would turn prose such as
-                # "token = next_token()" into a quoted value the scanner refuses
-                yield piece[:-2] if isinstance(item, str) else piece
+            if isinstance(key, str) and names_credential(key) and _holds_value(item):
+                yield json.dumps({key: item}, default=str)
             yield from _joined_items(item)
     elif isinstance(value, (list, tuple)):
-        if any(isinstance(item, str) for item in value):
-            yield json.dumps(list(value), default=str)  # a header pair ["Authorization", "Basic x"]
+        first = next((item for item in value if isinstance(item, str)), None)
+        if first is not None and names_credential(first) and _holds_value(value):
+            yield json.dumps(list(value), default=str)
         for item in value:
             yield from _joined_items(item)
 
 
-_MIN_JOINED = (
-    8  # shorter values ("next", "4096") under a key such as "key" or "max_tokens" are prose
-)
+_MIN_JOINED = 6  # the scanner's own floor for a quoted value; "next" or "4096" is not a secret
 
 
-def _holds_long_string(value: object) -> bool:
-    """A string of at least _MIN_JOINED characters, at any depth."""
+def _holds_value(value: object) -> bool:
+    """A string of at least _MIN_JOINED characters or a number, at any depth."""
     if isinstance(value, str):
         return len(value) >= _MIN_JOINED
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return True
     if isinstance(value, dict):
-        return any(_holds_long_string(item) for item in value.values())
+        return any(_holds_value(item) for item in value.values())
     if isinstance(value, (list, tuple)):
-        return any(_holds_long_string(item) for item in value)
+        return any(_holds_value(item) for item in value)
     return False
 
 
