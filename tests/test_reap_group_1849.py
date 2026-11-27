@@ -280,3 +280,40 @@ def test_reap_gets_the_collectors_group_from_execute_and_the_flag_is_on(monkeypa
         ["/usr/bin/true"], tmp_path / "p", str(tmp_path), env, 20, tmp_path / "log", account, None
     )
     assert seen == {"group": pids[0]}
+
+
+def _paths_from(monkeypatch, world, since, none_first=False):
+    """``_real_paths``: a pid is a distnoted from ``since[pid]`` on, another binary before."""
+    calls = []
+
+    def real_paths(self, pids):
+        calls.append(1)
+        if none_first and len(calls) == 1:
+            return None
+        return {p: ("1.0", "/usr/sbin/distnoted" if world.now >= since.get(p, 1e9)
+                    else "/tmp/other") for p in pids}  # fmt: skip
+
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", real_paths)
+
+
+L = "launchd"  # a 4th field: ps shows ppid 1
+
+
+@pytest.mark.parametrize(
+    "rows,since",
+    [
+        ([(MAIN, MAIN, None), (OUT, OUT, None, L), (101, MAIN, 1.5)], {OUT: 1.0}),
+        ([(MAIN, MAIN, None), (OUT, OUT, None, L), (901, MAIN, None, L)], {OUT: 1.0, 901: 0.0}),
+    ],
+)
+def test_must_block_the_exemption_is_read_at_the_first_listing(monkeypatch, rows, since):
+    world, acct = _acct(monkeypatch, rows)
+    _paths_from(monkeypatch, world, since)
+    assert vg.settle(acct, MAIN, 1, 1e18) >= 1
+
+
+def test_must_block_unreadable_real_paths_in_settle_is_at_least_one(monkeypatch):
+    rows = [(MAIN, MAIN, None), (OUT, OUT, 1.0, L), (101, MAIN, 1.5)]
+    world, acct = _acct(monkeypatch, rows)
+    _paths_from(monkeypatch, world, {}, none_first=True)
+    assert vg.settle(acct, MAIN, 1, 1e18) >= 1

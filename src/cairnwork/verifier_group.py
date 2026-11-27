@@ -46,12 +46,13 @@ def _rows(user: str, timeout: float) -> list[Row] | None:
     return rows
 
 
-def wait_clear(user: str, group: int, main: int, budget: float) -> list[Row] | None:
+def wait_clear(user: str, group: int, main: int, budget: float, on_first=None) -> list[Row] | None:
     """Wait until the group has at most ``main`` members (the collector, if still running), the
     cap or ``budget`` seconds (what is left of reap's probe deadline) passed, or a lookup failed.
     Returns the first listing (None: no usable look), so the caller can keep what was outside the
     group then: a process outside it that vanishes during the wait must still be counted, or the
-    wait would let a run pass that main refuses."""
+    wait would let a run pass that main refuses. ``on_first(rows)`` runs right after the first
+    listing, before any wait: what the first look decides must not read a later state."""
     limit = min(CAP_SECONDS, budget)
     start = _now()
     first = None
@@ -62,6 +63,8 @@ def wait_clear(user: str, group: int, main: int, budget: float) -> list[Row] | N
         rows = _rows(user, min(left, PS_TIMEOUT_SECONDS))
         if first is None:
             first = rows
+            if on_first is not None and rows:
+                on_first(rows)
         if rows is None or sum(r[2] == group for r in rows) <= main:
             return first
         left = limit - (_now() - start)
@@ -88,9 +91,15 @@ def settle(account, group: int, main: int, deadline: float) -> int:
     minus ``main`` or the group's own, whichever is more), from ONE listing. Unknown is one."""
     if group <= 0:
         return 0
-    first = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0))
+    seen: list[tuple[int, int]] = []
+
+    def decide(rows: list[Row]) -> None:  # the exemption is judged at the first listing
+        user = account.user
+        seen.append((_not_exempt(account, user, rows, lambda g: g != group),
+                     _not_exempt(account, user, rows, lambda g: g == group)))  # fmt: skip
+
+    first = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0), decide)
     if not first:  # no look, or an empty one (the collector is not even listed): fail closed
         return 1 if first is None else 0
-    outside = _not_exempt(account, account.user, first, lambda g: g != group)
-    held = _not_exempt(account, account.user, first, lambda g: g == group)
+    outside, held = seen[0]
     return 1 if outside < 0 or held < 0 else max(outside + held - max(held, main), 0)
