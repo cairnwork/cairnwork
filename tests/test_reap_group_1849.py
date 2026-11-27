@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 import cairnwork.verifier_account as va
+import cairnwork.verifier_escape as ve_escape
 import cairnwork.verifier_group as vg
 import cairnwork.verifier_seen as vs
 
@@ -21,9 +22,15 @@ class World:
 
     def __init__(self, rows):
         self.now, self.rows, self.sleeps, self.group_calls, self.rc = 0.0, rows, [], 0, 0
+        self.hook, self.first_count = None, True
+
+    def event(self):  # the first look of any kind: apply the case's change right after it
+        if self.hook and self.first_count:
+            self.hook(self)
+        self.first_count = False
 
     def table(self):
-        return [(r[0], r[1]) for r in self.rows if r[2] is None or self.now < r[2]]
+        return [r for r in self.rows if r[2] is None or self.now < r[2]]
 
     def counted(self):  # an exempt launchd daemon is in ps but not in the account's count
         return [r for r in self.rows if (r[2] is None or self.now < r[2]) and not r[3:]]
@@ -33,25 +40,41 @@ class World:
         self.now += seconds
 
     def run(self, cmd, **kwargs):
-        if "pid=,pgid=" not in cmd:  # the diagnostic's own ps (vs.before_kill): nothing to list
+        if (
+            "pid=,ppid=,pgid=" not in cmd and "pid=,pgid=" not in cmd
+        ):  # the diagnostic's own ps (vs.before_kill): nothing to list
             return SimpleNamespace(returncode=0, stdout="", stderr="")
         self.group_calls += 1
         if self.rc == "raise":
             raise subprocess.TimeoutExpired("ps", 1)
-        text = "".join(f"{p} {g}\n" for p, g in self.table())
+        wide = "pid=,ppid=,pgid=" in cmd
+        text = "".join(f"{r[0]} {1 if r[3:] else 0} {r[1]}\n" if wide else f"{r[0]} {r[1]}\n"
+                       for r in self.table())  # fmt: skip
+        self.event()
         return SimpleNamespace(returncode=self.rc, stdout=text, stderr="")
 
 
-def _acct(monkeypatch, rows, **kw):
-    world = World(rows)
-    world.rc = kw.get("rc", 0)
+def _acct(monkeypatch, rows, hook=None, first_count=None, **kw):
+    world = World([list(r) for r in rows])
+    world.rc, world.hook = kw.get("rc", 0), hook
+    calls = []
+
+    def escaped(self, d=None, attempts=1):
+        calls.append(1)
+        out = first_count if first_count is not None and len(calls) == 1 else None
+        seen = len(world.counted())
+        world.event()
+        return seen if out is None else out
+
+    monkeypatch.setattr(vg, "sys", SimpleNamespace(platform="darwin"))  # exemptions are on
+    monkeypatch.setattr(va.VerifierAccount, "_real_paths", lambda self, pids: {
+        p: ("1.000000", "/usr/sbin/distnoted") for p in pids})  # fmt: skip
+    monkeypatch.setattr(ve_escape, "apple_signed", lambda path: True)
     monkeypatch.setattr(vg.subprocess, "run", world.run)
     monkeypatch.setattr(vg, "_now", lambda: world.now)
     monkeypatch.setattr(vg, "_sleep", world.sleep)
     monkeypatch.setattr(vs.sys, "platform", "linux")
-    monkeypatch.setattr(
-        va.VerifierAccount, "_escaped_count", lambda self, d=None, attempts=1: len(world.counted())
-    )
+    monkeypatch.setattr(va.VerifierAccount, "_escaped_count", escaped)
     monkeypatch.setattr(va.VerifierAccount, "_kill_until_clean", lambda self, n, d: 0)
     return world, va.VerifierAccount(user="x", root=Path("/tmp/does-not-matter"))
 
@@ -144,8 +167,8 @@ OUT = 200  # a process outside the collector's group
 EX = (900, 900, None, "exempt")
 
 
-def _count(monkeypatch, rows, main=0, group=MAIN):
-    _, acct = _acct(monkeypatch, rows)
+def _count(monkeypatch, rows, main=0, group=MAIN, **kw):
+    _, acct = _acct(monkeypatch, rows, **kw)
     return int(acct.reap(main, group=group))
 
 
@@ -167,7 +190,7 @@ def test_must_block_a_known_outsider_or_a_leftover_is_counted(monkeypatch, rows,
 
 def test_must_block_an_outsider_that_vanishes_during_the_wait_is_still_counted(monkeypatch):
     rows = [(MAIN, MAIN, None), (OUT, OUT, 1.0), (101, MAIN, 1.5)]
-    main_got = _count(monkeypatch, [(MAIN, MAIN, None), (OUT, OUT, 0.0001 * 0 + 99.0)], 1)
+    main_got = _count(monkeypatch, [(MAIN, MAIN, None), (OUT, OUT, 99.0)], 1)
     assert _count(monkeypatch, rows, 1) >= 1 and main_got >= 1
 
 
@@ -190,15 +213,47 @@ def test_must_pass_the_collectors_own_children_are_not_counted(monkeypatch, rows
     assert _count(monkeypatch, rows, main) == 0
 
 
+def _add_second_child(world):
+    world.rows.append([102, MAIN, 1.5])
+
+
+def _outsider_joins(world):
+    world.rows[1][1] = MAIN
+
+
+BASE = [(MAIN, MAIN, None), (OUT, OUT, 1.0), (101, MAIN, 1.5)]
+
+
+@pytest.mark.parametrize(
+    "rows,main,kw",
+    [
+        ([(MAIN, MAIN, None), (OUT, OUT, 1.0), (901, MAIN, None, "exempt")], 1, {}),  # M1
+        ([(OUT, OUT, 1.0), (901, MAIN, None, "exempt")], 0, {}),  # M2
+        (BASE, 1, {"hook": _add_second_child}),  # M3 forks between the two looks
+        (BASE, 1, {"hook": _outsider_joins}),  # M4 outsider changes group
+        (BASE, 1, {"first_count": -1}),  # M5 the first count is unknown
+        (BASE + [(902, MAIN, None, "exempt")], 1, {}),  # M6
+    ],
+)
+def test_must_block_one_listing_decides_what_stood_outside_the_group(monkeypatch, rows, main, kw):
+    assert _count(monkeypatch, rows, main, **kw) >= 1
+
+
+@pytest.mark.parametrize("rc", [2, "raise"])
+def test_must_block_an_unreadable_first_group_lookup_is_at_least_one(monkeypatch, rc):
+    world, acct = _acct(monkeypatch, [(OUT, OUT, 1.0)], rc=rc)
+    assert vg.settle(acct, MAIN, 0, 1e18) >= 1
+
+
 def test_the_cap_is_two_seconds():
     assert vg.CAP_SECONDS == 2.0
 
 
 @pytest.mark.parametrize("stderr", ["ps: no", " \nx"])
 def test_a_lookup_with_error_output_is_unreadable_even_when_it_exits_zero(monkeypatch, stderr):
-    done = SimpleNamespace(returncode=0, stdout=f"{MAIN} {MAIN}\n", stderr=stderr)
+    done = SimpleNamespace(returncode=0, stdout=f"{MAIN} 1 {MAIN}\n", stderr=stderr)
     monkeypatch.setattr(vg.subprocess, "run", lambda *a, **k: done)
-    assert vg._members("x", MAIN, 1.0) is None
+    assert vg._rows("x", 1.0) is None
 
 
 def test_reap_gets_the_collectors_group_from_execute_and_the_flag_is_on(monkeypatch, tmp_path):

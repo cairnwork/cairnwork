@@ -14,6 +14,8 @@ import subprocess
 import sys
 import time
 
+from cairnwork import verifier_escape
+
 CAP_SECONDS = 2.0
 POLL_SECONDS = 0.1
 PS_TIMEOUT_SECONDS = 5.0
@@ -21,34 +23,35 @@ _now = time.monotonic  # hooks for the tests' fake clock
 _sleep = time.sleep
 
 
-def _members(user: str, group: int, timeout: float) -> int | None:
-    """How many processes of ``user`` are in process group ``group`` (None: cannot tell)."""
+Row = tuple[int, int, int]  # (pid, ppid, pgid)
+
+
+def _rows(user: str, timeout: float) -> list[Row] | None:
+    """One ps listing of ``user``'s processes (None: cannot tell)."""
     flag = ["-x"] if sys.platform == "darwin" else []
     try:
         done = subprocess.run(  # noqa: S603 - fixed argv
-            ["/bin/ps", *flag, "-U", user, "-o", "pid=,pgid="],
+            ["/bin/ps", *flag, "-U", user, "-o", "pid=,ppid=,pgid="],
             capture_output=True, text=True, timeout=timeout, check=False,
         )  # fmt: skip
     except (OSError, subprocess.SubprocessError):
         return None
     if done.returncode not in (0, 1) or done.stderr.strip():
         return None
-    count = 0
+    rows: list[Row] = []
     for line in done.stdout.split("\n"):
         parts = line.split()
-        if len(parts) == 2 and all(p.isdigit() for p in parts):
-            count += int(parts[1]) == group
-    return count
+        if len(parts) == 3 and all(p.isdigit() for p in parts):
+            rows.append((int(parts[0]), int(parts[1]), int(parts[2])))
+    return rows
 
 
-def wait_clear(user: str, group: int, main: int, budget: float) -> int | None:
+def wait_clear(user: str, group: int, main: int, budget: float) -> list[Row] | None:
     """Wait until the group has at most ``main`` members (the collector, if still running), the
     cap or ``budget`` seconds (what is left of reap's probe deadline) passed, or a lookup failed.
-    Returns how many processes the group held at the first look (None: no look was made), so the
-    caller can keep what was outside it: a process outside the group that vanishes during the
-    wait must still be counted, or the wait would let a run pass that main refuses."""
-    if group <= 0:  # no group given: no wait, behaviour as before
-        return None
+    Returns the first listing (None: no usable look), so the caller can keep what was outside the
+    group then: a process outside it that vanishes during the wait must still be counted, or the
+    wait would let a run pass that main refuses."""
     limit = min(CAP_SECONDS, budget)
     start = _now()
     first = None
@@ -56,10 +59,10 @@ def wait_clear(user: str, group: int, main: int, budget: float) -> int | None:
         left = limit - (_now() - start)
         if left <= 0:
             return first
-        found = _members(user, group, min(left, PS_TIMEOUT_SECONDS))
+        rows = _rows(user, min(left, PS_TIMEOUT_SECONDS))
         if first is None:
-            first = found
-        if found is None or found <= main:
+            first = rows
+        if rows is None or sum(r[2] == group for r in rows) <= main:
             return first
         left = limit - (_now() - start)
         if left <= 0:
@@ -67,10 +70,27 @@ def wait_clear(user: str, group: int, main: int, budget: float) -> int | None:
         _sleep(min(POLL_SECONDS, left))
 
 
+def _not_exempt(account, user: str, first: list[Row], keep) -> int:
+    """Rows of the first listing that ``keep`` selects and are not an exempt daemon (-1: cannot
+    tell). The exemption check reads the same rows, then re-lists as escaped_count always does."""
+    fresh = iter([first])
+
+    def procs():
+        rows = next(fresh, None) or _rows(user, PS_TIMEOUT_SECONDS)
+        return None if rows is None else [(p, pp) for p, pp, g in rows if keep(g)]
+
+    return verifier_escape.escaped_count(procs, account._real_paths, sys.platform == "darwin")
+
+
 def settle(account, group: int, main: int, deadline: float) -> int:
-    """#1849: the wait for the group, and what stood outside it when the wait began. The count
-    (``_escaped_count``); that count is never lower than the processes outside the group
-    at the first look, even if they vanished during the wait (they were not the collector's)."""
-    first = account._escaped_count(deadline, attempts=1) if group > 0 else -1
-    held = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0))
-    return 0 if held is None or first < 0 else max(first - max(held, main), 0)
+    """#1849: the wait for the group; returns the least count the run must keep: the processes
+    that were outside the group at the first look, as main counts them (the total not exempt
+    minus ``main`` or the group's own, whichever is more), from ONE listing. Unknown is one."""
+    if group <= 0:
+        return 0
+    first = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0))
+    if not first:  # no look, or an empty one (the collector is not even listed): fail closed
+        return 1 if first is None else 0
+    outside = _not_exempt(account, account.user, first, lambda g: g != group)
+    held = _not_exempt(account, account.user, first, lambda g: g == group)
+    return 1 if outside < 0 or held < 0 else max(outside + held - max(held, main), 0)
