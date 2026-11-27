@@ -218,3 +218,34 @@ def test_unquoted_calls_with_digits_or_long_names_are_not_exempt(text: str) -> N
 )
 def test_ordinary_calls_still_pass(text: str) -> None:
     assert not Scanner().scan(text)
+
+
+_NEW_WORDS_ONLY = ("session", "cookie", "auth", "creds", "credentials", "bearer", "userinfo")
+_SHAPES = ('os.environ["P"]', 'os.getenv("C")', "<name>", "${NAME}", "$NAME", "load_it()")
+_TAILS = (
+    ' + "fakesid0123456789abcdef"',
+    ' - "fakesid0123456789abcdef"',
+    ' * "fakesid0123456789abcdef"',
+    ' % "fakesid0123456789abcdef"',
+    ' if x else "fakesid0123456789abcdef"',
+    ' \\\n    or "fakesid0123456789abcdef"',
+    ' and "fakesid0123456789abcdef"',
+    ', "fakesid0123456789abcdef"',
+    ' + 1 + "fakesid0123456789abcdef"',
+)
+
+
+@pytest.mark.parametrize("word", _NEW_WORDS_ONLY)
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_placeholder_followed_by_more_code_is_not_exempt(word: str, shape: str) -> None:
+    for tail in _TAILS:
+        assert Scanner().scan(f"{word} = {shape}{tail}"), (word, shape, tail)
+
+
+@pytest.mark.parametrize("word", _NEW_WORDS_ONLY)
+@pytest.mark.parametrize("shape", _SHAPES)
+def test_placeholder_with_closing_punctuation_still_passes(word: str, shape: str) -> None:
+    for tail in ("", ",", ";", "  # read from the environment", " )", " }", "),", " ]"):
+        assert not Scanner().scan(f"{word} = {shape}{tail}"), (word, shape, tail)
+    assert not Scanner().scan(f"f({word}={shape})")
+    assert not Scanner().scan(f'cfg = {{"{word}": {shape}}}')

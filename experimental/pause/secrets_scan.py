@@ -156,7 +156,7 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
                     if (
                         word is not None
                         and _is_placeholder(value)
-                        and not _has_fallback(candidate, match)
+                        and _only_closers_follow(candidate, match)
                     ):
                         continue
                 if (
@@ -233,9 +233,11 @@ class Scanner:
 # the #1886 words alone (no pre-#1886 word in the name) exempt placeholder values (#1239)
 
 
-def _has_fallback(text: str, match: re.Match[str]) -> bool:
-    """A literal fallback follows the value: ``or "..."``, ``|| "..."``, ``?? "..."``."""
-    return re.match(r"[ \t]*(?:or\b|\|\||\?\?|\|(?!\|))", text[match.end("value") :]) is not None
+def _only_closers_follow(text: str, match: re.Match[str]) -> bool:
+    """Allow-list: after the value only blanks, closing ``,;)]}``, a ``#`` comment or the line
+    end may follow; any other code (operator, ``if``, ``\\`` continuation) voids the exemption."""
+    rest = re.split(r"[\r\n\v\f\x85\u2028\u2029]", text[match.end("value") :], maxsplit=1)[0]
+    return re.fullmatch(r"[ \t,;)\]}]*(?:#.*)?", rest) is not None
 
 
 def _is_plain_name(v: str) -> bool:
@@ -257,6 +259,13 @@ def _is_placeholder(value: str) -> bool:
     v = value.strip("\"'`").rstrip(",;")
     if value[:1] in "\"'`":  # a quoted string is a literal, never code
         return _is_plain_name(v)
+    # closers glued to the value belong to the enclosing call or dict: f(cookie=os.getenv("C"))
+    return any(
+        _is_code_placeholder(v[: len(v) - n]) for n in range(len(v) - len(v.rstrip(")]}")) + 1)
+    )
+
+
+def _is_code_placeholder(v: str) -> bool:
     return bool(
         _is_plain_name(v)
         or re.fullmatch(r"os\.environ(?:\.get)?[\[(]\s*[\"'][A-Za-z_]\w*[\"']\s*[\])]", v)
