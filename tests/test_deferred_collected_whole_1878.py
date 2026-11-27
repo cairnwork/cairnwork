@@ -3,10 +3,16 @@ where pytest collects an id the static reader does not list must be named whole 
 (DEFERRED_TESTS_NOT_TARGETED), whatever spelling built the hidden test. Every must-block and
 must-pass input of the two review rounds, run end to end with a real ``run_task``."""
 
+from pathlib import Path
+
 import pytest
 from conftest import commit_change
 from test_deferred_opaque_changed_1878 import HEAD, TEST, VISIBLE, _argv
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
+
+from cairnwork.collect_reader import Collected
+from cairnwork.deferred_collected import NONE
+from cairnwork.deferred_opaque import unlisted
 
 sandbox = pytest.mark.sandbox
 NODE = f"{TEST}::test_regression"
@@ -23,14 +29,18 @@ NS = "{{'test_h': _t}}"
 ROUND2 = {  # review 2026-11-27T06:30Z: the nine spellings judged CORE_VERIFIED at f0cceffc
     "builder_by_name": "from helpers import make\n\n\n" + FN + "Hid = make(_t)\n",
     "builder_module_attr": "import helpers\n\n\n" + FN + "Hid = helpers.make(_t)\n",
-    "imported_decorator": "from helpers import deco\n\n\n" + FN
+    "imported_decorator": "from helpers import deco\n\n\n"
+    + FN
     + "@deco(_t)\nclass U(unittest.TestCase):\n    pass\n",
-    "decorator_rebinding": "from helpers import deco\n\n\n" + FN
+    "decorator_rebinding": "from helpers import deco\n\n\n"
+    + FN
     + "class U(unittest.TestCase):\n    pass\n\n\nU = deco(_t)(U)\n",
     "type_alias": FN + f"mk = type\nHid = mk('Hid', (unittest.TestCase,), {NS})\n",
-    "builtins_type": "import builtins\n\n\n" + FN
+    "builtins_type": "import builtins\n\n\n"
+    + FN
     + f"Hid = builtins.type('Hid', (unittest.TestCase,), {NS})\n",
-    "types_new_class": "import types\n\n\n" + FN
+    "types_new_class": "import types\n\n\n"
+    + FN
     + "Hid = types.new_class('Hid', (unittest.TestCase,), {{}}, lambda ns: ns.update(test_h=_t))\n",
     "type_star_args": FN + f"ARGS = ('Hid', (unittest.TestCase,), {NS})\nHid = type(*ARGS)\n",
     "type_name_rest": FN + f"REST = ((unittest.TestCase,), {NS})\nHid = type('Hid', *REST)\n",
@@ -111,3 +121,13 @@ def test_readable_class_node_target_fails_a_failing_changed_test(project, tmp_pa
     result = run(project, tmp_path, base, commit, SeeingWorker(FIX), verifiers=targets)
     assert result.status == "FAILED"
     assert not result.reason.startswith("DEFERRED_TESTS_"), result.reason
+
+
+def test_unlisted_names_files_whose_ids_are_unknown():
+    got = Collected((), ("tests/a.py",), ("tests/b.py",))
+    paths = ("tests/a.py", "tests/b.py", "tests/c.py")
+    assert unlisted(Path("/no-repo"), "x", paths, got) == {"tests/a.py", "tests/b.py"}
+
+
+def test_unlisted_without_a_record_leaves_the_static_rule():
+    assert unlisted(Path("/no-repo"), "x", ("tests/a.py",), NONE) == frozenset()

@@ -8,7 +8,7 @@ import pytest
 from conftest import commit_change, git
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
-import cairnwork.deferred_tests as dt
+from cairnwork.deferred_opaque import whole_file_required
 from cairnwork.deferred_tests import ensure_test_commit, untargeted
 from cairnwork_attest import verify_coverage as vc
 
@@ -48,25 +48,25 @@ def _paths(project, files):
 def test_unreadable_shape_changed_file_needs_whole(project, name):
     commit_change(project, {TEST: _text(SHAPES[name], SAME, SAME), "tests/helpers.py": HELPERS})
     base, commit = _paths(project, {TEST: _text(SHAPES[name], 2, 99)})
-    assert dt.whole_file_required(project, base, commit, (TEST,)) == {TEST}
+    assert whole_file_required(project, base, commit, (TEST,)) == {TEST}
 
 
 @pytest.mark.parametrize("name", NORMAL)
 def test_readable_shapes_need_no_whole(project, name):
     commit_change(project, {TEST: _text(NORMAL[name], SAME, SAME)})
     base, commit = _paths(project, {TEST: _text(NORMAL[name], 2, 99)})
-    assert dt.whole_file_required(project, base, commit, (TEST,)) == frozenset()
+    assert whole_file_required(project, base, commit, (TEST,)) == frozenset()
 
 
 def test_new_file_with_unreadable_shape_needs_whole(project):
     base, commit = _paths(project, {TEST: _text(SHAPES["alias"], 2, 99)})
-    assert dt.whole_file_required(project, base, commit, (TEST,)) == {TEST}
+    assert whole_file_required(project, base, commit, (TEST,)) == {TEST}
 
 
 def test_unchanged_file_needs_no_whole(project):
     commit_change(project, {TEST: _text(SHAPES["alias"], SAME, SAME)})
     base, commit = _paths(project, {"tests/test_other.py": "def test_o():\n    pass\n"})
-    assert dt.whole_file_required(project, base, commit, (TEST, "tests/data.json")) == frozenset()
+    assert whole_file_required(project, base, commit, (TEST, "tests/data.json")) == frozenset()
 
 
 def test_untargeted_whole_wants_the_file_named_whole():
@@ -119,6 +119,7 @@ def test_receiver_refuses_a_node_target_for_an_unreadable_changed_file(project):
     binding = {"base": base, "test_commit": commit, "test_paths": [TEST], "verifiers": [verifier]}
     request = {"acceptance_contract": {"required_verifier_ids": ["v1"]}}
     ctx = SimpleNamespace(binding=binding, request=request, full=True, policy={}, repo=project)
-    assert vc.coverage_problem(ctx).code == "TEST_PATH_NOT_TARGETED"
+    problem = vc.coverage_problem(ctx)
+    assert problem is not None and problem.code == "TEST_PATH_NOT_TARGETED"
     binding["verifiers"] = [["v1", ["python3", "-m", "pytest", "-q", TEST]]]
     assert vc.coverage_problem(ctx) is None

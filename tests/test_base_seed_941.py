@@ -10,6 +10,7 @@ from test_deferred_tests import make_test_commit
 from verify_helpers import git
 
 from cairnwork import pipeline_judge, verifiers
+from cairnwork.deferred_collected import NONE
 from cairnwork.deferred_overlay import TestCommitRejected as _TestCommitRejected
 from cairnwork.deferred_tests import BaseUncomparable, Comparison
 from cairnwork.verifier_spec import VerifierSpec, parse_verifier
@@ -46,7 +47,7 @@ def _fake_runs(
 ):
     target = "tests/test_ordered.py::test_joined"
     # these tests fake the verifier runs, so there is no real collect-only record (#974)
-    monkeypatch.setattr(pipeline_judge.deferred_collected, "check_with_base", lambda *a: None)
+    monkeypatch.setattr(pipeline_judge.deferred_collected, "check_with_base", lambda *a: NONE)
     outputs = {}
     for seed in (1, 2, 3, 4):
         outputs[str(seed)] = subprocess.check_output(
@@ -249,8 +250,9 @@ def test_initial_refusal_does_not_start_second_run(monkeypatch, tmp_path, kind, 
     monkeypatch.setattr(
         pipeline_judge, "new_tests", lambda *a: frozenset({"tests/test_x.py::test_x"})
     )
-    monkeypatch.setattr(pipeline_judge.deferred_collected, "check_with_base", lambda *a: None)
+    monkeypatch.setattr(pipeline_judge.deferred_collected, "check_with_base", lambda *a: NONE)
     monkeypatch.setattr(pipeline_judge, "untargeted", lambda *a: ())
+    monkeypatch.setattr(pipeline_judge, "whole_file_required", lambda *a: frozenset())
     calls = []
     monkeypatch.setattr(pipeline_judge, "run_verifiers", lambda *a, **k: calls.append(a) or ())
     monkeypatch.setattr(pipeline_judge, "as_failed", lambda run, *a: run)

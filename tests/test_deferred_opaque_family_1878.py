@@ -7,7 +7,7 @@ from conftest import commit_change, git
 from test_deferred_opaque_changed_1878 import HEAD, HELPERS, TEST, VISIBLE, _argv
 from test_deferred_tests import FIX, SeeingWorker, make_test_commit, run
 
-import cairnwork.deferred_tests as dt
+from cairnwork.deferred_opaque import whole_file_required
 from cairnwork.deferred_tests import ensure_test_commit
 
 sandbox = pytest.mark.sandbox
@@ -54,14 +54,14 @@ def _setup(project, shape, n_new):
 def test_family_shape_needs_whole(project, name):
     base, commit = _setup(project, MUST_BLOCK[name], 99)
     ensure_test_commit(project, commit, origin_url=git(project, "remote", "get-url", "origin"))
-    assert dt.whole_file_required(project, base, commit, (TEST,)) == {TEST}
+    assert whole_file_required(project, base, commit, (TEST,)) == {TEST}
 
 
 @pytest.mark.parametrize("name", READABLE)
 def test_readable_shape_needs_no_whole(project, name):
     base, commit = _setup(project, READABLE[name], 99)
     ensure_test_commit(project, commit, origin_url=git(project, "remote", "get-url", "origin"))
-    assert dt.whole_file_required(project, base, commit, (TEST,)) == frozenset()
+    assert whole_file_required(project, base, commit, (TEST,)) == frozenset()
 
 
 PIPELINE = ("module_attr", "factory_class", "call_base")

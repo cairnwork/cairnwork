@@ -26,7 +26,6 @@ from pathlib import Path
 from cairnwork import deferred_attached, gitprobe, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
-from cairnwork.deferred_opaque import whole_file_required  # noqa: F401  (#1878, re-exported)
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
     _REGULAR,
     MAX_DELETED_TEST_PATHS,
@@ -184,7 +183,7 @@ def new_tests(repo: Path, base: str, test_commit: str, paths: tuple[str, ...]) -
     AST (decorators included, line numbers not). A new or changed test in a class pytest does not
     collect (an ``__init__`` or ``__new__``) is refused, DEFERRED_TESTS_NOT_COLLECTED: no verifier
     can run it (#660). Not seen: tests changed only through a fixture, helper or module constant,
-    classes inherited from another module (whole_file_required, #1878), custom
+    classes inherited from another module (deferred_opaque, #1878), custom
     python_functions/python_classes. Such a test commit is refused (no teeth found, or the base
     run's DEFERRED_TESTS_NOT_RUN) when the file has no other new test; one beside a visible new
     test is not. A changed test inside a module-level

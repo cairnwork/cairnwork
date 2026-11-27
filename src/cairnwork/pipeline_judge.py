@@ -24,6 +24,7 @@ from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.collect_import import as_failed
 from cairnwork.conftest_check import without_conftests
 from cairnwork.core_request import AcceptanceSpec, VerifierObservation
+from cairnwork.deferred_opaque import unlisted, whole_file_required
 from cairnwork.deferred_overlay import stray_deletions
 from cairnwork.deferred_store import consume
 from cairnwork.deferred_tests import (
@@ -40,7 +41,6 @@ from cairnwork.deferred_tests import (
     not_run,
     test_paths,
     untargeted,
-    whole_file_required,
 )
 from cairnwork.node_ids import unmatched_note, without_case
 from cairnwork.p2p import P2PPlan, run_plan
@@ -118,18 +118,20 @@ def tests_with_teeth(
         _sealing_with_tests(task, ctx, candidate)
     paths, deleted = test_paths(task.repo, task.base_commit, task.test_commit, task.test_roots)
     targets = new_tests(task.repo, task.base_commit, task.test_commit, paths)  # may refuse
-    deferred_collected.check_with_base(
+    collected = deferred_collected.check_with_base(
         ctx, task, paths, f"{result.attempt_id}-f", targets, deleted
-    )  # #974, #1809
+    )  # #974, #1809; #1878: what pytest collects there, for unlisted
     named = (t for spec in specs for t in spec.targets)
     judged = without_conftests(paths)
-    whole = whole_file_required(task.repo, task.base_commit, task.test_commit, judged)  # #1878
+    whole = unlisted(task.repo, task.test_commit, judged, collected) | whole_file_required(
+        task.repo, task.base_commit, task.test_commit, judged
+    )  # #1878
     if missing := untargeted(judged, targets, named, whole):
         hint = (
             "name each such file, or each of its new or changed tests, as a verifier target; "
             "改了模組層或類別本體，請點名整個檔案; "
-            "a file with a class shape Cairnwork cannot read must be named whole; "
-            "檔內有讀不到的類別形狀時請點名整個檔案"
+            "a file holding a test Cairnwork cannot read must be named whole; "
+            "檔內有讀不到的測試時請點名整個檔案"
         )
         raise TestCommitRejected(
             "DEFERRED_TESTS_NOT_TARGETED", f"{len(missing)} test file(s); {hint}"

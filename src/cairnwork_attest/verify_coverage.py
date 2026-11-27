@@ -30,12 +30,8 @@ from __future__ import annotations
 from typing import Any
 
 from cairnwork import protection
-from cairnwork.deferred_tests import (
-    TestCommitRejected,
-    new_tests,
-    untargeted,
-    whole_file_required,
-)
+from cairnwork.deferred_opaque import whole_file_required
+from cairnwork.deferred_tests import TestCommitRejected, new_tests, untargeted
 from cairnwork.issue_task import test_target
 from cairnwork.node_file import file_part
 from cairnwork_attest.binding_extras import conftest_problem, data_problem, required_ids
