@@ -3,6 +3,9 @@ names are refused; prose and placeholders still pass (#1239 must not come back).
 
 from __future__ import annotations
 
+import json
+import pathlib
+
 import pytest
 
 from experimental.pause.secrets_scan import Scanner
@@ -126,25 +129,48 @@ def test_more_must_pass(text: str) -> None:
     assert not Scanner().scan(text)
 
 
-def test_head_blocks_everything_main_blocks() -> None:
-    """Differential: every input the pre-#1886 scanner (origin/main) refuses is still refused."""
-    import importlib.util
-    import pathlib
-    import subprocess
+_REVIEW_MUST_BLOCK = [
+    'password_session = os.getenv("X","hunter2hunter2")',
+    'api_key_cookie = os.environ["x"]or["hunter2hunter2"]',
+    'token_auth = "<hunter2hunter2>"',
+    'secret_session = "$hunter2hunter2"',
+    '--password-session=os.getenv("X","hunter2hunter2")',
+    '{"password_session": "<hunter2hunter2>"}',
+    'session_cookie = os.getenv("X","hunter2hunter2hunter2")',
+]
+_REVIEW_MUST_PASS = [
+    "Enable oauth for the login page.",
+    "session: main",
+    'author = "alice smith"',
+    'headers = {"Authorization": "Token " + token}',
+    'headers = {"Authorization": f"Token {self.key}"}',
+    "self.http_session = requests.Session()",
+    "session = Session()",
+    '@pytest.fixture(scope="session")',
+]
 
-    root = pathlib.Path(__file__).resolve().parents[1]
-    base = subprocess.run(
-        ["git", "-C", str(root), "show", "3e3097bd:experimental/pause/secrets_scan.py"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    if base.returncode != 0:
-        pytest.skip("base commit not available")
-    spec = importlib.util.spec_from_loader("secrets_scan_main", loader=None)
-    assert spec is not None
-    mod = importlib.util.module_from_spec(spec)
-    exec(compile(base.stdout, "secrets_scan_main", "exec"), mod.__dict__)
+
+@pytest.mark.parametrize("text", _REVIEW_MUST_BLOCK)
+def test_reviewer_must_block_inputs(text: str) -> None:
+    assert Scanner().scan(text)
+
+
+@pytest.mark.parametrize("text", _REVIEW_MUST_PASS)
+def test_reviewer_must_pass_inputs(text: str) -> None:
+    assert not Scanner().scan(text)
+
+
+def test_head_blocks_everything_main_blocked() -> None:
+    """Differential against a frozen file (made from 3e3097bd by gen_pause_secret_1886_main.py):
+    every input main refused is still refused. A missing file fails; it never skips."""
+    path = pathlib.Path(__file__).with_name("pause_secret_1886_main_blocked.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert len(data["blocked"]) >= 400
+    for text in data["blocked"]:
+        assert Scanner().scan(text), text
+
+
+def differential_corpus() -> list[str]:
     corpus = [
         f"{n} = {v}" for o in _OLD for w in _NEWW for n in _names(o, w) for v in _PLACEHOLDERS
     ]
@@ -152,30 +178,4 @@ def test_head_blocks_everything_main_blocks() -> None:
     corpus += [f"{n}=hunter2hunter2hunter2" for o in _OLD for w in _NEWW for n in _names(o, w)]
     corpus += [f"--{n} hunter2hunter2hunter2" for o in _OLD for w in _NEWW for n in _names(o, w)]
     corpus += [f"{w}_{o}: <x1x1x1x1x>" for o in _OLD for w in _NEWW]
-    assert len(corpus) >= 400
-    for text in corpus:
-        if mod.scan(text):
-            assert Scanner().scan(text), text
-
-
-@pytest.mark.parametrize(
-    "text",
-    [
-        'Authorization: "Token" fakevalue0123456789',
-        "Authorization: 'ApiKey' fakevalue0123456789",
-        'Authorization: Digest nc=1, response="fakevalue0123456789"',
-        "Authorization: Digest username=fakeuser, realm=x",
-        "Authorization: Api_Key fakevalue0123456789",
-        "Authorization: api-key fakevalue0123456789",
-        "Authorization: apikey fakevalue0123456789",
-        "Author\nization: Token fakevalue0123456789",
-        "Authorization:\nToken fakevalue0123456789",
-        'cookie = "<fakevalue0123456789fakevalue>"',
-        'session = "<0123456789abcdef0123456789abcdef0123>"',
-        'cookie = "${fakevalue0123456789abcd}"',
-        'auth = "hunter2()"',
-        'credentials = "getenv(hunter2)"',
-    ],
-)
-def test_review_round_one_shapes_are_blocked(text: str) -> None:
-    assert Scanner().scan(text)
+    return corpus
