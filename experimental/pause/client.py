@@ -164,15 +164,39 @@ def _secret_categories(scanner: Scanner, messages: object) -> tuple[str, ...]:
 
 
 def _joined_items(value: object) -> Iterator[str]:
-    """'key: value' for each mapping item whose key and value are strings, at any depth."""
+    """Each string-keyed item as a JSON '{"key": value}' piece, and each list with a string in it.
+
+    Quoted JSON keeps the scanner's rules for quoted values and carries nested values (#1204).
+    """
     if isinstance(value, dict):
         for key, item in value.items():
-            if isinstance(key, str) and isinstance(item, str):
-                yield f"{key}: {item}"
+            if isinstance(key, str) and _holds_long_string(item):
+                piece = json.dumps({key: item}, default=str)
+                # a string value is left unterminated: a closing quote would turn prose such as
+                # "token = next_token()" into a quoted value the scanner refuses
+                yield piece[:-2] if isinstance(item, str) else piece
             yield from _joined_items(item)
     elif isinstance(value, (list, tuple)):
+        if any(isinstance(item, str) for item in value):
+            yield json.dumps(list(value), default=str)  # a header pair ["Authorization", "Basic x"]
         for item in value:
             yield from _joined_items(item)
+
+
+_MIN_JOINED = (
+    8  # shorter values ("next", "4096") under a key such as "key" or "max_tokens" are prose
+)
+
+
+def _holds_long_string(value: object) -> bool:
+    """A string of at least _MIN_JOINED characters, at any depth."""
+    if isinstance(value, str):
+        return len(value) >= _MIN_JOINED
+    if isinstance(value, dict):
+        return any(_holds_long_string(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_holds_long_string(item) for item in value)
+    return False
 
 
 def _strings(value: object) -> Iterator[str]:

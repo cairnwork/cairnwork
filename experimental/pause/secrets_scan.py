@@ -49,7 +49,9 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     # the header name carries no credential word, so the Basic form is keyed on "authorization"
     (
         "basic_auth",
-        re.compile(r"(?i)\bauthorization[\"'`]?\s*[:=]\s*[\"'`]?basic\s+[A-Za-z0-9+/]{8,}={0,2}"),
+        re.compile(
+            r"(?i)\bauthorization[\"'`\]]*\s*(?:=>|[:=,])\s*\[?\s*[\"'`]?basic\s+[A-Za-z0-9+/]{8,}={0,2}"
+        ),
     ),
     # host paths: /Users/x, /home/x, /root/, C:\Users\x (any case)
     (
