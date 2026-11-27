@@ -122,13 +122,23 @@ def _visible_tests(repo: Path) -> list[str]:
 
 
 def _safe_copy_back(checkout: Path, cwd: Path, paths: list[str]) -> bool:
+    try:
+        return _copy_back_paths(checkout, cwd, paths)
+    except OSError:
+        # An unreadable source is a failure, never a deletion of the caller's file.
+        return False
+
+
+def _copy_back_paths(checkout: Path, cwd: Path, paths: list[str]) -> bool:
     for rel in paths:
         source, target = checkout / rel, cwd / rel
         if not _safe_relative(rel):
             return False
         if _has_symlink_inside(checkout, rel) or _has_symlink_inside(cwd, rel):
             return False
-        if not source.exists():
+        try:
+            source.lstat()
+        except FileNotFoundError:
             if target.exists():
                 target.unlink()
             continue

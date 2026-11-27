@@ -324,3 +324,49 @@ def test_worker_cli_is_not_shadowed_by_attempt_directory(tmp_path):  # #1452
         check=True,
     ).stdout.strip()
     assert Path(out).resolve().is_relative_to(agy_shim.REPO_ROOT)
+
+
+def _deny_reads_of(monkeypatch, denied: Path) -> None:
+    """Make stat/lstat/exists on one path raise PermissionError, even as root."""
+    real_stat, real_lstat, real_exists = Path.stat, Path.lstat, Path.exists
+
+    def stat_(self, *args, **kwargs):
+        if self == denied:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_stat(self, *args, **kwargs)
+
+    def lstat_(self, *args, **kwargs):
+        if self == denied:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_lstat(self, *args, **kwargs)
+
+    def exists_(self, *args, **kwargs):
+        if self == denied:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", stat_)
+    monkeypatch.setattr(Path, "lstat", lstat_)
+    monkeypatch.setattr(Path, "exists", exists_)
+
+
+def test_unreadable_source_fails_copy_back_and_keeps_target(tmp_path, monkeypatch):  # #1887
+    checkout, cwd = tmp_path / "checkout", tmp_path / "cwd"
+    checkout.mkdir()
+    cwd.mkdir()
+    (checkout / "a.py").write_text("worker\n")
+    (cwd / "a.py").write_text("caller\n")
+    _deny_reads_of(monkeypatch, checkout / "a.py")
+
+    assert agy_shim._safe_copy_back(checkout, cwd, ["a.py"]) is False
+    assert (cwd / "a.py").read_text() == "caller\n"
+
+
+def test_truly_absent_source_still_removes_target(tmp_path):  # #1887
+    checkout, cwd = tmp_path / "checkout", tmp_path / "cwd"
+    checkout.mkdir()
+    cwd.mkdir()
+    (cwd / "a.py").write_text("caller\n")
+
+    assert agy_shim._safe_copy_back(checkout, cwd, ["a.py"]) is True
+    assert not (cwd / "a.py").exists()
