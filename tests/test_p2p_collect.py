@@ -51,22 +51,31 @@ INHERIT_HIDES = {
 }
 
 
-def _case(repo, tmp_path, base_test, new_test, candidate):
+def _case(repo, tmp_path, base_test, new_test, candidate, target="tests/test_calc.py::test_mul"):
     commit_change(repo, {"src/calc.py": CALC, "tests/conftest.py": CONFTEST,
                          "tests/test_calc.py": base_test})  # fmt: skip
-    check = (("pytest", ("python3", "-m", "pytest", "-q", "tests/test_calc.py::test_mul")),)
+    check = (("pytest", ("python3", "-m", "pytest", "-q", target)),)
     return _run(repo, tmp_path, ("src/calc.py",), {"src/calc.py": candidate},
                 {"tests/test_calc.py": new_test}, check)  # fmt: skip
 
 
 @pytest.mark.parametrize("good", [True, False], ids=["fix", "breaks-sub"])
 def test_a_test_the_ast_loses_but_pytest_collects_still_guards(repo, tmp_path, good):
-    result = _case(repo, tmp_path, CASE, ALIASED + MUL_CASE, (CALC if good else SUB_OFF) + MUL)
+    result = _case(repo, tmp_path, CASE, ALIASED + MUL_CASE, (CALC if good else SUB_OFF) + MUL,
+                   "tests/test_calc.py")  # fmt: skip
+    # #1878: named whole, as the file holds a test pytest collects and the reader cannot list
     if good:
         assert result.status == "COMPLETED" and result.verified, result.reason
     else:  # main: verified (the AST said "removed"), the regression in test_sub unseen
         assert result.status == "FAILED" and not result.verified
         assert "tests/test_calc.py::Checks::test_sub" in result.p2p["rerun"]["failed"]
+
+
+@pytest.mark.parametrize("good", [True, False], ids=["fix", "breaks-sub"])
+def test_a_test_the_ast_loses_needs_the_file_named_whole(repo, tmp_path, good):
+    result = _case(repo, tmp_path, CASE, ALIASED + MUL_CASE, (CALC if good else SUB_OFF) + MUL)
+    assert result.status == "FAILED" and not result.verified  # #1878: a node target, refused
+    assert result.reason.startswith("DEFERRED_TESTS_NOT_TARGETED"), result.reason
 
 
 @pytest.mark.parametrize("good", [True, False], ids=["fix", "breaks-sub"])

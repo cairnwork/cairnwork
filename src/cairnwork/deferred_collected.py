@@ -20,6 +20,11 @@ ids unknown and the static rule in place;
 the receipt receiver re-derives the set statically without running pytest, so a test commit this
 check accepts is judged the same there. A test whose body changes under an id the base already
 collects is not seen by ids: the AST comparison still decides it.
+
+#1878: the test commit's record is returned; the judge compares it with the static reader
+(deferred_opaque.unlisted) and wants each changed file where pytest collects an id the reader does
+not list, old or new, or whose ids are unknown, named whole (DEFERRED_TESTS_NOT_TARGETED). NONE
+(no record) leaves every changed file's ids unknown: each must be named whole (fail closed).
 """
 
 from __future__ import annotations
@@ -47,26 +52,29 @@ LOG = logging.getLogger(__name__)
 _WHY: ContextVar[dict[str, str] | None] = ContextVar("deferred_collected_why", default=None)
 
 
-def check_with_base(ctx, task, paths: tuple[str, ...], run_id: str, targets, deleted=()) -> None:
+def check_with_base(
+    ctx, task, paths: tuple[str, ...], run_id: str, targets, deleted=()
+) -> Collected:
     """The base fixture names check (#986), then this one (#974): one call for the judge."""
     base_fixture_names.check_with_base(ctx, task, paths, run_id, deleted)
-    check(ctx, task, paths, targets, f"{run_id}c")
+    return check(ctx, task, paths, targets, f"{run_id}c")
 
 
-def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
-    """Refuse a new collected test that ``targets`` (``new_tests``) does not hold."""
+def check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> Collected:
+    """Refuse a new collected test that ``targets`` (``new_tests``) does not hold; return what
+    pytest collects on the test commit (#1878: deferred_opaque.unlisted), NONE when unknown."""
     token = _WHY.set({})
     try:
-        _check(ctx, task, paths, targets, run_id)
+        return _check(ctx, task, paths, targets, run_id)
     finally:  # no exit leaves this call's reasons behind (#1792, #1804)
         _WHY.reset(token)
 
 
-def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
+def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> Collected:
     skip = set(conftest_of(paths))
     files = tuple(p for p in paths if p.endswith(".py") and p not in skip)
     if not files:
-        return
+        return NONE
     after = _collect_all(ctx, task.test_commit, files, f"{run_id}t")
     on_base = tuple(f for f in files if _exists(task, f))
     if after is None:
@@ -74,7 +82,7 @@ def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
         # (the run may be the lever): refuse. If the probe fails too, the run itself is broken
         # here (e.g. a table plugin that fails to load): the base run reports UNCOMPARABLE (#804)
         if _collect_all(ctx, task.base_commit, _probe_files(task, on_base), f"{run_id}p") is None:
-            return
+            return NONE
         why = _why().pop(f"{run_id}t", "collect-no-record")
         LOG.warning("DEFERRED_TESTS_COLLECT_FAILED: %s (%d files)", why, len(files))
         raise TestCommitRejected(
@@ -85,7 +93,7 @@ def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
         )
     before = _collect_all(ctx, task.base_commit, on_base, f"{run_id}b") if on_base else NONE
     if before is None:  # the base's own run failed: the old ids are unknown, the static rule stays
-        return
+        return after
     unknown = {*after.error_files, *after.skipped_files, *before.error_files, *before.skipped_files}
     old = {_without_case(n) for n in before.ids}
     seen = set(targets)
@@ -98,6 +106,7 @@ def _check(ctx, task, paths: tuple[str, ...], targets, run_id: str) -> None:
             " cannot see; Cairnwork cannot tell which tests the commit adds, so it cannot check"
             " they ran; write them as plain Test* classes or top-level test functions",
         )
+    return after
 
 
 def _why() -> dict[str, str]:
