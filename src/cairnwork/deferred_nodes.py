@@ -52,7 +52,7 @@ import hashlib
 from collections.abc import Container
 from pathlib import Path
 
-from cairnwork.deferred_aliases import class_aliases
+from cairnwork.deferred_aliases import class_aliases, imported_only
 from cairnwork.deferred_overlay import TestCommitRejected
 from cairnwork.gitcmd import GitCommandError, run_git_bytes
 
@@ -73,6 +73,7 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
     uncollected: set[str] = set()
     reach = _Reach(tree)
     aliases = class_aliases(tree.body)
+    external = imported_only(tree)  # an imported-only base names no earlier class (#1833)
     for node in tree.body:
         if isinstance(node, _DEFS) and node.name.startswith("test"):
             functions[node.name] = _digest(
@@ -80,7 +81,7 @@ def test_functions(tree: ast.Module) -> tuple[dict[str, str], frozenset[str]]:
             )
         elif isinstance(node, ast.ClassDef):
             methods, blocked, case, marks = _members(
-                node, classes, reach, aliases.get(id(node), {})
+                node, classes, reach, aliases.get(id(node), {}), external
             )
             classes[node.name] = (methods, blocked, case, marks)
             if node.name.startswith("Test") or case:
@@ -106,6 +107,7 @@ def _members(
     classes: dict[str, _Class],
     reach: _Reach,
     aliases: dict[str, str] | None = None,
+    external: frozenset[str] = frozenset(),
 ) -> _Class:
     """A class's methods, its own first, then every base's that it does not define; and whether
     it has an ``__init__`` or ``__new__`` (its own or a base's); and whether it is a TestCase
@@ -130,7 +132,7 @@ def _members(
             for name, body in inherited.items():  # every base's: the MRO may pick a later one's
                 if name not in own:  # (#1009); a change to any of them reads as a change
                     methods[name] = _digest(methods.get(name, "") + body)  # bounded per level
-        elif target and not target.endswith("TestCase"):
+        elif target and not target.endswith("TestCase") and target not in external:
             # An unresolved or ambiguous base may name any earlier same-file class.
             for inherited, base_blocked, base_case, _ in classes.values():
                 blocked = blocked or base_blocked
