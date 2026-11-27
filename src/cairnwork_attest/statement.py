@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import re
 import sqlite3
+import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,7 +58,10 @@ def run_test_source(state_dir: Path, task_id: str, attempt_id: str) -> str:
     contradictory or unknown rows, raise: no statement is signed on a guess.
     """
     path = Path(state_dir) / "journal.sqlite"
-    if not path.is_file():
+    try:  # only "not found" is no journal; pathlib's is_file() hides every OSError on 3.14 (#1823)
+        if not stat.S_ISREG(os.stat(path).st_mode):
+            return "none"
+    except (FileNotFoundError, NotADirectoryError):
         return "none"
     try:
         conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, timeout=5)
