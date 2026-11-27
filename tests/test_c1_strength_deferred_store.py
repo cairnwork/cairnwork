@@ -203,3 +203,52 @@ def test_canonical_bundle_keeps_parent_as_prerequisite(project, store, tmp_path)
 
     assert verify.returncode != 0
     assert base in verify.stderr
+
+
+def _store_dir(tmp_path, *, mode=0o700, held=False):
+    path = tmp_path / "deferred-tests"
+    path.mkdir()
+    if held:
+        (path / f"{SHA}.bundle").write_bytes(b"x")
+    path.chmod(mode)
+    return path
+
+
+def test_require_imported_accepts_a_held_commit_in_strict_mode(tmp_path):
+    strict = DeferredStore(_store_dir(tmp_path, held=True), required=True)
+
+    strict.require_imported(SHA)
+
+
+def test_require_imported_strict_checks_the_directory_even_without_the_commit(tmp_path):
+    strict = DeferredStore(_store_dir(tmp_path, mode=0o755), required=True)
+
+    with pytest.raises(Rejected) as raised:
+        strict.require_imported(SHA)
+
+    assert raised.value.code == "TEST_STORE_UNSAFE"
+
+
+def test_require_imported_auto_mode_refuses_a_held_commit_in_an_unsafe_store(tmp_path):
+    auto = DeferredStore(_store_dir(tmp_path, held=True, mode=0o755))
+
+    with pytest.raises(Rejected) as raised:
+        auto.require_imported(SHA)
+
+    assert raised.value.code == "TEST_STORE_UNSAFE"
+
+
+def test_require_imported_auto_mode_ignores_the_store_when_the_commit_is_absent(tmp_path):
+    auto = DeferredStore(_store_dir(tmp_path, mode=0o755))
+
+    auto.require_imported(SHA)
+
+
+def test_require_imported_looks_up_the_requested_commit(tmp_path):
+    other = "b" * 40
+    path = _store_dir(tmp_path, held=True)
+    strict = DeferredStore(path, required=True)
+
+    with pytest.raises(Rejected):
+        strict.require_imported(other)
+    strict.require_imported(SHA)
