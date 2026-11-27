@@ -257,11 +257,7 @@ class VerifierAccount:
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
             kept = settle(self, group, main, deadline)
-            before = (
-                count_escaped(self, group, deadline)
-                if group > 0
-                else self._escaped_count(deadline, attempts=1)
-            )
+            before = count_escaped(self, group, deadline)
             seen, deadline = verifier_seen.before_kill(self.user, before, deadline)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):

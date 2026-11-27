@@ -101,6 +101,8 @@ def count_escaped(account, group: int, deadline: float) -> int:
     """The account's escaped count (-1: cannot tell) from one listing per look, with the members
     of a live collector's group left out (the collector itself stays, ``main`` comes off it). The
     same listing decides both, so a child that comes and goes can never tip the count."""
+    if group <= 0:  # no group known: the account's own count, as before #1849
+        return account._escaped_count(deadline, attempts=1)
 
     def procs():
         left = deadline - time.monotonic()

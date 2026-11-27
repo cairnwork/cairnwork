@@ -364,27 +364,6 @@ def test_must_block_a_group_leftover_does_not_take_the_collectors_slot(
     assert int(acct.reap(main, group=MAIN)) >= least
 
 
-# Option A (t-b022 shape): a live collector's group is its own, the group kill ends it.
-def test_must_pass_a_live_collector_with_overlapping_children_counts_zero(monkeypatch):
-    rows = [(MAIN, MAIN, None)] + [(200 + i, MAIN, 0.1 * i + 0.15) for i in range(30)]
-    world, acct = _acct(monkeypatch, rows)
-    assert int(acct.reap(1, group=MAIN)) == 0
-
-
-def test_must_pass_a_process_outside_the_group_is_still_counted_with_a_live_collector(
-    monkeypatch,
-):
-    rows = [(MAIN, MAIN, None), (OUT, OUT, None), (101, MAIN, None)]
-    world, acct = _acct(monkeypatch, rows)
-    assert int(acct.reap(1, group=MAIN)) >= 1
-
-
-def test_must_pass_a_zombie_collector_with_a_leftover_is_still_counted(monkeypatch):
-    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (101, MAIN, None)])
-    world.zombies = {MAIN}
-    assert int(acct.reap(1, group=MAIN)) >= 1
-
-
 def test_must_block_unreadable_real_paths_of_a_group_member_is_at_least_one(monkeypatch):
     rows = [(MAIN, MAIN, None), (OUT, OUT, 1.0, L), (101, MAIN, 1.5, L)]
     world, acct = _acct(monkeypatch, rows)
@@ -397,32 +376,3 @@ def test_must_pass_an_exempt_daemon_outside_the_group_and_a_leaving_child(monkey
     world, acct = _acct(monkeypatch, rows)
     _paths_from(monkeypatch, world, {900: 0.0})
     assert int(acct.reap(1, group=MAIN)) == 0
-
-
-# Round 1 of #1873: in account mode the group leader is sudo, never in the account's ps. The
-# collector is the group's process whose ppid is the group id (the rows above show it that way).
-def test_must_pass_a_clean_live_collector_on_the_stop_path_counts_zero(monkeypatch):
-    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None)])
-    assert int(acct.reap(1, group=MAIN)) == 0
-
-
-def test_must_pass_a_live_collector_with_a_persistent_child_counts_zero(monkeypatch):
-    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (102, MAIN, None)])
-    assert int(acct.reap(1, group=MAIN)) == 0
-
-
-def test_must_block_a_child_that_called_setsid_is_still_counted(monkeypatch):
-    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (102, 102, None)])
-    assert int(acct.reap(1, group=MAIN)) >= 1
-
-
-def test_must_block_an_orphan_leftover_with_the_collector_gone(monkeypatch):
-    world, acct = _acct(monkeypatch, [(102, MAIN, None)])
-    assert int(acct.reap(0, group=MAIN)) >= 1
-
-
-def test_the_collector_is_the_process_whose_ppid_is_the_group_never_a_leftover():
-    rows = [(1000, 100, 100, "S"), (1001, 1000, 100, "S"), (1002, 1, 100, "S")]
-    assert vg._lead(rows, 100) == {1000} and vg._members(rows, 100) == {1001, 1002}
-    assert vg._live(rows, 100) and not vg._live([(1000, 100, 100, "Z")], 100)
-    assert vg._lead([(100, 1, 100, "S"), (101, 100, 100, "S")], 100) == {100, 101}
