@@ -1,0 +1,72 @@
+"""Follow-up recall gaps from the #1200 acceptance read (#1204): placeholder values only."""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from experimental.pause.client import _Client
+from experimental.pause.schema import Reason
+from experimental.pause.secrets_scan import Scanner
+
+_B64 = "QUJDREVGR0g6WFlaMTIzNDU2"  # placeholder: base64 of made-up text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"Authorization: Basic {_B64}",
+        f"authorization = Basic {_B64}==",
+        f"curl -H 'Authorization: Basic {_B64}' https://example.invalid",
+        f'{{"Authorization": "Basic {_B64}"}}',
+    ],
+)
+def test_a_basic_authorization_value_is_refused(text: str) -> None:
+    assert Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Basic internationalization support is planned",
+        "The basic authorization flow is described in the doc",
+        "Authorization: Basic",
+    ],
+)
+def test_ordinary_prose_about_basic_is_not_refused(text: str) -> None:
+    assert not Scanner().scan(text)
+
+
+class _Transport:
+    def send(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("a refused request must never reach the transport")
+
+
+def _blocked(messages: list[dict]) -> bool:
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=1)
+    )
+    outcome = _Client(_Transport(), Scanner())._send(request, messages, planner=True)  # type: ignore[arg-type]
+    return outcome[3] == Reason.PAUSE_SECRET_BLOCKED
+
+
+@pytest.mark.parametrize("key", ["password", "api_key", "token", "client_secret"])
+def test_a_credential_key_with_a_separate_value_piece_is_refused(key: str) -> None:
+    assert _blocked([{"role": "user", "content": [{key: "Qwertyuiop12345x"}]}])
+
+
+def test_a_harmless_mapping_is_not_refused_by_the_joined_scan() -> None:
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=0)
+    )
+    messages = [{"role": "user", "content": "Please plan the next step"}]
+    outcome = _Client(_Transport(), Scanner())._send(request, messages, planner=True)  # type: ignore[arg-type]
+    assert outcome[3] != Reason.PAUSE_SECRET_BLOCKED
+
+
+@pytest.mark.parametrize("lead", list("!#@$%^&*-+/~"))
+@pytest.mark.parametrize("sep", ["=", ": ", " = ", "=>"])
+def test_a_value_that_starts_with_punctuation_is_refused(lead: str, sep: str) -> None:
+    assert Scanner().scan(f"password{sep}{lead}Abcdefgh12345")
+    assert Scanner().scan(f"--password {lead}Abcdefgh12345")
