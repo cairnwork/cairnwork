@@ -14,7 +14,8 @@ import cairnwork.verifier_escape as ve_escape
 import cairnwork.verifier_group as vg
 import cairnwork.verifier_seen as vs
 
-MAIN = 100  # the collector's pid, which is also its group's id
+MAIN = 100  # the group's id: in account mode the unlisted sudo, whose child is the collector
+COLL = 1000  # the collector's real pid in the account's ps: ppid == MAIN, pgid == MAIN
 
 
 class World:
@@ -32,6 +33,11 @@ class World:
 
     def stat(self, pid):  # R, or Z for a pid the case marked as a zombie
         return "Z" if pid in self.zombies else "R"
+
+    @staticmethod
+    def shown(r):  # (pid, ppid) as ps shows it: the row (MAIN, MAIN) is the sudo's child COLL
+        coll = r[0] == r[1] == MAIN
+        return (COLL if coll else r[0]), (MAIN if coll else (1 if r[3:] else 0))
 
     def table(self):
         return [r for r in self.rows if r[2] is None or self.now < r[2]]
@@ -54,8 +60,9 @@ class World:
         if self.rc == "raise":
             raise subprocess.TimeoutExpired("ps", 1)
         text = "".join(
-            f"{r[0]} {1 if r[3:] else 0} {r[1]} {self.stat(r[0])}\n" if wide
-            else f"{r[0]} {1 if r[3:] else 0}\n" if plain else f"{r[0]} {r[1]}\n"
+            f"{self.shown(r)[0]} {self.shown(r)[1]} {r[1]} {self.stat(r[0])}\n" if wide
+            else f"{self.shown(r)[0]} {self.shown(r)[1]}\n" if plain
+            else f"{self.shown(r)[0]} {r[1]}\n"
             for r in self.table())  # fmt: skip
         self.event()
         return SimpleNamespace(returncode=self.rc, stdout=text, stderr="")
@@ -390,3 +397,32 @@ def test_must_pass_an_exempt_daemon_outside_the_group_and_a_leaving_child(monkey
     world, acct = _acct(monkeypatch, rows)
     _paths_from(monkeypatch, world, {900: 0.0})
     assert int(acct.reap(1, group=MAIN)) == 0
+
+
+# Round 1 of #1873: in account mode the group leader is sudo, never in the account's ps. The
+# collector is the group's process whose ppid is the group id (the rows above show it that way).
+def test_must_pass_a_clean_live_collector_on_the_stop_path_counts_zero(monkeypatch):
+    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None)])
+    assert int(acct.reap(1, group=MAIN)) == 0
+
+
+def test_must_pass_a_live_collector_with_a_persistent_child_counts_zero(monkeypatch):
+    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (102, MAIN, None)])
+    assert int(acct.reap(1, group=MAIN)) == 0
+
+
+def test_must_block_a_child_that_called_setsid_is_still_counted(monkeypatch):
+    world, acct = _acct(monkeypatch, [(MAIN, MAIN, None), (102, 102, None)])
+    assert int(acct.reap(1, group=MAIN)) >= 1
+
+
+def test_must_block_an_orphan_leftover_with_the_collector_gone(monkeypatch):
+    world, acct = _acct(monkeypatch, [(102, MAIN, None)])
+    assert int(acct.reap(0, group=MAIN)) >= 1
+
+
+def test_the_collector_is_the_process_whose_ppid_is_the_group_never_a_leftover():
+    rows = [(1000, 100, 100, "S"), (1001, 1000, 100, "S"), (1002, 1, 100, "S")]
+    assert vg._lead(rows, 100) == {1000} and vg._members(rows, 100) == {1001, 1002}
+    assert vg._live(rows, 100) and not vg._live([(1000, 100, 100, "Z")], 100)
+    assert vg._lead([(100, 1, 100, "S"), (101, 100, 100, "S")], 100) == {100, 101}

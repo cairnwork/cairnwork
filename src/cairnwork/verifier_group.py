@@ -46,10 +46,18 @@ def _rows(user: str, timeout: float) -> list[Row] | None:
     return rows
 
 
+def _lead(rows: list[Row] | None, group: int) -> set[int]:
+    """The collector's pid: the group leader itself, or (account mode, where the leader is sudo,
+    which never shows in the account's ps) the group's process whose ppid is the group id. A
+    process cannot forge its ppid, and once the collector exits its children go to launchd, so no
+    leftover has it. Told by pid, never counted: a leftover must not take its place."""
+    return {p for p, pp, g, _s in rows or () if g == group and (p == group or pp == group)}
+
+
 def _members(rows: list[Row] | None, group: int) -> set[int]:
-    """Pids in the collector's group other than the collector itself. The collector is told by
-    its pid (the group id), not counted: a leftover must never take its place in a count."""
-    return {p for p, _, g, _s in rows or () if g == group and p != group}
+    """Pids in the collector's group other than the collector."""
+    lead = _lead(rows, group)
+    return {p for p, _, g, _s in rows or () if g == group and p not in lead}
 
 
 def wait_clear(
@@ -85,7 +93,8 @@ def wait_clear(
 def _live(rows: list[Row] | None, group: int) -> bool:
     """The collector is listed and is not a zombie: it still runs, so the rest of its group is
     its own in-flight children, which the group kill that follows reap() ends (not escapes)."""
-    return any(p == group and "Z" not in st for p, _, _, st in rows or ())
+    lead = _lead(rows, group)
+    return any(p in lead and "Z" not in st for p, _, _, st in rows or ())
 
 
 def count_escaped(account, group: int, deadline: float) -> int:
@@ -98,8 +107,8 @@ def count_escaped(account, group: int, deadline: float) -> int:
         rows = _rows(account.user, min(left, PS_TIMEOUT_SECONDS)) if left > 0 else None
         if rows is None:
             return None
-        skip = _live(rows, group)
-        return [(p, pp) for p, pp, g, _s in rows if not (skip and g == group and p != group)]
+        skip, lead = _live(rows, group), _lead(rows, group)
+        return [(p, pp) for p, pp, g, _s in rows if not (skip and g == group and p not in lead)]
 
     return verifier_escape.escaped_count(procs, account._real_paths, sys.platform == "darwin")
 
@@ -131,7 +140,8 @@ def settle(account, group: int, main: int, deadline: float) -> int:
     def decide(rows: list[Row]) -> None:  # the exemption is judged at the first listing
         user = account.user
         outside.append(_not_exempt(account, user, rows, lambda p, g: g != group))
-        lead.append(_not_exempt(account, user, rows, lambda p, g: p == group))
+        heads = _lead(rows, group)
+        lead.append(_not_exempt(account, user, rows, lambda p, g: p in heads))
         for pid in _members(rows, group):
             n = _not_exempt(account, user, rows, lambda p, g, pid=pid: p == pid)
             if n < 0:
