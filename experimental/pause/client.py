@@ -178,7 +178,12 @@ def _joined_items(value: object) -> Iterator[str]:
             yield from _joined_items(item)
     elif isinstance(value, (list, tuple)):
         first = next((item for item in value if isinstance(item, str)), None)
-        if first is not None and _header_name(first) and names_credential(first) and _holds_value(value):
+        if (
+            first is not None
+            and _header_name(first)
+            and names_credential(first)
+            and _holds_value(value)
+        ):
             yield json.dumps(list(value), default=str)
         for item in value:
             yield from _joined_items(item)
