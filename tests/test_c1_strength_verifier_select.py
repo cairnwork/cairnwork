@@ -60,3 +60,41 @@ def test_selected_intake_honors_disabled_account_config(
     intake = verifier_select.SelectedIntake(state, selected)
 
     assert intake.verifier_account() is None
+
+
+def test_relative_root_is_refused_as_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _account(monkeypatch, Path("relative-root"))
+    with pytest.raises(IntakeRefused) as caught:
+        verifier_select.select_account("cairnwork-verifier2")
+    assert caught.value.code == "BAD_VERIFIER_ACCOUNT"
+    assert "invalid verifier root: relative-root" in str(caught.value)
+
+
+def test_missing_root_is_reported_unavailable_not_unsafe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "missing-root"
+    _account(monkeypatch, missing)
+    with pytest.raises(IntakeRefused) as caught:
+        verifier_select.select_account("cairnwork-verifier2")
+    assert caught.value.code == "BAD_VERIFIER_ACCOUNT"
+    assert f"unavailable verifier root: {missing}" in str(caught.value)
+
+
+def test_unknown_verifier_user_is_refused_with_its_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    _account(monkeypatch, root, "ghost-verifier")
+
+    def no_such_user(_user: str) -> Any:
+        raise KeyError("ghost-verifier")
+
+    monkeypatch.setattr(verifier_select.pwd, "getpwnam", no_such_user)
+    with pytest.raises(IntakeRefused) as caught:
+        verifier_select.select_account("cairnwork-verifier2")
+    assert caught.value.code == "BAD_VERIFIER_ACCOUNT"
+    assert "unknown verifier user: ghost-verifier" in str(caught.value)
