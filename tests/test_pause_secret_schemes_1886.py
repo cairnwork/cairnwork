@@ -249,3 +249,51 @@ def test_placeholder_with_closing_punctuation_still_passes(word: str, shape: str
         assert not Scanner().scan(f"{word} = {shape}{tail}"), (word, shape, tail)
     assert not Scanner().scan(f"f({word}={shape})")
     assert not Scanner().scan(f'cfg = {{"{word}": {shape}}}')
+
+
+@pytest.mark.parametrize("scheme", ["Token", "ApiKey", "api-key", "Api_Key"])
+@pytest.mark.parametrize("prefix", ["a", "ab", "abc", "abcd", "abcde"])
+def test_scheme_value_with_a_short_prefix_and_colon_is_blocked(scheme: str, prefix: str) -> None:
+    assert Scanner().scan(f"Authorization: {scheme} {prefix}:{'x' * 24}")
+    assert Scanner().scan(f'Authorization: "{scheme} {prefix}:{"z" * 24}"')
+
+
+@pytest.mark.parametrize("brk", ["\n", "\r\n", "\r", "\v", "\f", "\x85", " ", " "])
+@pytest.mark.parametrize("indent", [" ", "    ", "\t", " \t "])
+def test_header_name_split_by_a_line_break_and_indent_is_blocked(brk: str, indent: str) -> None:
+    assert Scanner().scan(f"Authori{brk}{indent}zation: Token {_FAKE}")
+    assert Scanner().scan(f"Authorization:{brk}{indent}Token {_FAKE}")
+
+
+@pytest.mark.parametrize("word", _NEW_WORDS_ONLY)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "<abc_xxxxxxxx00000000>",
+        "<abc-xxxxxxxx00000000>",
+        "<pre_1234567890>",
+        "<a-b-12345678>",
+        "<id_ab12cd34ef>",
+        "${ABC_XXXXXXXX00000000}",
+        "$ABC_XXXXXXXX00000000",
+        "${PRE_1234567890}",
+    ],
+)
+def test_placeholder_with_a_value_like_segment_is_not_exempt(word: str, shape: str) -> None:
+    assert Scanner().scan(f"{word} = {shape}")
+
+
+@pytest.mark.parametrize("word", _NEW_WORDS_ONLY)
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "<your-session-cookie-here>",
+        "${SESSION_COOKIE}",
+        "<YOUR_API_KEY_2>",
+        "$SESSION_COOKIE",
+        "<your-token-v2>",
+        "<ENV_NAME_1>",
+    ],
+)
+def test_plain_word_placeholders_still_pass(word: str, shape: str) -> None:
+    assert not Scanner().scan(f"{word} = {shape}")

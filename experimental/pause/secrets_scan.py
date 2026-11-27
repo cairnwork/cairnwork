@@ -66,7 +66,7 @@ _PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
         "scheme_auth",
         re.compile(
             r"(?i)\bauthorization[\"'`]*\s*\]*\s*(?:=>|:=|[:=,])\s*\[?\s*[\"'`]?"
-            r"(?:[\"'`]?(?:token|api[-_]?key)[\"'`]?\s+[A-Za-z0-9+/._~=\"-]{6,}"
+            r"(?:[\"'`]?(?:token|api[-_]?key)[\"'`]?\s+[A-Za-z0-9+/._~=:\"-]{6,}"
             r"|[\"'`]?digest[\"'`]?\s+(?:[A-Za-z][A-Za-z0-9_-]*\s*=\s*[\"'`]?[A-Za-z0-9+/._~=-]+"
             r"|[A-Za-z0-9+/._~=\"-]{6,}))"
         ),
@@ -132,7 +132,7 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
             variants += (compact, wrapped)
         elif name == "scheme_auth":
             # a header name split by any line break, also a lone CR, VT, FF, NEL, LS or PS (#1886)
-            variants += (wrapped, re.sub(r"[\r\n\v\f\x85\u2028\u2029]", "", normalized))
+            variants += (wrapped, re.sub(r"[\r\n\v\f\x85\u2028\u2029][ \t]*", "", normalized))
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
     low_compact = _PEM_BLANKS.sub("", normalized.lower())
@@ -249,8 +249,13 @@ def _is_plain_name(v: str) -> bool:
         return False
     inner = next(g for g in found.groups() if g)
     # 16+ characters mixing digits into one unbroken run read as a value, not a name
-    return not (
-        len(inner) >= 16 and any(c.isdigit() for c in inner) and not re.search(r"[_-]", inner)
+    if len(inner) >= 16 and any(c.isdigit() for c in inner) and not re.search(r"[_-]", inner):
+        return False
+    # a segment of 8+ characters that mixes letters and digits, or is all digits, is a value
+    return not any(
+        len(seg) >= 8
+        and (seg.isdigit() or (any(c.isdigit() for c in seg) and any(c.isalpha() for c in seg)))
+        for seg in re.split(r"[_-]", inner)
     )
 
 
