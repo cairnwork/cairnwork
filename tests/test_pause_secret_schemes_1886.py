@@ -179,3 +179,42 @@ def differential_corpus() -> list[str]:
     corpus += [f"--{n} hunter2hunter2hunter2" for o in _OLD for w in _NEWW for n in _names(o, w)]
     corpus += [f"{w}_{o}: <x1x1x1x1x>" for o in _OLD for w in _NEWW]
     return corpus
+
+
+_SCHEMES = ("Token", "ApiKey", "api-key", "Api_Key", "API_KEY", "apikey", "TOKEN", "token")
+_WRAPS = ("{s}", '"{s}"', "'{s}'")
+
+
+@pytest.mark.parametrize("scheme", _SCHEMES)
+@pytest.mark.parametrize("wrap", _WRAPS)
+def test_scheme_case_separator_quote_matrix(scheme: str, wrap: str) -> None:
+    s = wrap.format(s=scheme)
+    assert Scanner().scan(f"Authorization: {s} {_FAKE}")
+    assert Scanner().scan(f'Authorization: "{scheme} {_FAKE}"')
+    assert Scanner().scan(f"authorization = '{scheme} {_FAKE}'")
+
+
+@pytest.mark.parametrize("brk", ["\r", "\n", "\r\n", "\v", "\f", "\x85", "\u2028", "\u2029"])
+def test_header_name_split_by_any_line_break(brk: str) -> None:
+    assert Scanner().scan(f"Authori{brk}zation: Token {_FAKE}")
+    assert Scanner().scan(f"Authorization:{brk}Token {_FAKE}")
+
+
+@pytest.mark.parametrize(
+    "text", ["auth = hunter2()", "session = a1()", "cookie = x" + "y" * 40 + "()"]
+)
+def test_unquoted_calls_with_digits_or_long_names_are_not_exempt(text: str) -> None:
+    assert Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "auth = get_session()",
+        "session = os.getcwd()",
+        "cookie = jar.load_cookies()",
+        "auth = Session()",
+    ],
+)
+def test_ordinary_calls_still_pass(text: str) -> None:
+    assert not Scanner().scan(text)

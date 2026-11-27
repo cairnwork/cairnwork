@@ -131,7 +131,8 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
         if name in {"api_key", "bearer_token"}:
             variants += (compact, wrapped)
         elif name == "scheme_auth":
-            variants += (wrapped,)  # a header name split over lines (#1886)
+            # a header name split by any line break, also a lone CR, VT, FF, NEL, LS or PS (#1886)
+            variants += (wrapped, re.sub(r"[\r\n\v\f\x85\u2028\u2029]", "", normalized))
         if any(pattern.search(variant) for variant in variants):
             hits.append(name)
     low_compact = _PEM_BLANKS.sub("", normalized.lower())
@@ -149,6 +150,7 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
             for match in pattern.finditer(candidate):
                 name, value = match.group("name"), match.group("value")
                 word = _secret_word(name)  # exactly the pre-#1886 judgement
+                is_old = word is not None
                 if word is None:
                     word = _secret_word(name, new=True)  # a #1886 word, only when no old one hits
                     if (
@@ -160,7 +162,8 @@ def _scan_view(text: str, names: tuple[str, ...]) -> list[str]:
                 if (
                     word is None
                     or (word == "pwd" and _is_path(value))
-                    or re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value)  # old 16-char floor kept
+                    # old 16-char floor kept, for the pre-#1886 words only
+                    or (is_old and re.fullmatch(r"[A-Za-z_]\w{0,14}\(\)", value))
                     or _is_short_word_with_trailing_punctuation(value)
                 ):
                     continue
@@ -258,7 +261,7 @@ def _is_placeholder(value: str) -> bool:
         _is_plain_name(v)
         or re.fullmatch(r"os\.environ(?:\.get)?[\[(]\s*[\"'][A-Za-z_]\w*[\"']\s*[\])]", v)
         or re.fullmatch(r"(?:os\.)?getenv\(\s*[\"'][A-Za-z_]\w*[\"']\s*\)", v)
-        or re.fullmatch(r"[A-Za-z_][\w.]*\(\)", v)
+        or re.fullmatch(r"[A-Za-z_][A-Za-z_.]{0,39}\(\)", v)
     )
 
 
