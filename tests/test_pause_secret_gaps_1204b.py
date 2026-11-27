@@ -145,3 +145,79 @@ def test_a_cyclic_message_fails_closed_as_scanner_error() -> None:
     outcome = _Client(_Transport(), Scanner())._send(request, [message], planner=True)  # type: ignore[arg-type]
     assert outcome[3] == Reason.PAUSE_SECRET_BLOCKED
     assert outcome[4] == ("scanner_error",)
+
+
+# --- review round 2 (#1204): short/nested/integer values blocked; ordinary code in a message kept ---
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f'headers[ "Authorization" ] = "Basic {_B64}"',
+        f"headers[ 'Authorization' ]= 'Basic {_B64}'",
+        f'authorization := "Basic {_B64}"',
+    ],
+)
+def test_basic_authorization_with_a_space_before_the_bracket_or_walrus_is_refused(
+    text: str,
+) -> None:
+    assert Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Basic internationalization support is planned",
+        "The basic authorization flow is described in the doc",
+        "Authorization: Basic",
+        "Authorization: Basic <base64 of user:pass>",
+        'req.Header.Set("Content-Type", "application/json")',
+    ],
+)
+def test_prose_about_basic_stays_unrefused_round_two(text: str) -> None:
+    assert not Scanner().scan(text)
+
+
+@pytest.mark.parametrize(
+    "item",
+    [
+        {"password": "hunter2"},
+        {"password": "abc123"},
+        {"token": "Abc1234"},
+        {"password": {"v": "hunter2"}},
+        {"password": 1234567890123456},
+    ],
+)
+def test_short_nested_and_integer_credential_values_are_refused(item: object) -> None:
+    assert _blocked([{"role": "user", "content": [item]}])
+
+
+def _passes(message: dict) -> bool:
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=1)
+    )
+    outcome = _Client(_QuotaTransport(), Scanner())._send(request, [message], planner=True)  # type: ignore[arg-type]
+    return outcome[3] != Reason.PAUSE_SECRET_BLOCKED
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "def f():\n    token = next_token()\n    return token",
+        "page = fetch(\n    token = None,\n    limit=10)",
+        [{"type": "text", "text": "token = next_token()"}],
+        [{"type": "text", "text": "password = get_password()"}],
+        [{"key": "next"}],
+        [{"max_tokens": "4096"}],
+        [{"max_tokens": 4096}],
+        "Please plan the next step",
+        [{"type": "text", "text": "ordinary words"}],
+    ],
+)
+def test_ordinary_code_and_words_in_a_user_message_are_not_refused(content: object) -> None:
+    assert _passes({"role": "user", "content": content})
+
+
+def test_ordinary_code_in_a_tool_message_is_not_refused() -> None:
+    content = "def f():\n    token = next_token()\n    return token"
+    assert _passes({"role": "tool", "tool_call_id": "c1", "content": content})
