@@ -147,7 +147,7 @@ def test_a_cyclic_message_fails_closed_as_scanner_error() -> None:
     assert outcome[4] == ("scanner_error",)
 
 
-# --- review round 2 (#1204): short/nested/integer values blocked; ordinary code in a message kept ---
+# --- review round 2 (#1204): short, nested and integer values blocked; ordinary code kept ---
 
 
 @pytest.mark.parametrize(
