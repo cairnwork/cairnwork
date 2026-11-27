@@ -304,3 +304,19 @@ def test_repo_root_package_marker_does_not_exempt_depth_zero_1829(tmp_path):
 def test_newer_config_naming_other_dir_keeps_package_exempt_1829(tmp_path, cfg_name, cfg):
     base = {"tests/test_a.py": TEST, "src/pkg/__init__.py": "", cfg_name: cfg}
     assert _gate(tmp_path, base, {"src/pkg/colorsys.py": BODY}) == ""
+
+
+# second review round (#1829): a case-variant config name or value, and a non-string list item
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg"),
+    [
+        ("PYTEST.INI", "[pytest]\npythonpath = pkg\n"),
+        ("Pyproject.TOML", '[tool.pytest.ini_options]\npythonpath = ["pkg"]\n'),
+        ("pytest.ini", "[pytest]\npythonpath = PKG\n"),
+        ("pyproject.toml", '[tool.pytest.ini_options]\npythonpath = ["Pkg"]\n'),
+        ("pyproject.toml", "[tool.pytest.ini_options]\npythonpath = [1]\n"),
+    ],
+)
+def test_case_variants_and_non_string_items_are_not_skipped_1829(tmp_path, cfg_name, cfg):
+    base = {**_PKG, cfg_name: cfg}
+    assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""

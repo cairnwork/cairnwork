@@ -110,7 +110,7 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
         if (
             directory == ""
             or loose
-            or directory in (roots or ())
+            or directory.casefold() in (roots or ())
             or (posixpath.join(directory, "__init__.py") not in tree)
         ):
             raise CandidateRejected(
@@ -159,7 +159,7 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
     None when one cannot be trusted (unreadable, over the cap, bad encoding, unparsable)."""
     found: set[str] = set()
     for path in sorted(tree):
-        leaf = path.rsplit("/", 1)[-1]
+        leaf = path.rsplit("/", 1)[-1].casefold()  # macOS volumes ignore case
         if leaf not in _CONFIGS:
             continue
         # a config the parser cannot read the shape of, or an addopts override, may name any dir
@@ -179,7 +179,7 @@ def _pythonpath_dirs(repo, commit: str, tree: dict[str, str]) -> frozenset[str] 
         base = path.rpartition("/")[0]
         found.update(posixpath.normpath(posixpath.join(base, v)) if v else base for v in values)
         found.update(v.rstrip("/") for v in values)  # also as written, from any rootdir
-    return frozenset(d for d in found if d != ".") | ({""} if "." in found else set())
+    return frozenset(d.casefold() for d in found if d != ".") | ({""} if "." in found else set())
 
 
 def _toml_values(text: str) -> list[str]:
@@ -194,9 +194,11 @@ def _toml_values(text: str) -> list[str]:
         _refuse_override(table.get("addopts"))
         for key in _PATH_KEYS:
             value = table.get(key, [])
+            if isinstance(value, list) and not all(isinstance(v, str) for v in value):
+                raise TypeError("pythonpath has a non-string item")
             if not isinstance(value, (str, list)):
                 raise TypeError("pythonpath has the wrong shape")
-            out.extend(value.split() if isinstance(value, str) else [str(v) for v in value])
+            out.extend(value.split() if isinstance(value, str) else value)
     return out
 
 
