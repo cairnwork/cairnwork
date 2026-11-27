@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from adopt_helpers import adopt_on_kill
 
 from cairnwork import confined, proc_start, verify_cli
 from cairnwork import verify_candidate as module
@@ -192,10 +193,17 @@ def test_two_clean_looks_in_a_row_after_unclean_ones_clean_the_attempt(tmp_path,
     assert not marker.exists()
 
 
-def test_a_marked_orphan_that_can_be_killed_is_killed_and_the_attempt_cleaned(tmp_path):
+def test_a_marked_orphan_that_can_be_killed_is_killed_and_the_attempt_cleaned(
+    tmp_path, monkeypatch
+):
     marker, _ = _orphan(tmp_path)
+    pid_file = tmp_path / "orphan.pid"
     sleeper = "import time; time.sleep(60)"
-    child = f"import subprocess, sys; subprocess.Popen([sys.executable, '-c', {sleeper!r}])"
+    child = (
+        f"import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', {sleeper!r}]);"
+        f" open({str(pid_file)!r}, 'w').write(str(p.pid))"
+    )
+    adopt_on_kill(monkeypatch, pid_file)  # the orphan is this test's own: its pid file names it
     env = {**os.environ, ATTEMPT_ENV: AID}
     subprocess.run([sys.executable, "-c", child], env=env, check=True)  # the grandchild is orphaned
     try:

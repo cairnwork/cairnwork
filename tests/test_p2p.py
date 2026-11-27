@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from adopt_helpers import adopt_started_in_test
 from conftest import commit_change
 from test_deferred_tests import CHECK, REGRESSION, make_test_commit
 from test_pipeline import EditWorker
@@ -104,20 +105,21 @@ def test_a_base_probe_timeout_degrades_to_module_dir_and_says_so(project, tmp_pa
 
 LEAK = (
     "import subprocess, sys\ndef test_leak():\n"
-    "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+    "    subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)  # @TMP@'],\n"
     "                     start_new_session=True)\n"
 )
 
 
 def test_a_base_test_that_leaves_a_process_is_uncomparable_not_the_candidates_failure(
-    project, tmp_path
+    project, tmp_path, monkeypatch
 ):
     # #285: an existing nested test always leaves a session-detached sleeper, on the base too.
     # The candidate run of whole-suite would block on that leftover although the fix is right.
     # The probe sees it on the base: no evidence (UNCOMPARABLE), and no narrower suite is tried
+    adopt_started_in_test(monkeypatch, tmp_path)  # the sweep kills the test's own sleeper
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="whole-suite",
-        extra={"tests/deep/test_leak.py": LEAK},
+        extra={"tests/deep/test_leak.py": LEAK.replace("@TMP@", str(tmp_path))},
     )  # fmt: skip
     assert result.status == "FAILED" and not result.verified
     assert "P2P_BASE_PROBE_UNUSABLE" in result.reason
@@ -125,11 +127,14 @@ def test_a_base_test_that_leaves_a_process_is_uncomparable_not_the_candidates_fa
     assert "outlived" not in result.reason  # the candidate run never happened
 
 
-def test_a_module_dir_base_test_that_leaves_a_process_ends_before_the_worker(project, tmp_path):
+def test_a_module_dir_base_test_that_leaves_a_process_ends_before_the_worker(
+    project, tmp_path, monkeypatch
+):
     # #285 + #234: the module-dir files leave a process on the unchanged base
+    adopt_started_in_test(monkeypatch, tmp_path)  # the sweep kills the test's own sleeper
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD}, mode="module-dir",
-        extra={"tests/test_leak.py": LEAK},
+        extra={"tests/test_leak.py": LEAK.replace("@TMP@", str(tmp_path))},
     )  # fmt: skip
     assert result.status == "FAILED" and not result.verified and result.candidate_commit is None
     assert result.reason.startswith("UNCOMPARABLE: BASE_ENV_FAILED: ")
@@ -225,7 +230,8 @@ def _fails_and(side_effect):
             id="checkout-mutated",
         ),
         pytest.param(
-            "        subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+            "        subprocess.Popen([sys.executable, '-c',\n"
+            "                          'import time; time.sleep(30)  # @TMP@'],\n"
             "                         start_new_session=True)\n",
             "outlived",
             id="surviving-process",
@@ -233,10 +239,12 @@ def _fails_and(side_effect):
     ],
 )
 def test_a_failure_that_also_taints_the_run_is_not_plain_and_not_re_run(
-    project, tmp_path, side_effect, recorded
+    project, tmp_path, monkeypatch, side_effect, recorded
 ):
     # #130: the first run exits 1 on a failed test, but the run itself is suspect (a mutated
     # checkout, a surviving process): plain_failure stays False, so no second try can wash it
+    adopt_started_in_test(monkeypatch, tmp_path)  # the sweep kills the test's own sleeper
+    side_effect = side_effect.replace("@TMP@", str(tmp_path))
     result = run(
         project, tmp_path, {"src/calc.py": FIX_ADD.replace("SLOW = False", "SLOW = True")},
         mode="whole-suite", extra={"tests/test_taint.py": _fails_and(side_effect)},
