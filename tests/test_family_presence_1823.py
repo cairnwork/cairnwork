@@ -107,3 +107,24 @@ def test_a_dangling_index_link_is_refused_and_a_free_name_is_not(repo, attempt):
     with pytest.raises(CandidateRejected) as info:  # no change: refused for that, not the index
         snapshot_candidate(repo, attempt, ("src/a.py",), python=sys.executable)
     assert info.value.code != "UNREADABLE_WORKTREE"
+
+
+def test_an_unreadable_bundle_stops_the_entry_run_at_the_statement_step(
+    tmp_path, deny, monkeypatch
+):
+    """Entry level (#1823): the failure travels up through _run_steps; nothing is written or
+    published, and the runner's step list ends with an ERROR statement step."""
+    from types import SimpleNamespace
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    key = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(on_verified, "verify_record", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(on_verified, "load_private_key", lambda *a, **k: key)
+    bundle = tmp_path / "unreadable-bundle.json"
+    deny(bundle.name)
+    args = SimpleNamespace(state=str(tmp_path), task_id="t", attempt_id="a", candidate="c")
+    pubkey = SimpleNamespace(public=None, path=tmp_path / "pub.pem")
+    steps = on_verified._run_steps(args, bundle, pubkey)  # type: ignore[arg-type]
+    assert [(s.step, s.code) for s in steps] == [("statement", "ERROR")]
+    assert not os.path.lexists(bundle)
