@@ -34,7 +34,7 @@ PS_TIMEOUT_SECONDS = 60
 
 
 def execute(
-    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None, scope_roots=()
+    argv, cwd, env, timeout, log_path, reap=None, pass_fds=(), stop=None, scope_roots=(), pgrp=False
 ) -> tuple[int | None, bool, survivor_argv.Survivors]:
     """Run in a new process group; the parent copies output into log_path (the child
     never holds the log's file descriptor); kill the group afterwards. ``stop`` (#1671,
@@ -66,9 +66,9 @@ def execute(
             timed_out = not _wait_unreaped(process.pid, timeout, stop)
             # a run ended early by ``stop`` still has its main process, which reap() would count
             running = stop is not None and not timed_out and _running(process.pid)
-            # Another account's processes: the owner cannot signal them; reap() kills them
-            # all and says how many were running (the main one, if it timed out, included).
-            escaped = (reap(1) if running else reap()) if reap is not None else 0
+            # Another account's processes: reap() kills them all and says how many were running.
+            more = {"group": process.pid} if pgrp else {}  # #1849: pgid == pid (new session)
+            escaped = (reap(1, **more) if running else reap(**more)) if reap is not None else 0
             finished = True
         finally:
             refused = not _kill_group(process.pid)  # a refused kill leaves the group alive

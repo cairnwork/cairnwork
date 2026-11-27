@@ -40,6 +40,7 @@ from pathlib import Path
 from cairnwork import confined, lock_queue, survivor_argv, verifier_escape, verifier_seen
 from cairnwork.account_proc import run_bounded
 from cairnwork.grant_read import grant_read as _grant_read
+from cairnwork.verifier_group import count_escaped, settle
 from cairnwork_sandbox import Backend, platform_backend
 
 SUDO = "/usr/bin/sudo"
@@ -247,7 +248,7 @@ class VerifierAccount:
             lambda: self._list(deadline, attempts), self._real_paths, sys.platform == "darwin"
         )
 
-    def reap(self, main: int = 0) -> survivor_argv.Survivors:
+    def reap(self, main: int = 0, group: int = 0) -> survivor_argv.Survivors:
         """Kill everything the account runs; return how many escaped processes were running.
         Before the kill a failed ps is not retried (that gives a survivor time to hide). An
         unknown count is one more, so "cannot tell" is never "nothing escaped". ``main`` (#1671):
@@ -255,13 +256,14 @@ class VerifierAccount:
         count only, never off an unknown one. The result lists names (#1819, text only)."""
         deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
         try:
-            before = self._escaped_count(deadline, attempts=1)
+            kept = settle(self, group, main, deadline)
+            before = count_escaped(self, group, deadline)
             seen, deadline = verifier_seen.before_kill(self.user, before, deadline)
             left = self._kill_until_clean(5, deadline)
         except (OSError, subprocess.SubprocessError):
             return survivor_argv.Survivors(1)
         count = max(before, 0) + 1 if before < 0 or left != 0 else max(before - main, 0)
-        return verifier_seen.result(count, seen, self._real_paths, main, before)
+        return verifier_seen.result(max(count, kept), seen, self._real_paths, main, before)
 
     def kill_all(self, attempts: int = 5) -> int:
         """SIGKILL every process of the account; return how many ESCAPED processes are left (-1:

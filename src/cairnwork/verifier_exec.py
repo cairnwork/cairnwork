@@ -71,6 +71,7 @@ def _execute(
         timeout,
         log_path,
         reap=account.reap,
+        pgrp=True,
         **ending,
     )
     return returncode, timed_out, survivors
