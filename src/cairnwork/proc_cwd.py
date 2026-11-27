@@ -302,7 +302,9 @@ def scope(dirs, roots=(), resolve: bool = False) -> tuple[str, ...]:
     if any(not _root_ok(r) for r in tops):
         raise OutOfScope("sweep root is not a narrow run root")
     real = tuple(os.path.realpath(d) for d in given)  # a link out of a root is judged by its target
-    for path in {*real, *given}:
+    # #1876: ``resolve`` returns the realpaths, so only they are used and only they are judged; the
+    # given spelling is returned (and used) otherwise, so then both spellings must fit.
+    for path in set(real) if resolve else {*real, *given}:
         if not any(_below(path, r) for r in tops):
             raise OutOfScope(f"sweep directory is not inside a declared run root: {path!r}")
     return real if resolve else given
