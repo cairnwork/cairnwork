@@ -5,34 +5,47 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from cairnwork.deferred_nodes import _SCOPES
+
+def _readable_base(base: ast.expr, seen: set[str]) -> bool:
+    if isinstance(base, ast.Name):
+        return base.id == "object" or base.id in seen or base.id.endswith("TestCase")
+    return (
+        isinstance(base, ast.Attribute)
+        and base.attr == "TestCase"
+        and isinstance(base.value, ast.Name)
+        and base.value.id == "unittest"
+    )
 
 
 def opaque_shape(tree: ast.Module) -> bool:
-    """#1878: the file has a class shape ``test_functions`` cannot read: a class whose base is a
-    plain name that is no earlier class of the file and does not end in ``TestCase`` (imported or
-    aliased base: its tests are unseen), or a module-level three-argument ``type(...)`` call (a
-    class built at run time). Attribute bases (``unittest.TestCase``), no base and ``object`` are
-    read. A changed file with such a shape must be named whole by a verifier (deferred_tests.
-    whole_file_required), as no node target can be known to cover its changed tests."""
+    """#1878: the file has a class shape ``test_functions`` cannot read (allow-list). Readable
+    bases are: none, ``object``, a class defined earlier in the file, a plain name ending in
+    ``TestCase``, ``unittest.TestCase``. Any other base (module attribute, call, subscript,
+    starred), any keyword (``metaclass=``), a class defined inside a function, or any
+    three-argument ``type(...)`` call (a class built at run time) is opaque. A changed file with
+    such a shape must be named whole by a verifier (deferred_tests.whole_file_required), as no
+    node target can be known to cover its changed tests."""
     seen: set[str] = set()
-    for node in sorted(
+    classes = sorted(
         (n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)), key=lambda n: n.lineno
-    ):
-        for base in node.bases:
-            if isinstance(base, ast.Name) and base.id != "object":
-                if base.id not in seen and not base.id.endswith("TestCase"):
-                    return True
-        seen.add(node.name)
-    return any(
-        isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Name)
-        and n.func.id == "type"
-        and len(n.args) == 3
-        for stmt in tree.body
-        if not isinstance(stmt, _SCOPES)
-        for n in ast.walk(stmt)
     )
+    for node in classes:
+        if node.keywords or not all(_readable_base(b, seen) for b in node.bases):
+            return True
+        seen.add(node.name)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            isinstance(n, ast.ClassDef) for n in ast.walk(node)
+        ):
+            return True
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "type"
+            and len(node.args) == 3
+        ):
+            return True
+    return False
 
 
 def whole_file_required(
