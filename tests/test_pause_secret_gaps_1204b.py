@@ -225,7 +225,7 @@ def test_ordinary_code_in_a_tool_message_is_not_refused() -> None:
 
 @pytest.mark.parametrize(
     "line",
-    ["def check_token(self):", "import password_utils", "token_count += 1"],
+    ["token: str", "password = input()", "self.token = fetch_token()"],
 )
 def test_a_list_of_code_lines_is_not_refused(line: str) -> None:
     request = SimpleNamespace(
