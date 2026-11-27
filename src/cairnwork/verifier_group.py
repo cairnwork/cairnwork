@@ -46,60 +46,81 @@ def _rows(user: str, timeout: float) -> list[Row] | None:
     return rows
 
 
-def wait_clear(user: str, group: int, main: int, budget: float, on_first=None) -> list[Row] | None:
-    """Wait until the group has at most ``main`` members (the collector, if still running), the
-    cap or ``budget`` seconds (what is left of reap's probe deadline) passed, or a lookup failed.
-    Returns the first listing (None: no usable look), so the caller can keep what was outside the
-    group then: a process outside it that vanishes during the wait must still be counted, or the
-    wait would let a run pass that main refuses. ``on_first(rows)`` runs right after the first
-    listing, before any wait: what the first look decides must not read a later state."""
+def _members(rows: list[Row] | None, group: int) -> set[int]:
+    """Pids in the collector's group other than the collector itself. The collector is told by
+    its pid (the group id), not counted: a leftover must never take its place in a count."""
+    return {p for p, _, g in rows or () if g == group and p != group}
+
+
+def wait_clear(
+    user: str, group: int, budget: float, on_first=None
+) -> tuple[list[Row] | None, list[Row] | None]:
+    """Wait until the group holds no process but the collector, the cap or ``budget`` seconds
+    (what is left of reap's probe deadline) passed, or a lookup failed. Returns (first, last): the
+    first listing, so the caller keeps what was outside the group then (a process that vanishes
+    during the wait must still be counted), and the last one (None: it could not be read).
+    ``on_first(rows)`` runs right after the first listing, before any wait: what the first look
+    decides must not read a later state."""
     limit = min(CAP_SECONDS, budget)
     start = _now()
-    first = None
+    first = last = None
     while True:
         left = limit - (_now() - start)
         if left <= 0:
-            return first
+            return first, last
         rows = _rows(user, min(left, PS_TIMEOUT_SECONDS))
+        last = rows
         if first is None:
             first = rows
             if on_first is not None and rows:
                 on_first(rows)
-        if rows is None or sum(r[2] == group for r in rows) <= main:
-            return first
+        if rows is None or not _members(rows, group):
+            return first, last
         left = limit - (_now() - start)
         if left <= 0:
-            return first
+            return first, last
         _sleep(min(POLL_SECONDS, left))
 
 
 def _not_exempt(account, user: str, first: list[Row], keep) -> int:
-    """Rows of the first listing that ``keep`` selects and are not an exempt daemon (-1: cannot
-    tell). The exemption check reads the same rows, then re-lists as escaped_count always does."""
+    """Rows of the first listing that ``keep(pid, pgid)`` selects and are not an exempt daemon (-1:
+    cannot tell). The exemption check reads the same rows, then re-lists as escaped_count does."""
     fresh = iter([first])
 
     def procs():
         rows = next(fresh, None) or _rows(user, PS_TIMEOUT_SECONDS)
-        return None if rows is None else [(p, pp) for p, pp, g in rows if keep(g)]
+        return None if rows is None else [(p, pp) for p, pp, g in rows if keep(p, g)]
 
     return verifier_escape.escaped_count(procs, account._real_paths, sys.platform == "darwin")
 
 
 def settle(account, group: int, main: int, deadline: float) -> int:
-    """#1849: the wait for the group; returns the least count the run must keep: the processes
-    that were outside the group at the first look, as main counts them (the total not exempt
-    minus ``main`` or the group's own, whichever is more), from ONE listing. Unknown is one."""
+    """#1849: the wait for the group; returns the least count the run must keep, decided per pid
+    at the FIRST listing: what was outside the group (not exempt, as main counts it, less
+    ``main``), plus each non-exempt process of the group, other than the collector, still there
+    when the wait ends. ``main`` comes off the first look's count only, never off a leftover:
+    a count cannot tell the two apart. Unknown is one."""
     if group <= 0:
         return 0
-    seen: list[tuple[int, int]] = []
+    outside: list[int] = []
+    lead: list[int] = []  # 1 when the collector itself is listed
+    live: set[int] = set()
 
     def decide(rows: list[Row]) -> None:  # the exemption is judged at the first listing
         user = account.user
-        seen.append((_not_exempt(account, user, rows, lambda g: g != group),
-                     _not_exempt(account, user, rows, lambda g: g == group)))  # fmt: skip
+        outside.append(_not_exempt(account, user, rows, lambda p, g: g != group))
+        lead.append(_not_exempt(account, user, rows, lambda p, g: p == group))
+        for pid in _members(rows, group):
+            n = _not_exempt(account, user, rows, lambda p, g, pid=pid: p == pid)
+            if n < 0:
+                outside[0] = -1
+            elif n:
+                live.add(pid)
 
-    first = wait_clear(account.user, group, main, max(deadline - time.monotonic(), 0.0), decide)
+    first, last = wait_clear(account.user, group, max(deadline - time.monotonic(), 0.0), decide)
     if not first:  # no look, or an empty one (the collector is not even listed): fail closed
         return 1 if first is None else 0
-    outside, held = seen[0]
-    return 1 if outside < 0 or held < 0 else max(outside + held - max(held, main), 0)
+    if outside[0] < 0 or lead[0] < 0:
+        return 1
+    base = max(outside[0] + max(lead[0], 0) - main, 0)  # main's own count, less ``main``
+    return base + len(live if last is None else live & _members(last, group))

@@ -282,13 +282,14 @@ def test_reap_gets_the_collectors_group_from_execute_and_the_flag_is_on(monkeypa
     assert seen == {"group": pids[0]}
 
 
-def _paths_from(monkeypatch, world, since, none_first=False):
-    """``_real_paths``: a pid is a distnoted from ``since[pid]`` on, another binary before."""
+def _paths_from(monkeypatch, world, since, none_first=False, none_on=1):
+    """``_real_paths``: a pid is a distnoted from ``since[pid]`` on, another binary before;
+    ``none_on``: the call number that cannot be read (with ``none_first``)."""
     calls = []
 
     def real_paths(self, pids):
         calls.append(1)
-        if none_first and len(calls) == 1:
+        if none_first and len(calls) == none_on:
             return None
         return {p: ("1.0", "/usr/sbin/distnoted" if world.now >= since.get(p, 1e9)
                     else "/tmp/other") for p in pids}  # fmt: skip
@@ -317,3 +318,37 @@ def test_must_block_unreadable_real_paths_in_settle_is_at_least_one(monkeypatch)
     world, acct = _acct(monkeypatch, rows)
     _paths_from(monkeypatch, world, {}, none_first=True)
     assert vg.settle(acct, MAIN, 1, 1e18) >= 1
+
+
+# Round 4: ``main`` is a count and cannot tell the collector from a leftover that takes its slot.
+# The collector is told by its pid; each in-group process is judged at the first listing.
+@pytest.mark.parametrize(
+    "rows,main,since,least",
+    [
+        ([(MAIN, MAIN, 0.3), (101, MAIN, None)], 1, {}, 1),  # collector leaves, a leftover stays
+        ([(MAIN, MAIN, 0.3), (101, MAIN, None), (102, MAIN, None)], 1, {}, 2),  # two leftovers
+        ([(MAIN, MAIN, 1.0), (101, MAIN, None, L)], 1, {}, 1),  # orphaned leftover, never a daemon
+        ([(MAIN, MAIN, None), (101, MAIN, None, L)], 1, {101: 1.0}, 1),  # execs a daemon mid-wait
+        ([(101, MAIN, None, L)], 0, {101: 1.0}, 1),  # the same without the collector
+    ],
+)
+def test_must_block_a_group_leftover_does_not_take_the_collectors_slot(
+    monkeypatch, rows, main, since, least
+):
+    world, acct = _acct(monkeypatch, rows)
+    _paths_from(monkeypatch, world, since)
+    assert int(acct.reap(main, group=MAIN)) >= least
+
+
+def test_must_block_unreadable_real_paths_of_a_group_member_is_at_least_one(monkeypatch):
+    rows = [(MAIN, MAIN, None), (OUT, OUT, 1.0, L), (101, MAIN, 1.5, L)]
+    world, acct = _acct(monkeypatch, rows)
+    _paths_from(monkeypatch, world, {}, none_first=True, none_on=2)
+    assert vg.settle(acct, MAIN, 1, 1e18) >= 1
+
+
+def test_must_pass_an_exempt_daemon_outside_the_group_and_a_leaving_child(monkeypatch):
+    rows = [(MAIN, MAIN, None), (101, MAIN, 0.5), (900, 900, None, L)]
+    world, acct = _acct(monkeypatch, rows)
+    _paths_from(monkeypatch, world, {900: 0.0})
+    assert int(acct.reap(1, group=MAIN)) == 0
