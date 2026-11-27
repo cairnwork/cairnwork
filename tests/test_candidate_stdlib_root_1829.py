@@ -303,6 +303,45 @@ def test_shell_quoted_config_values_are_untrusted_1829(tmp_path, cfg_name, cfg):
     assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) != ""
 
 
+# Claude review at e67db87a: pytest splits with shlex (only space, tab, CR, LF are blanks), and a
+# list-form addopts is not shlex-split at all
+_ODD = "[pytest]\npythonpath = a{c}pkg\n"
+
+
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg", "char"),
+    [
+        ("pytest.ini", _ODD, "\u00a0"),
+        ("pytest.ini", _ODD, "\u3000"),
+        ("pytest.ini", _ODD, "\u2003"),
+        ("pytest.ini", _ODD, "\u205f"),
+        ("pytest.ini", _ODD, "\x1f"),
+        ("pytest.ini", _ODD, "\x0b"),
+        ("setup.cfg", "[tool:pytest]\npythonpath = a{c}pkg\n", "\u00a0"),
+        ("tox.ini", _ODD, "\u3000"),
+        ("pyproject.toml", '[tool.pytest.ini_options]\npythonpath = "a{c}pkg"\n', "\u00a0"),
+    ],
+)
+def test_non_shlex_whitespace_in_config_values_is_untrusted_1829(tmp_path, cfg_name, cfg, char):
+    base = {"tests/test_a.py": TEST, f"a{char}pkg/__init__.py": "", cfg_name: cfg.format(c=char)}
+    assert _gate(tmp_path, base, {f"a{char}pkg/colorsys.py": BODY}) != ""
+
+
+@pytest.mark.parametrize(
+    ("cfg_name", "cfg"),
+    [
+        ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = ["-ra"]\n'),
+        ("pyproject.toml", '[tool.pytest.ini_options]\naddopts = ["-ra", "--strict-markers"]\n'),
+        ("pytest.toml", '[pytest]\naddopts = ["-q"]\n'),
+        ("pytest.ini", "[pytest]\npythonpath = src\ttests\n"),
+        ("pytest.ini", "[pytest]\naddopts = -q\n"),
+    ],
+)
+def test_list_addopts_without_override_keeps_exemption_1829(tmp_path, cfg_name, cfg):
+    base = {**_PKG, cfg_name: cfg}
+    assert _gate(tmp_path, base, {"pkg/colorsys.py": BODY}) == ""
+
+
 @pytest.mark.parametrize(
     "marker",
     ["__init__.pyc", "__init__.so", "__init__.abi3.so", "__init__.cpython-314-darwin.so"],

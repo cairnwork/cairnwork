@@ -228,16 +228,18 @@ def _refuse_override(addopts: object) -> None:
     """An ``addopts`` that can override ``pythonpath`` (``-o``, ``--override-ini``) may name any
     directory: treated like an untrusted config."""
     if addopts is not None:
-        _refuse_shell_quoting(str(addopts))
+        if isinstance(addopts, str):
+            _refuse_shell_quoting(addopts)
         if _OVERRIDE.search(str(addopts)):
             raise ValueError("addopts may override pythonpath")
 
 
 def _refuse_shell_quoting(value: str) -> None:
-    """pytest reads ini-style ``pythonpath`` and ``addopts`` with shlex, so quotes and
-    backslashes change what a word means; the gate reads plain words, so such a value is
+    """pytest reads ini-style ``pythonpath`` and ``addopts`` with shlex: quotes and backslashes
+    change what a word means, and only space, tab, CR and LF split words, where ``str.split`` also
+    splits on Unicode and control blanks. The gate reads plain words, so such a value is
     untrusted rather than guessed."""
-    if any(c in value for c in "'\"\\"):
+    if any(c in "'\"\\" or (c.isspace() and c not in " \t\r\n") for c in value):
         raise ValueError("config value uses shell quoting")
 
 
