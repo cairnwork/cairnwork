@@ -18,7 +18,9 @@ from cairnwork.gitcmd import GitCommandError
 
 _OID = re.compile(r"^[0-9a-f]{40}$")
 _IMPORT_CALLS = frozenset({"import_module", "__import__", "importorskip"})
-_ALWAYS_SHADOW = frozenset({"pytest", "_pytest", "pluggy", "conftest", "py"})
+_ALWAYS_SHADOW = frozenset(
+    {"pytest", "_pytest", "pluggy", "conftest", "py", "iniconfig", "packaging"}
+)
 
 
 def find_shadow_file(
