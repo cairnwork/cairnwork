@@ -132,13 +132,14 @@ def _members(
             for name, body in inherited.items():  # every base's: the MRO may pick a later one's
                 if name not in own:  # (#1009); a change to any of them reads as a change
                     methods[name] = _digest(methods.get(name, "") + body)  # bounded per level
-        elif target and not target.endswith("TestCase") and target not in external:
-            # An unresolved or ambiguous base may name any earlier same-file class.
+        elif target and not target.endswith("TestCase"):
+            # An unresolved or ambiguous base may name any earlier same-file class. An imported-only
+            # base is not one of them, so it pulls in no methods; its flags stay unknown (#1833).
             for inherited, base_blocked, base_case, _ in classes.values():
                 blocked = blocked or base_blocked
                 case = case or base_case
                 for name, body in inherited.items():
-                    if name not in own:
+                    if name not in own and target not in external:
                         methods[name] = _digest(methods.get(name, "") + body)
     return methods, blocked, case, marks
 

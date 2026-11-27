@@ -45,8 +45,9 @@ def _target_names(target: ast.AST) -> set[str]:
 def imported_only(tree: ast.Module) -> frozenset[str]:
     """Top-level names bound by an import and by nothing else in the file (#1833).
 
-    Such a base is an external class, so no earlier class of this file can be it. A star import
-    hides which names it binds, so then nothing is claimed."""
+    Such a base is taken to be an external class, not an earlier class of this file (a circular
+    self-import or a runtime rebind is the residual). A star import hides which names it binds,
+    so then nothing is claimed."""
     imported: set[str] = set()
     rebound: set[str] = set()
     for stmt in tree.body:
@@ -55,7 +56,7 @@ def imported_only(tree: ast.Module) -> frozenset[str]:
         if isinstance(stmt, (ast.Import, ast.ImportFrom)):
             imported.update((a.asname or a.name).split(".")[0] for a in stmt.names)
     for node in ast.walk(tree):
-        if isinstance(node, (*_DEFS,)):
+        if isinstance(node, _DEFS):
             rebound.add(node.name)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
             rebound.add(node.id)
