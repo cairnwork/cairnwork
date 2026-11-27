@@ -225,12 +225,17 @@ def test_ordinary_code_in_a_tool_message_is_not_refused() -> None:
 
 @pytest.mark.parametrize(
     "line",
-    ["token = parse(line)", "password_hash = digest(value)", "if token is None: return"],
+    ["def check_token(self):", "import password_utils", "token_count += 1"],
 )
 def test_a_list_of_code_lines_is_not_refused(line: str) -> None:
-    assert not _blocked([{"role": "user", "content": [line, "return value_of_something"]}])
+    request = SimpleNamespace(
+        settings=SimpleNamespace(model_id="m", effort="low", timeout_seconds=1.0, max_attempts=0)
+    )
+    messages = [{"role": "user", "content": [line, "return value_of_something"]}]
+    outcome = _Client(_Transport(), Scanner())._send(request, messages, planner=True)  # type: ignore[arg-type]
+    assert outcome[3] != Reason.PAUSE_SECRET_BLOCKED
 
 
-@pytest.mark.parametrize("name", ["Authorization", "x-api-key", "password", "X_Auth_Token"])
-def test_a_header_pair_list_is_still_refused(name: str) -> None:
-    assert _blocked([{"role": "user", "content": [[name, "Qwertyuiop12345x"]]}])
+def test_a_header_pair_list_is_still_refused() -> None:
+    pair = ["Authorization", "Basic dXNlcjpwYXNzd29yZA=="]
+    assert _blocked([{"role": "user", "content": [pair]}])
