@@ -358,7 +358,7 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
         except CandidateRejected as exc:
             result.reason = str(exc)
             return
-        judged, test_files, plan = candidate.candidate_commit, (), None
+        judged, test_files, plan, late = candidate.candidate_commit, (), None, []
         if task.test_commit:  # only now: the worker is done (deferred_tests.py, p2p.py)
             mode = "bundle" if task.test_store and task.test_store.required else "auto"
             try:
@@ -366,7 +366,6 @@ def _attempt(task, specs, digest, notary, worker, result, steps, ctx: VerifyCont
                 steps.reach("TEST_SOURCE", mode)  # the mode of this run, read by cairnwork_attest
                 # an account failure here: no evidence (#234)
                 with base_stage(ctx.account, ctx.python):
-                    late: list[TestCommitRejected] = []
                     test_files = tests_with_teeth(task, specs, result, ctx, judged, late)
                     judged = lay_tests_over(
                         task.repo,
