@@ -150,18 +150,32 @@ def test_relative_and_string_imports_name_a_shadow(repo, importer):
     assert "shadow/helper.py" in str(got.value)
 
 
-def test_root_stdlib_named_module_does_not_refuse(repo):
+def test_root_stdlib_named_module_is_refused(repo):
+    # #1829: a root-level file named like a stdlib module is itself an import root; refused
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(
         repo,
         {"src/a.py": "import sys\nsys.path.insert(0, 'outside')\n", "json.py": ""},
     )
-    candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
+    with pytest.raises(CandidateRejected):
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
 
 
-def test_shadow_file_without_signal_does_not_refuse(repo):
+def test_shadow_file_without_signal_is_refused_when_dir_can_be_a_root(repo):
+    # #1829: no signal needed; pkg has no __init__.py, so it can be an import root
     base = git(repo, "rev-parse", "HEAD")
     cand = commit_change(repo, {"pkg/fractions.py": ""})
+    with pytest.raises(CandidateRejected):
+        candidate_sys_path.refuse_new_sys_path_mutation(
+            repo, base, cand, _changed(repo, base, cand)
+        )
+
+
+def test_shadow_file_in_a_package_without_signal_does_not_refuse(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    cand = commit_change(repo, {"pkg/__init__.py": "", "pkg/fractions.py": ""})
     candidate_sys_path.refuse_new_sys_path_mutation(repo, base, cand, _changed(repo, base, cand))
 
 

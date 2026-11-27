@@ -282,6 +282,11 @@ guarantee: candidate code imported by the test can change what the test reads or
 (`sys.modules`, import hooks, `sys.path`, an `__eq__` that always holds), and no pytest-level rule
 in that process can rule it out.
 
+A new file named like a standard-library module is refused on its own, without a path signal in
+the changed files, unless its directory has an `__init__.py` (or a compiled package marker) and no configuration (including `pytest.toml`, `.pytest.toml`, `.pytest.ini`, `[tool.pytest]` and an `addopts` that overrides `pythonpath`; an unreadable or wrongly shaped config, or a `pythonpath` or `addopts` value with shell quotes, backslashes or blanks other than space, tab, CR and LF, counts as naming any directory), startup file or source edit can make that directory a search root (Issue #1829). A repo-root `__init__.py` does not exempt a depth-0 file. A directory made a root only by the
+verifier command or the environment outside the repository remains a residual for a run-time
+module-origin check.
+
 Today the only protected observation is a declared blackbox check (`cairnwork-verify --blackbox`,
 #303): the owner holds the answers, the candidate's function runs in the sandbox under the verifier
 account with the inputs only, and the owner compares. Core's definition of VERIFIED is unchanged,
