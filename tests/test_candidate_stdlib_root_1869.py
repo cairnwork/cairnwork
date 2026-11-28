@@ -17,6 +17,8 @@ BASE = {"tests/test_a.py": TEST, "pkgdir/__init__.py": "", "pkgdir/m.py": BODY}
         pytest.param("pkgdir/pytest.py", "pkgdir/__init__.py", id="pytest-family"),
         pytest.param("pkgdir/colorsys.cpython-314-darwin.so", "pkgdir/__init__.py", id="compiled"),
         pytest.param("colorsys.py", "__init__.py", id="repo-root"),
+        pytest.param("Pkgdir/colorsys.py", "pkgdir/__init__.py", id="dir-case-differs"),
+        pytest.param("pkgd\u00efr/colorsys.py", "pkgdi\u0308r/__init__.py", id="dir-unicode-form"),
     ],
 )
 def test_deleting_marker_next_to_stdlib_named_file_is_refused(tmp_path, neighbour, marker):
@@ -90,3 +92,11 @@ def test_changed_file_that_does_not_shadow_passes_in_a_base_root(tmp_path):
 def test_changed_stdlib_named_file_in_a_regular_package_passes(tmp_path):
     base = {**BASE, "pkgdir/colorsys.py": BODY}
     assert _gate(tmp_path, base, {"pkgdir/colorsys.py": BODY + "Y = 2\n"}) == ""
+
+
+def test_neighbour_lookup_folds_directory_case_and_unicode_form():
+    from cairnwork.candidate_stdlib_root import _stdlib_named_in
+
+    assert _stdlib_named_in({"Pkgdir/colorsys.py": "x"}, "pkgdir")
+    assert _stdlib_named_in({"pkgdïr/colorsys.py": "x"}, "pkgdïr")
+    assert not _stdlib_named_in({"pkgdir/sub/colorsys.py": "x"}, "pkgdir")

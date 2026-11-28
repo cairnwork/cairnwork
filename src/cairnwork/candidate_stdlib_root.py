@@ -151,9 +151,10 @@ def _is_marker(path: str) -> bool:
 def _stdlib_named_in(tree: dict[str, str], directory: str) -> str:
     """The first path in ``tree`` that would be a top-level import in ``directory`` and is named
     like a standard-library module (a module file, or a ``name/__init__.*`` package); else ''."""
-    prefix = directory + "/" if directory else ""
+    want = _fold(directory)
     for path in sorted(tree):
-        if path.startswith(prefix) and _import_dir(path) == directory:
+        found = _import_dir(path)  # directory names compare as the file system does
+        if found is not None and _fold(found) == want:
             return path
     return ""
 
