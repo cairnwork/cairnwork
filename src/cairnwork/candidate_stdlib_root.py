@@ -93,12 +93,19 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
     """Raise CANDIDATE_SYS_PATH_MUTATION for a new own file named like a standard-library module
     whose directory may be an import root. ``entries`` are the change-set entries; only paths in
     ``own`` (the allowed files) are judged."""
+    entries = list(entries)
     named = [
         (e.path, d)
         for e in entries
         if e.path in own and _is_new(e) and (d := _import_dir(e.path)) is not None
     ]
-    if not named:
+    # deleting a package marker turns its directory into a possible root (#1869)
+    unmarked = [
+        e.path.rpartition("/")[0]
+        for e in entries
+        if e.change_type == "DELETE" and _is_marker(e.path)
+    ]
+    if not named and not unmarked:
         return
     tree: dict[str, str] = {}
     try:
@@ -107,6 +114,20 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
         loose = roots is None or _startup_or_path_signal(repo, tree)
     except (GitCommandError, OSError, ValueError, UnicodeError, MemoryError, RecursionError):
         roots, loose = None, True
+        if unmarked:  # an unreadable tree cannot show the marker's neighbours: refuse
+            raise CandidateRejected(
+                "CANDIDATE_SYS_PATH_MUTATION",
+                "deletes a package marker and the candidate tree cannot be read to check it",
+            ) from None
+    for directory in unmarked:
+        exposed = _stdlib_named_in(tree, directory)
+        if exposed:
+            raise CandidateRejected(
+                "CANDIDATE_SYS_PATH_MUTATION",
+                f"{directory + '/__init__.py' if directory else '__init__.py'!r}: deletes a "
+                f"package marker, so the existing {exposed!r}, named like a standard-library "
+                "module, can become an import root and replace the real module at run time",
+            )
     for path, directory in named:
         if (
             directory == ""
@@ -121,19 +142,31 @@ def refuse_stdlib_named_adds(repo, candidate: str, entries: Iterable, own: set[s
             )
 
 
+def _is_marker(path: str) -> bool:
+    """A package marker: ``__init__`` with any loadable suffix."""
+    leaf = path.rsplit("/", 1)[-1].casefold()
+    return leaf.endswith(_MODULE_SUFFIXES) and leaf.split(".")[0] == "__init__"
+
+
+def _stdlib_named_in(tree: dict[str, str], directory: str) -> str:
+    """The first path in ``tree`` that would be a top-level import in ``directory`` and is named
+    like a standard-library module (a module file, or a ``name/__init__.*`` package); else ''."""
+    prefix = directory + "/" if directory else ""
+    for path in sorted(tree):
+        if path.startswith(prefix) and _import_dir(path) == directory:
+            return path
+    return ""
+
+
 def _fold(name: str) -> str:
     """Compare directory names as the file system does: without case or Unicode form."""
     return unicodedata.normalize("NFC", name).casefold()
 
 
 def _is_new(entry) -> bool:
-    """An added path, or a path whose file type changed (regular file, symlink, other)."""
-    if entry.change_type == "ADD":
-        return True
-    return (
-        entry.change_type == "MODIFY"
-        and (entry.before_mode or "")[:3] != (entry.after_mode or "")[:3]
-    )
+    """An added or modified path: a changed file whose name shadows a standard-library module is
+    judged like an added one, whichever import spelling reaches it (#1822)."""
+    return entry.change_type in ("ADD", "MODIFY")
 
 
 def _import_dir(path: str) -> str | None:
