@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cairnwork import present
 from cairnwork.notary import Notary, NotaryInputError, NotarySchemaMismatch, Verdict
 from cairnwork.notary_binding import MAX_STORED_JSON_BYTES
 from cairnwork.notary_verify import _columns_match
@@ -212,7 +213,13 @@ def _fetch_row(uri: str, task_id: str, attempt_id: str) -> tuple[Any, ...]:
 
 def read_record(notary_sqlite: Path, task_id: str, attempt_id: str) -> VerdictRecord:
     path = Path(notary_sqlite).resolve()
-    if not path.is_file():
+    try:
+        found = present.is_file(path)
+    except OSError as exc:  # unreadable is not "absent" (#1882)
+        raise RecordNotFound(
+            f"cannot look for notary database: {exc}", code="RECORD_UNREADABLE"
+        ) from exc
+    if not found:
         raise RecordNotFound(f"notary database does not exist: {path}", code="RECORD_NOT_FOUND")
 
     row = _fetch_row(f"{path.as_uri()}?mode=ro", task_id, attempt_id)

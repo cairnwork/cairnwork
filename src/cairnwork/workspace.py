@@ -39,6 +39,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from cairnwork import present
 from cairnwork.changeset import ChangeSetError, read_change_set
 from cairnwork.diffcheck import diff_check_detail
 from cairnwork.gitcmd import CLONE_ISOLATED, OID, GitCommandError, run_git, run_git_bytes
@@ -82,7 +83,7 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
     if not OID.fullmatch(base_commit):
         raise WorkspaceError("base_commit must be a 40-hex commit id")
     path = _attempt_path(root, attempt_id)
-    if path.exists() or path.is_symlink():
+    if present.exists(path, follow=False):  # unreadable is raised, not "absent" (#1882)
         raise WorkspaceError(f"{path} already exists")
     try:
         if run_git(repo, "cat-file", "-t", base_commit).strip() != "commit":
@@ -94,8 +95,7 @@ def create_attempt_clone(repo: Path, base_commit: str, root: Path, attempt_id: s
             run_git(path, "cat-file", "-e", f"{base_commit}^{{commit}}")
         except GitCommandError:  # e.g. a candidate only reachable from refs/cairnwork/
             run_git(path, "fetch", "--quiet", "--no-tags", str(repo), base_commit)
-        # the commit may come from outside: only Cairnwork's own git config applies here,
-        # as for the other maintenance commands on a clone (gc, reflog below)
+        # a commit from outside: only Cairnwork's git config applies, as for gc and reflog below
         run_git(path, "checkout", "--quiet", "--detach", base_commit, isolate_config=True)
         _restrict_to_base_history(path, base_commit)
         head = run_git(path, "rev-parse", "HEAD").strip()
