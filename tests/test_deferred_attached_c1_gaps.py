@@ -101,6 +101,8 @@ def test_non_reached_class_includes_only_referenced_non_test_methods():
 def test_blind_attribute_call_distinguishes_namespace_escape_from_regular_calls():
     assert _blind_attribute_call(_parse("builtins.eval('1')", mode="eval").body)
     assert _blind_attribute_call(_parse("len.__self__.eval('1')", mode="eval").body)
+    assert _blind_attribute_call(_parse("obj.__self__.eval('1')", mode="eval").body)
+    assert _blind_attribute_call(_parse("obj.__globals__.get('x')()", mode="eval").body)
     assert not _blind_attribute_call(_parse("helper(1)", mode="eval").body)
     assert not _blind_attribute_call(_parse("obj.method(1)", mode="eval").body)
 
@@ -113,8 +115,9 @@ def test_blind_attribute_call_scans_nested_call_expressions():
 def test_stores_ignores_literal_and_keeps_computed_setattr_target():
     nodes = _parse("value = 1\nsetattr(Target, name, helper)\n").body
     stores = _stores(ast.Module(body=nodes, type_ignores=[]))
-    assert ("", ast.Constant(value=1)) not in stores
-    assert any(name is None for name, _ in stores)
+    assert len(stores) == 1 and stores[0][0] is None
+    literal = _parse("class Cls:\n    test_x = 1\nCls.test_y = 2\n")
+    assert _stores(literal) == []
 
 
 def test_attached_digest_changes_for_each_static_attaching_store():
