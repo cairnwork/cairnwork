@@ -100,3 +100,17 @@ def test_neighbour_lookup_folds_directory_case_and_unicode_form():
     assert _stdlib_named_in({"Pkgdir/colorsys.py": "x"}, "pkgdir")
     assert _stdlib_named_in({"pkgdïr/colorsys.py": "x"}, "pkgdïr")
     assert not _stdlib_named_in({"pkgdir/sub/colorsys.py": "x"}, "pkgdir")
+
+
+def test_marker_delete_with_unreadable_tree_is_refused(tmp_path, monkeypatch):
+    from cairnwork import candidate_stdlib_root
+    from cairnwork.gitcmd import GitCommandError
+
+    def broken(*_args, **_kwargs):
+        raise GitCommandError("cannot list tree")
+
+    monkeypatch.setattr(candidate_stdlib_root, "_tree_paths", broken)
+    base = {**BASE, "pkgdir/colorsys.py": BODY}
+    reason = _gate(tmp_path, base, {"pkgdir/__init__.py": None})
+    assert "CANDIDATE_SYS_PATH_MUTATION" in reason
+    assert "package marker" in reason
