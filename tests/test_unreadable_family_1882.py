@@ -5,6 +5,8 @@ goes through cairnwork.present, or a direct stat that only FileNotFoundError and
 NotADirectoryError treat as "not there". Every site gets a must-block case (PermissionError
 from a patched stat, or an unreadable read) and a must-pass case (really absent, or the
 ancestor is a file: still absent). The patch makes the stat fail, so root does not matter.
+It also emulates the 3.14 pathlib (exists/is_dir/is_file swallow every OSError), so the
+must-block cases fail on the old code on 3.11-3.13 too, not only on 3.14.
 """
 
 import os
@@ -25,6 +27,18 @@ from cairnwork_attest.record import RecordNotFound, read_record
 @pytest.fixture
 def deny(monkeypatch):
     """Make stat and lstat of any path named ``name`` fail with PermissionError."""
+
+    def swallowing(real):
+        def check(self, *args, **kwargs):
+            try:
+                return real(self, *args, **kwargs)
+            except OSError:  # what 3.14 pathlib does: unreadable reads as absent
+                return False
+
+        return check
+
+    for method in ("exists", "is_dir", "is_file"):
+        monkeypatch.setattr(Path, method, swallowing(getattr(Path, method)))
 
     def install(name: str) -> None:
         for attr in ("stat", "lstat"):
