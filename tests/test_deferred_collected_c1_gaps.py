@@ -145,6 +145,7 @@ def test_collect_all_preserves_skipped_files_across_batches(monkeypatch):
 
 def test_collect_passes_context_and_requires_exactly_one_run(monkeypatch, tmp_path):
     seen = []
+    (tmp_path / "runs").mkdir()
     run = SimpleNamespace(log_path=tmp_path / "runs" / "run.log")
     monkeypatch.setattr(
         deferred_collected,
@@ -160,8 +161,12 @@ def test_collect_passes_context_and_requires_exactly_one_run(monkeypatch, tmp_pa
     assert specs[0].targets == (PATH,)
     assert specs[0].collect_only and not specs[0].announce
 
+    assert not run.log_path.parent.exists()
+
     monkeypatch.setattr(deferred_collected, "run_verifiers", lambda *args: ())
     assert deferred_collected._collect(CTX, "commit", (PATH,), "empty") is None
+    monkeypatch.setattr(deferred_collected, "run_verifiers", lambda *args: (run, run))
+    assert deferred_collected._collect(CTX, "commit", (PATH,), "two") is None
 
 
 def test_probe_files_uses_only_test_python_files_from_base(monkeypatch):
