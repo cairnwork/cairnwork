@@ -19,6 +19,7 @@ from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from cairnwork import present
 from cairnwork_attest.record import AttestError
 
 PRIVATE_KEY_FILENAME = "attest_ed25519.pem"
@@ -97,7 +98,11 @@ def generate_keypair(state_dir: Path) -> Ed25519PublicKey:
 
     Refuses to overwrite an existing key file (KEY_EXISTS) or to follow a symlink.
     """
-    if not state_dir.is_dir():
+    try:
+        is_dir = present.is_dir(state_dir)
+    except OSError as exc:  # unreadable is not "absent" (#1882)
+        raise KeyFileError(f"cannot look for state dir: {exc}", code="KEY_UNREADABLE") from exc
+    if not is_dir:
         raise KeyFileError(f"state dir not found: {state_dir}", code="STATE_DIR_NOT_FOUND")
     private_key = Ed25519PrivateKey.generate()
     pem = private_key.private_bytes(

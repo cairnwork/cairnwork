@@ -23,7 +23,7 @@ from collections.abc import Container, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cairnwork import deferred_attached, gitprobe, survivor_argv
+from cairnwork import deferred_attached, gitprobe, present, survivor_argv
 from cairnwork.base_teeth import base_teeth
 from cairnwork.deferred_nodes import hidden_tests, local_names, test_functions
 from cairnwork.deferred_overlay import (  # noqa: F401  (re-exported: the one place importers look)
@@ -384,7 +384,7 @@ def lay_tests_over(
 ) -> str:  # fmt: skip
     """Commit the test files of test_commit on top of candidate; return the new commit."""
     index = Path(run_root) / f"{attempt_id}.tests.index"
-    if index.exists() or index.is_symlink():
+    if present.exists(index, follow=False):  # unreadable is raised, not read as absent (#1882)
         raise TestCommitRejected("TEST_OVERLAY_FAILED", f"{index} already exists")
     try:
         tree = overlay_tree(repo, candidate, test_commit, paths, index, deleted_of(paths))

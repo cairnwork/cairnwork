@@ -189,7 +189,7 @@ class Intake:
         return trusted_account(VerifierAccount())  # as select_account does (#1382)
 
     def accepting(self) -> bool:
-        return (self.state / "ACCEPTING").exists()
+        return present.exists(self.state / "ACCEPTING")  # unreadable is raised (#1882)
 
     def set_accepting(self, on: bool) -> None:
         """Under the intake lock: once drain returns, no submit that checked the flag

@@ -96,7 +96,10 @@ def _canary(python, profile_path, checkout, env, account, backend, argv, log_pat
     """Run ``python -I -S -c <argv>`` like a verifier (same policy, uid and cwd); its output."""
     argv = [python, "-I", "-S", "-c", *argv]
     _execute(argv, profile_path, checkout, dict(env), 10, log_path, account, backend)
-    return log_path.read_text(errors="replace") if log_path.exists() else ""
+    try:
+        return log_path.read_text(errors="replace")
+    except (FileNotFoundError, NotADirectoryError):  # only "not there" is empty (#1882)
+        return ""
 
 
 def _record_digest(**fields) -> str:
